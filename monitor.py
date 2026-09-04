@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 import json
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -143,31 +141,56 @@ def build_intraday_closes(history: list[tuple[str, float]], realtime_price: floa
     return [close for _, close in rows]
 
 
-def feishu_signature(secret: str, timestamp: str) -> str:
-    string_to_sign = f"{timestamp}\n{secret}"
-    digest = hmac.new(string_to_sign.encode("utf-8"), digestmod=hashlib.sha256).digest()
-    return base64.b64encode(digest).decode("utf-8")
+def get_feishu_tenant_access_token() -> str:
+    app_id = os.getenv("FEISHU_APP_ID", "").strip()
+    app_secret = os.getenv("FEISHU_APP_SECRET", "").strip()
+    if not app_id or not app_secret:
+        raise RuntimeError("FEISHU_APP_ID / FEISHU_APP_SECRET 未配置")
+
+    resp = requests.post(
+        "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+        json={"app_id": app_id, "app_secret": app_secret},
+        timeout=TIMEOUT,
+    )
+    resp.raise_for_status()
+    result = resp.json()
+    if result.get("code") not in (0, "0", None):
+        raise RuntimeError(f"获取飞书 tenant_access_token 失败: code={result.get('code')}, msg={result.get('msg')}")
+    token = result.get("tenant_access_token")
+    if not token:
+        raise RuntimeError("飞书未返回 tenant_access_token")
+    return str(token)
 
 
 def notify_feishu(title: str, body: str) -> None:
-    webhook = os.getenv("FEISHU_WEBHOOK", "").strip()
-    if not webhook:
-        print("[WARN] FEISHU_WEBHOOK 未配置，跳过飞书通知")
+    chat_id = os.getenv("FEISHU_CHAT_ID", "").strip()
+    if not chat_id:
+        print("[WARN] FEISHU_CHAT_ID 未配置，跳过飞书通知")
         return
-    payload: dict = {
+
+    app_id = os.getenv("FEISHU_APP_ID", "").strip()
+    app_secret = os.getenv("FEISHU_APP_SECRET", "").strip()
+    if not app_id or not app_secret:
+        print("[WARN] FEISHU_APP_ID / FEISHU_APP_SECRET 未配置，跳过飞书通知")
+        return
+
+    token = get_feishu_tenant_access_token()
+    payload = {
+        "receive_id": chat_id,
         "msg_type": "text",
-        "content": {"text": f"{title}\n{body}"},
+        "content": json.dumps({"text": f"{title}\n{body}"}, ensure_ascii=False),
     }
-    secret = os.getenv("FEISHU_SIGNING_SECRET", "").strip()
-    if secret:
-        timestamp = str(int(time.time()))
-        payload["timestamp"] = timestamp
-        payload["sign"] = feishu_signature(secret, timestamp)
-    resp = requests.post(webhook, json=payload, timeout=TIMEOUT)
+    resp = requests.post(
+        "https://open.feishu.cn/open-apis/im/v1/messages",
+        params={"receive_id_type": "chat_id"},
+        headers={"Authorization": f"Bearer {token}"},
+        json=payload,
+        timeout=TIMEOUT,
+    )
     resp.raise_for_status()
     result = resp.json()
-    if result.get("code", result.get("StatusCode", 0)) not in (0, "0", None):
-        raise RuntimeError(f"飞书通知失败: {result}")
+    if result.get("code") not in (0, "0", None):
+        raise RuntimeError(f"飞书通知失败: code={result.get('code')}, msg={result.get('msg')}")
 
 
 def notify_serverchan(title: str, body: str) -> None:
@@ -177,14 +200,15 @@ def notify_serverchan(title: str, body: str) -> None:
         return
 
     if sendkey.startswith("sctp"):
-        # Turbo/新版 SendKey 的域名分片规则由 SendKey 中的数字决定。
-        num = "".join(ch for ch in sendkey[4:] if ch.isdigit())
-        host = f"{num}.push.ft07.com" if num else "sctapi.ftqq.com"
-        url = f"https://{host}/send/{quote(sendkey)}.send"
+        match = re.match(r"^sctp(\d+)t", sendkey)
+        if not match:
+            raise RuntimeError("Server酱³ SendKey 格式异常：应为 sctp<uid>t<token>")
+        uid = match.group(1)
+        url = f"https://{uid}.push.ft07.com/send/{quote(sendkey)}.send"
     else:
         url = f"https://sctapi.ftqq.com/{quote(sendkey)}.send"
 
-    resp = requests.post(url, data={"title": title, "desp": body}, timeout=TIMEOUT)
+    resp = requests.post(url, data={"title": title.replace("\n", " "), "desp": body}, timeout=TIMEOUT)
     resp.raise_for_status()
     try:
         result = resp.json()
