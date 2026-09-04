@@ -24,8 +24,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
-      FEISHU_SIGNING_SECRET: ${{ secrets.FEISHU_SIGNING_SECRET }}
+      FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+      FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+      FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
       SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
       FORCE_NOTIFY: ${{ github.event_name == 'workflow_dispatch' && inputs.force_notify || false }}
 
