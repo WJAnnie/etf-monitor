@@ -1,6 +1,6 @@
 # 红利 ETF RSI(6) 定投提醒
 
-每天中国时间 14:00（周一至周五）由 GitHub Actions 自动检查 4 只红利 ETF 的 RSI(6)。非交易日会自动跳过；任意标的 RSI(6) < 20 时，同时通过飞书自建应用和 Server酱发送提醒。
+每天中国时间 14:00（周一至周五）由 GitHub Actions 自动检查 4 只红利 ETF 的 RSI(6)。非交易日会自动跳过；任意标的 RSI(6) < 20 时，通过飞书和 Server酱发送提醒。
 
 ## 监控标的
 
@@ -13,6 +13,15 @@
 
 > RSI 使用 14:00 左右实时价与前复权历史日线计算，周期为 6。公式采用国内行情软件常见的 SMA 平滑方式。
 
+## 行情源与容错
+
+程序采用双行情源：
+
+1. **腾讯财经优先**：实时价使用 `qt.gtimg.cn`，前复权日线使用腾讯 K 线接口。
+2. **东方财富兜底**：腾讯某一接口临时失败时，自动切到东方财富对应实时/日线接口。
+3. 实时与日线可以分别切换来源，例如“腾讯实时 + 东财日线”。
+4. 如果某只 ETF 两套数据源都失败，本次会发送“监控异常”提醒，而不是把不完整的 1/4、2/4 数据静默当成成功。
+
 ## GitHub Secrets
 
 打开仓库：`Settings` → `Secrets and variables` → `Actions` → `New repository secret`，添加以下 4 个 Repository secrets：
@@ -20,9 +29,15 @@
 - `FEISHU_APP_ID`：飞书自建应用 App ID。
 - `FEISHU_APP_SECRET`：飞书自建应用 App Secret。
 - `FEISHU_CHAT_ID`：接收通知的飞书会话 ID（通常以 `oc_` 开头）。
-- `SERVERCHAN_SENDKEY`：Server酱 SendKey；兼容 Turbo 的 `SCT...` 和 Server酱³ 的 `sctp<uid>t...`。
+- `SERVERCHAN_SENDKEY`：Server酱 SendKey。
 
 密钥不要写进代码，也不要提交到 Git。程序不会把这些凭据打印到 Actions 日志。
+
+### Server酱特别说明
+
+- **想在微信里收到消息：必须使用 Server酱 Turbo 的 `SCT...` SendKey**，并在 Server酱 Turbo 控制台启用微信服务号/企业微信等微信通道。
+- `sctp<uid>t...` 属于 **Server酱³（SC3）**，消息推送到 Server酱³ 独立 App，**不是微信**。
+- 程序兼容两种 Key，并会在 Actions 日志中明确显示实际通知目标；`sctp...` 不再被标成“微信通知成功”。
 
 ## 飞书应用要求
 
@@ -33,6 +48,13 @@
 进入 `Actions` → `红利 ETF RSI(6) 监控` → `Run workflow`。
 
 如果勾选 `force_notify`，即使当前 RSI 没有低于 20，也会发送一条测试摘要，用于验证飞书和 Server酱通知配置。
+
+测试时请重点查看 Actions 日志：
+
+- 四只 ETF 都应打印价格、RSI(6) 和数据来源；
+- 飞书应显示 `[OK] 飞书 通知接口返回成功`；
+- `SCT...` 应显示 `Server酱 Turbo（可推微信）`；
+- `sctp...` 应显示 `Server酱³ App（sctp，不是微信）`。
 
 ## 定时规则
 
