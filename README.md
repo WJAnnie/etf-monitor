@@ -1,6 +1,6 @@
 # 红利 ETF RSI(6) 定投提醒
 
-每天中国时间 14:00（周一至周五）由 GitHub Actions 自动检查 4 只红利 ETF 的 RSI(6)。非交易日会自动跳过；任意标的 RSI(6) < 20 时，同时通过飞书 Webhook 和 Server酱发送提醒。
+每天中国时间 14:00（周一至周五）由 GitHub Actions 自动检查 4 只红利 ETF 的 RSI(6)。非交易日会自动跳过；任意标的 RSI(6) < 20 时，同时通过飞书自建应用和 Server酱发送提醒。
 
 ## 监控标的
 
@@ -15,13 +15,18 @@
 
 ## GitHub Secrets
 
-打开仓库：`Settings` → `Secrets and variables` → `Actions` → `New repository secret`，添加：
+打开仓库：`Settings` → `Secrets and variables` → `Actions` → `New repository secret`，添加以下 4 个 Repository secrets：
 
-- `FEISHU_WEBHOOK`：飞书群自定义机器人的完整 Webhook URL。
-- `SERVERCHAN_SENDKEY`：Server酱 SendKey（通常以 `SCT` 开头；也兼容 `sctp`）。
-- `FEISHU_SIGNING_SECRET`：可选。仅当飞书机器人启用了“签名校验”时添加。
+- `FEISHU_APP_ID`：飞书自建应用 App ID。
+- `FEISHU_APP_SECRET`：飞书自建应用 App Secret。
+- `FEISHU_CHAT_ID`：接收通知的飞书会话 ID（通常以 `oc_` 开头）。
+- `SERVERCHAN_SENDKEY`：Server酱 SendKey；兼容 Turbo 的 `SCT...` 和 Server酱³ 的 `sctp<uid>t...`。
 
-密钥不要写进代码，也不要提交到 Git。
+密钥不要写进代码，也不要提交到 Git。程序不会把这些凭据打印到 Actions 日志。
+
+## 飞书应用要求
+
+飞书应用需要启用机器人能力，并具备以应用身份发送消息所需权限；机器人需能向目标会话发送消息。代码会使用 App ID/App Secret 获取 tenant_access_token，然后以 `chat_id` 为接收 ID 发送文本消息。
 
 ## 手动测试
 
