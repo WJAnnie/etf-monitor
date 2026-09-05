@@ -1,0 +1,48 @@
+name: 持仓建议转发
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+
+concurrency:
+  group: portfolio-advice-relay
+  cancel-in-progress: false
+
+jobs:
+  relay:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.issue.number == 1 && contains(github.event.comment.body, '<!-- portfolio-advice -->'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+      FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+      FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
+      SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Relay issue comment
+        if: github.event_name == 'issue_comment'
+        run: python relay_issue_comment.py
+
+      - name: Manual dispatch note
+        if: github.event_name == 'workflow_dispatch'
+        run: echo 'Manual dispatch only verifies workflow loading; post a marked comment to the portfolio issue to test delivery.'
