@@ -1,12 +1,13 @@
 {
-  "generated_at": "2026-09-07T15:37:54.500907+08:00",
-  "note": "场外基金采用跟踪指数/ETF代理；缠论买卖点不由脚本机械确认。",
+  "generated_at": "2026-09-07T16:12:49.316759+08:00",
+  "note": "场外基金采用跟踪指数/ETF代理；15分钟仅保留已收完K线；缠论买卖点不由脚本机械确认。",
   "symbol": {
     "key": "hk_stock_connect_tech",
     "name": "中证港股通科技指数",
     "secid": "1.931573",
     "tx_symbol": "sh931573",
     "yahoo_symbol": "513980.SS",
+    "yahoo_symbol_is_proxy": true,
     "market": "CN_INDEX",
     "proxy_for": "016496",
     "proxy_note": "主取931573；Yahoo后备使用目标ETF 513980",
@@ -1634,6 +1635,42 @@
     ],
     "m15": [
       {
+        "time": "2026-08-11 09:30",
+        "open": 0.6380000114440918,
+        "close": 0.6380000114440918,
+        "high": 0.6399999856948853,
+        "low": 0.6359999775886536,
+        "volume": 26913400.0,
+        "amount": 0.0
+      },
+      {
+        "time": "2026-08-11 09:45",
+        "open": 0.6389999985694885,
+        "close": 0.6370000243186951,
+        "high": 0.6399999856948853,
+        "low": 0.6359999775886536,
+        "volume": 33029100.0,
+        "amount": 0.0
+      },
+      {
+        "time": "2026-08-11 10:00",
+        "open": 0.6370000243186951,
+        "close": 0.6359999775886536,
+        "high": 0.6370000243186951,
+        "low": 0.6349999904632568,
+        "volume": 21520800.0,
+        "amount": 0.0
+      },
+      {
+        "time": "2026-08-11 10:15",
+        "open": 0.6370000243186951,
+        "close": 0.6359999775886536,
+        "high": 0.6380000114440918,
+        "low": 0.6349999904632568,
+        "volume": 19445500.0,
+        "amount": 0.0
+      },
+      {
         "time": "2026-08-11 10:30",
         "open": 0.6359999775886536,
         "close": 0.6349999904632568,
@@ -2102,15 +2139,6 @@
         "amount": 0.0
       },
       {
-        "time": "2026-08-14 11:30",
-        "open": 0.6129999756813049,
-        "close": 0.6129999756813049,
-        "high": 0.6129999756813049,
-        "low": 0.6129999756813049,
-        "volume": 7500.0,
-        "amount": 0.0
-      },
-      {
         "time": "2026-08-14 13:00",
         "open": 0.6140000224113464,
         "close": 0.6119999885559082,
@@ -2252,15 +2280,6 @@
         "high": 0.628000020980835,
         "low": 0.6269999742507935,
         "volume": 7917600.0,
-        "amount": 0.0
-      },
-      {
-        "time": "2026-08-17 11:30",
-        "open": 0.628000020980835,
-        "close": 0.628000020980835,
-        "high": 0.628000020980835,
-        "low": 0.628000020980835,
-        "volume": 17100.0,
         "amount": 0.0
       },
       {
@@ -4136,15 +4155,6 @@
         "amount": 0.0
       },
       {
-        "time": "2026-09-03 11:30",
-        "open": 0.597000002861023,
-        "close": 0.597000002861023,
-        "high": 0.597000002861023,
-        "low": 0.597000002861023,
-        "volume": 28800.0,
-        "amount": 0.0
-      },
-      {
         "time": "2026-09-03 13:00",
         "open": 0.5960000157356262,
         "close": 0.5950000286102295,
@@ -4503,15 +4513,6 @@
         "low": 0.6010000109672546,
         "volume": 208632400.0,
         "amount": 0.0
-      },
-      {
-        "time": "2026-09-07 15:00",
-        "open": 0.6039999723434448,
-        "close": 0.6039999723434448,
-        "high": 0.6039999723434448,
-        "low": 0.6039999723434448,
-        "volume": 0.0,
-        "amount": 0.0
       }
     ],
     "sources": {
@@ -4521,8 +4522,10 @@
     "warnings": [
       "tencent klt=101: https://web.ifzq.gtimg.cn/appstock/app/fqkline/get: Tencent daily returned empty/invalid kline | https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get: Tencent daily returned empty/invalid kline",
       "sina klt=101: Sina unexpected payload type=NoneType",
+      "eastmoney klt=101: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
       "tencent klt=15: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 empty; stock_keys=['qt', 'm15'] | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 empty; stock_keys=['qt', 'm15']",
-      "sina klt=15: Sina unexpected payload type=NoneType"
+      "sina klt=15: Sina unexpected payload type=NoneType",
+      "eastmoney klt=15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
     ],
     "errors": [],
     "cache_origin": {},
@@ -4549,9 +4552,9 @@
       },
       "m15": {
         "macd": {
-          "diff": 0.0004047237947486515,
-          "dea": -7.271514944162402e-05,
-          "hist": 0.000954877888380551
+          "diff": 0.00015820223592866167,
+          "dea": -0.00019659016739856716,
+          "hist": 0.0007095848066544577
         },
         "boll": {
           "mid": 0.6001999974250793,
@@ -4560,9 +4563,9 @@
         },
         "rsi14": 66.66666666666666,
         "kdj": {
-          "k": 90.8002307957516,
-          "d": 79.14697849129583,
-          "j": 114.10673540466317
+          "k": 86.20033518636569,
+          "d": 73.32022814264555,
+          "j": 111.96054927380598
         },
         "recent_high_5": 0.6039999723434448,
         "recent_low_5": 0.5989999771118164

@@ -1,14 +1,18 @@
 {
-  "generated_at": "2026-09-07T15:37:54.500907+08:00",
+  "generated_at": "2026-09-07T16:12:49.316759+08:00",
   "source_file": "data/latest_market_data.json",
   "total_symbols": 9,
-  "usable_symbols": 8,
-  "fresh_symbols": 8,
-  "all_usable": false,
-  "all_fresh": false,
-  "symbols_covering_1400_bar": 3,
-  "all_cover_1400_bar": false,
-  "note": "数据源顺序：腾讯→新浪→Yahoo→东方财富；实时源全部失败时从当前文件或Git历史回捞最近可用K线并标记cache。14:01后covers_1400_bar检查当日14:00的15分钟K线。",
+  "usable_symbols": 9,
+  "fresh_symbols": 9,
+  "symbols_with_today_data": 9,
+  "market_activity_today": true,
+  "all_usable": true,
+  "all_fresh": true,
+  "symbols_covering_1400_bar": 9,
+  "all_cover_1400_bar": true,
+  "ready_for_1400_analysis_symbols": 9,
+  "all_ready_for_1400_analysis": true,
+  "note": "行情源按标的选择；代理Yahoo代码会在proxy_substitution标明。Yahoo 15分钟按区间起点处理并过滤未收完K线；其他源按区间结束时间处理。实时源全失败时才回捞缓存。",
   "symbols": {
     "csi500": {
       "name": "中证500",
@@ -22,19 +26,24 @@
         "daily": "tencent",
         "m15": "sina"
       },
-      "cache_origin": {
-        "m15": "49df466fbf78d32f505033297d1b17dd8a2f4ad6"
+      "proxy_substitution": {
+        "daily": false,
+        "m15": false
       },
+      "cache_origin": {},
       "daily_count": 181,
       "m15_count": 320,
       "latest_daily_time": "2026-09-07",
       "latest_m15_time": "2026-09-07 15:00:00",
+      "latest_completed_m15_end_time": "2026-09-07T15:00:00+08:00",
       "daily_history_ok": true,
       "m15_history_ok": true,
+      "daily_is_today": true,
+      "m15_is_today": true,
       "using_cache": false,
       "usable_for_analysis": true,
       "fresh_for_analysis": true,
-      "covers_1400_bar": false,
+      "covers_1400_bar": true,
       "warnings": [
         "tencent klt=15: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 returned empty/invalid kline | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 returned empty/invalid kline"
       ],
@@ -52,13 +61,20 @@
         "daily": "yahoo",
         "m15": "yahoo"
       },
+      "proxy_substitution": {
+        "daily": true,
+        "m15": true
+      },
       "cache_origin": {},
       "daily_count": 180,
       "m15_count": 320,
       "latest_daily_time": "2026-09-07",
-      "latest_m15_time": "2026-09-07 15:00",
+      "latest_m15_time": "2026-09-07 14:45",
+      "latest_completed_m15_end_time": "2026-09-07T15:00:00+08:00",
       "daily_history_ok": true,
       "m15_history_ok": true,
+      "daily_is_today": true,
+      "m15_is_today": true,
       "using_cache": false,
       "usable_for_analysis": true,
       "fresh_for_analysis": true,
@@ -66,8 +82,10 @@
       "warnings": [
         "tencent klt=101: https://web.ifzq.gtimg.cn/appstock/app/fqkline/get: Tencent daily returned empty/invalid kline | https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get: Tencent daily returned empty/invalid kline",
         "sina klt=101: Sina unexpected payload type=NoneType",
+        "eastmoney klt=101: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
         "tencent klt=15: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 empty; stock_keys=['qt', 'm15'] | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 empty; stock_keys=['qt', 'm15']",
-        "sina klt=15: Sina unexpected payload type=NoneType"
+        "sina klt=15: Sina unexpected payload type=NoneType",
+        "eastmoney klt=15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
       ],
       "errors": []
     },
@@ -83,19 +101,24 @@
         "daily": "tencent",
         "m15": "sina"
       },
-      "cache_origin": {
-        "m15": "49df466fbf78d32f505033297d1b17dd8a2f4ad6"
+      "proxy_substitution": {
+        "daily": false,
+        "m15": false
       },
+      "cache_origin": {},
       "daily_count": 181,
       "m15_count": 320,
       "latest_daily_time": "2026-09-07",
       "latest_m15_time": "2026-09-07 15:00:00",
+      "latest_completed_m15_end_time": "2026-09-07T15:00:00+08:00",
       "daily_history_ok": true,
       "m15_history_ok": true,
+      "daily_is_today": true,
+      "m15_is_today": true,
       "using_cache": false,
       "usable_for_analysis": true,
       "fresh_for_analysis": true,
-      "covers_1400_bar": false,
+      "covers_1400_bar": true,
       "warnings": [
         "tencent klt=15: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 returned empty/invalid kline | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 returned empty/invalid kline"
       ],
@@ -113,13 +136,20 @@
         "daily": "tencent",
         "m15": "yahoo"
       },
+      "proxy_substitution": {
+        "daily": false,
+        "m15": false
+      },
       "cache_origin": {},
       "daily_count": 181,
       "m15_count": 320,
       "latest_daily_time": "2026-09-07",
-      "latest_m15_time": "2026-09-07 15:22",
+      "latest_m15_time": "2026-09-07 15:45",
+      "latest_completed_m15_end_time": "2026-09-07T16:00:00+08:00",
       "daily_history_ok": true,
       "m15_history_ok": true,
+      "daily_is_today": true,
+      "m15_is_today": true,
       "using_cache": false,
       "usable_for_analysis": true,
       "fresh_for_analysis": true,
@@ -136,28 +166,33 @@
       "tx_symbol": "bj899050",
       "market": "CN_INDEX",
       "proxy_for": "北证50",
-      "proxy_note": "指数本身；无可靠Yahoo后备",
+      "proxy_note": "指数本身；优先东方财富，避免腾讯仅返回单根日K",
       "data_file": "data/market/bse50.json",
       "sources": {
-        "daily": "tencent",
+        "daily": "sina",
         "m15": "sina"
       },
-      "cache_origin": {
-        "m15": "49df466fbf78d32f505033297d1b17dd8a2f4ad6",
-        "daily": "49df466fbf78d32f505033297d1b17dd8a2f4ad6"
+      "proxy_substitution": {
+        "daily": false,
+        "m15": false
       },
-      "daily_count": 1,
+      "cache_origin": {},
+      "daily_count": 180,
       "m15_count": 320,
       "latest_daily_time": "2026-09-07",
       "latest_m15_time": "2026-09-07 15:00:00",
-      "daily_history_ok": false,
+      "latest_completed_m15_end_time": "2026-09-07T15:00:00+08:00",
+      "daily_history_ok": true,
       "m15_history_ok": true,
+      "daily_is_today": true,
+      "m15_is_today": true,
       "using_cache": false,
-      "usable_for_analysis": false,
-      "fresh_for_analysis": false,
-      "covers_1400_bar": false,
+      "usable_for_analysis": true,
+      "fresh_for_analysis": true,
+      "covers_1400_bar": true,
       "warnings": [
-        "tencent klt=15: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 empty; stock_keys=['qt', 'm15', 'prec'] | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 empty; stock_keys=['qt', 'm15', 'prec']"
+        "eastmoney klt=101: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
+        "eastmoney klt=15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
       ],
       "errors": []
     },
@@ -173,19 +208,24 @@
         "daily": "tencent",
         "m15": "sina"
       },
-      "cache_origin": {
-        "m15": "49df466fbf78d32f505033297d1b17dd8a2f4ad6"
+      "proxy_substitution": {
+        "daily": false,
+        "m15": false
       },
+      "cache_origin": {},
       "daily_count": 180,
       "m15_count": 320,
       "latest_daily_time": "2026-09-07",
       "latest_m15_time": "2026-09-07 15:00:00",
+      "latest_completed_m15_end_time": "2026-09-07T15:00:00+08:00",
       "daily_history_ok": true,
       "m15_history_ok": true,
+      "daily_is_today": true,
+      "m15_is_today": true,
       "using_cache": false,
       "usable_for_analysis": true,
       "fresh_for_analysis": true,
-      "covers_1400_bar": false,
+      "covers_1400_bar": true,
       "warnings": [
         "tencent klt=15: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 returned empty/invalid kline | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 returned empty/invalid kline"
       ],
@@ -203,19 +243,24 @@
         "daily": "tencent",
         "m15": "sina"
       },
-      "cache_origin": {
-        "m15": "49df466fbf78d32f505033297d1b17dd8a2f4ad6"
+      "proxy_substitution": {
+        "daily": false,
+        "m15": false
       },
+      "cache_origin": {},
       "daily_count": 181,
       "m15_count": 320,
       "latest_daily_time": "2026-09-07",
       "latest_m15_time": "2026-09-07 15:00:00",
+      "latest_completed_m15_end_time": "2026-09-07T15:00:00+08:00",
       "daily_history_ok": true,
       "m15_history_ok": true,
+      "daily_is_today": true,
+      "m15_is_today": true,
       "using_cache": false,
       "usable_for_analysis": true,
       "fresh_for_analysis": true,
-      "covers_1400_bar": false,
+      "covers_1400_bar": true,
       "warnings": [
         "tencent klt=15: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 returned empty/invalid kline | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 returned empty/invalid kline"
       ],
@@ -233,13 +278,20 @@
         "daily": "yahoo",
         "m15": "yahoo"
       },
+      "proxy_substitution": {
+        "daily": true,
+        "m15": true
+      },
       "cache_origin": {},
       "daily_count": 180,
       "m15_count": 320,
       "latest_daily_time": "2026-09-07",
-      "latest_m15_time": "2026-09-07 15:00",
+      "latest_m15_time": "2026-09-07 14:45",
+      "latest_completed_m15_end_time": "2026-09-07T15:00:00+08:00",
       "daily_history_ok": true,
       "m15_history_ok": true,
+      "daily_is_today": true,
+      "m15_is_today": true,
       "using_cache": false,
       "usable_for_analysis": true,
       "fresh_for_analysis": true,
@@ -247,8 +299,10 @@
       "warnings": [
         "tencent klt=101: https://web.ifzq.gtimg.cn/appstock/app/fqkline/get: Tencent daily returned empty/invalid kline | https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get: Tencent daily returned empty/invalid kline",
         "sina klt=101: Sina unexpected payload type=NoneType",
+        "eastmoney klt=101: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
         "tencent klt=15: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 empty; stock_keys=['qt', 'm15'] | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 empty; stock_keys=['qt', 'm15']",
-        "sina klt=15: Sina unexpected payload type=NoneType"
+        "sina klt=15: Sina unexpected payload type=NoneType",
+        "eastmoney klt=15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
       ],
       "errors": []
     },
@@ -264,19 +318,24 @@
         "daily": "tencent",
         "m15": "sina"
       },
-      "cache_origin": {
-        "m15": "49df466fbf78d32f505033297d1b17dd8a2f4ad6"
+      "proxy_substitution": {
+        "daily": false,
+        "m15": false
       },
+      "cache_origin": {},
       "daily_count": 181,
       "m15_count": 320,
       "latest_daily_time": "2026-09-07",
       "latest_m15_time": "2026-09-07 15:00:00",
+      "latest_completed_m15_end_time": "2026-09-07T15:00:00+08:00",
       "daily_history_ok": true,
       "m15_history_ok": true,
+      "daily_is_today": true,
+      "m15_is_today": true,
       "using_cache": false,
       "usable_for_analysis": true,
       "fresh_for_analysis": true,
-      "covers_1400_bar": false,
+      "covers_1400_bar": true,
       "warnings": [
         "tencent klt=15: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 returned empty/invalid kline | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 returned empty/invalid kline"
       ],

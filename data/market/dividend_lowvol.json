@@ -1,12 +1,13 @@
 {
-  "generated_at": "2026-09-07T15:37:54.500907+08:00",
-  "note": "场外基金采用跟踪指数/ETF代理；缠论买卖点不由脚本机械确认。",
+  "generated_at": "2026-09-07T16:12:49.316759+08:00",
+  "note": "场外基金采用跟踪指数/ETF代理；15分钟仅保留已收完K线；缠论买卖点不由脚本机械确认。",
   "symbol": {
     "key": "dividend_lowvol",
     "name": "红利低波ETF",
     "secid": "1.512890",
     "tx_symbol": "sh512890",
     "yahoo_symbol": "512890.SS",
+    "yahoo_symbol_is_proxy": false,
     "market": "CN",
     "proxy_for": "红利组合",
     "proxy_note": "红利组合技术代理",
@@ -4531,9 +4532,7 @@
       "tencent klt=15: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 returned empty/invalid kline | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 returned empty/invalid kline"
     ],
     "errors": [],
-    "cache_origin": {
-      "m15": "49df466fbf78d32f505033297d1b17dd8a2f4ad6"
-    },
+    "cache_origin": {},
     "indicators": {
       "daily": {
         "macd": {
