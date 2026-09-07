@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -13,15 +12,16 @@ CN_TZ = ZoneInfo("Asia/Shanghai")
 TIMEOUT = 15
 OUT = Path("data/latest_market_data.json")
 
-# 技术分析代理标的。场外联接基金不伪造盘中K线，使用其主要跟踪指数/场内代理。
+# 技术分析代理标的。场外联接基金不伪造盘中K线，使用其跟踪指数/目标ETF代理。
 SYMBOLS = [
     {"key":"csi500","name":"中证500","secid":"1.000905","market":"CN","proxy_for":"中证500核心仓"},
-    {"key":"hk_stock_connect_tech","name":"中证港股通科技指数","secid":"100.H30533","market":"HK","proxy_for":"016496"},
-    {"key":"hang_seng_tech","name":"恒生科技指数","secid":"100.HSTECH","market":"HK","proxy_for":"013172"},
+    {"key":"hk_stock_connect_tech","name":"中证港股通科技指数","secid":"1.931573","market":"HK_INDEX","proxy_for":"016496"},
+    {"key":"hk_stock_connect_tech_etf","name":"港股通科技ETF","secid":"1.513980","market":"CN","proxy_for":"016496目标ETF"},
+    {"key":"hang_seng_tech","name":"恒生科技指数","secid":"100.HSTECH","market":"HK_INDEX","proxy_for":"013172"},
     {"key":"bse50","name":"北证50","secid":"0.899050","market":"CN","proxy_for":"北证50"},
     {"key":"china_film","name":"中国电影","secid":"1.600977","market":"CN","proxy_for":"600977"},
     {"key":"battery_etf","name":"电池ETF","secid":"1.561160","market":"CN","proxy_for":"561160"},
-    {"key":"medical_device","name":"中证全指医疗器械指数","secid":"1.931484","market":"CN","proxy_for":"017633"},
+    {"key":"medical_device","name":"中证全指医疗器械指数","secid":"1.931484","market":"CN_INDEX","proxy_for":"017633"},
     {"key":"dividend_lowvol","name":"红利低波ETF","secid":"1.512890","market":"CN","proxy_for":"红利组合"},
 ]
 
@@ -48,6 +48,8 @@ def kline(secid: str, klt: int, limit: int) -> list[dict]:
         a=str(x).split(",")
         if len(a)>=7:
             out.append({"time":a[0],"open":float(a[1]),"close":float(a[2]),"high":float(a[3]),"low":float(a[4]),"volume":float(a[5]),"amount":float(a[6])})
+    if not out:
+        raise RuntimeError(f"empty kline: secid={secid}, klt={klt}")
     return out
 
 
@@ -67,10 +69,13 @@ def indicators(rows):
     for i in range(1,len(c)):
         d=c[i]-c[i-1]; gains.append(max(d,0)); losses.append(max(-d,0))
     ag=sum(gains[-14:])/14; al=sum(losses[-14:])/14; rsi=100 if al==0 else 100-100/(1+ag/al)
-    ll=min(l[-9:]); hh=max(h[-9:]); rsv=50 if hh==ll else (c[-1]-ll)/(hh-ll)*100
-    # 输出当前指标；结构/买卖点由分析层结合完整K线判定，避免脚本伪判缠论。
-    return {"macd":{"diff":diff[-1],"dea":dea[-1],"hist":macd[-1]},"boll":{"mid":ma20,"upper":ma20+2*sd,"lower":ma20-2*sd},"rsi14":rsi,"kdj_rsv9":rsv,
-            "recent_high_5":max(h[-5:]),"recent_low_5":min(l[-5:])}
+    k=d=50.0
+    for i in range(len(c)):
+        start=max(0,i-8); ll=min(l[start:i+1]); hh=max(h[start:i+1]); rsv=50.0 if hh==ll else (c[i]-ll)/(hh-ll)*100
+        k=(2*k+rsv)/3; d=(2*d+k)/3
+    j=3*k-2*d
+    return {"macd":{"diff":diff[-1],"dea":dea[-1],"hist":macd[-1]},"boll":{"mid":ma20,"upper":ma20+2*sd,"lower":ma20-2*sd},"rsi14":rsi,
+            "kdj":{"k":k,"d":d,"j":j},"recent_high_5":max(h[-5:]),"recent_low_5":min(l[-5:])}
 
 
 def main():
@@ -83,10 +88,11 @@ def main():
         try:item["m15"]=kline(s["secid"],15,320)
         except Exception as e:item["errors"].append("m15: "+str(e))
         item["indicators"]={"daily":indicators(item["daily"]),"m15":indicators(item["m15"])}
+        item["usable_for_analysis"] = len(item["daily"]) >= 60 and len(item["m15"]) >= 80 and not item["errors"]
         result["symbols"][s["key"]]=item
     OUT.parent.mkdir(parents=True,exist_ok=True)
     OUT.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding="utf-8")
     print(f"wrote {OUT}; symbols={len(result['symbols'])}")
-    for k,v in result["symbols"].items():print(k,len(v["daily"]),len(v["m15"]),v["errors"])
+    for k,v in result["symbols"].items():print(k,len(v["daily"]),len(v["m15"]),v["usable_for_analysis"],v["errors"])
 
 if __name__=="__main__":main()
