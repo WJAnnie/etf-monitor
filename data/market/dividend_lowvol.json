@@ -1,0 +1,22 @@
+{
+  "generated_at": "2026-09-07T15:26:37.984937+08:00",
+  "note": "场外基金采用跟踪指数/ETF代理；缠论买卖点不由脚本机械确认。",
+  "symbol": {
+    "key": "dividend_lowvol",
+    "name": "红利低波ETF",
+    "secid": "1.512890",
+    "market": "CN",
+    "proxy_for": "红利组合",
+    "daily": [],
+    "m15": [],
+    "errors": [
+      "daily: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
+      "m15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+    ],
+    "indicators": {
+      "daily": {},
+      "m15": {}
+    },
+    "usable_for_analysis": false
+  }
+}
