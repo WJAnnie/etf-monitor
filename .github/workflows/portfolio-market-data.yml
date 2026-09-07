@@ -2,9 +2,11 @@ name: 持仓行情数据采集
 
 on:
   schedule:
-    # GitHub Actions cron 为 UTC。05:50 UTC = 北京时间 13:50。
-    # 预留约10分钟给行情采集和提交，供14:00持仓分析读取。
+    # GitHub Actions cron 为 UTC。
+    # 05:50 UTC = 北京时间 13:50：预采集，提前验证行情源与数据完整性。
     - cron: "50 5 * * 1-5"
+    # 06:01 UTC = 北京时间 14:01：最终刷新，尽量纳入截至14:00的完整15分钟K线。
+    - cron: "1 6 * * 1-5"
   workflow_dispatch:
   push:
     branches: [master]
@@ -44,7 +46,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/latest_market_data.json
+          git add data/latest_market_data.json data/latest_market_summary.json
           if git diff --cached --quiet; then
             echo "No market-data change"
           else
