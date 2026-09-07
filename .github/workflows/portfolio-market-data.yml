@@ -5,7 +5,7 @@ on:
     # GitHub Actions cron 为 UTC。
     # 05:50 UTC = 北京时间 13:50：预采集，提前验证行情源与数据完整性。
     - cron: "50 5 * * 1-5"
-    # 06:01 UTC = 北京时间 14:01：最终刷新，尽量纳入截至14:00的完整15分钟K线。
+    # 06:01 UTC = 北京时间 14:01：最终刷新，目标是拿到完整截至14:00的15分钟K线。
     - cron: "1 6 * * 1-5"
   workflow_dispatch:
   push:
@@ -40,10 +40,25 @@ jobs:
       - name: Install dependencies
         run: pip install requests
 
-      - name: Collect daily and 15-minute OHLCV
+      - name: Collect complete daily and 15-minute OHLCV snapshot
         run: python portfolio_market_data.py
 
-      - name: Commit latest market data
+      - name: Validate JSON snapshot before publish
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          for p in [Path("data/latest_market_data.json"), Path("data/latest_market_summary.json")]:
+              payload = json.loads(p.read_text(encoding="utf-8"))
+              if not isinstance(payload, dict):
+                  raise SystemExit(f"Invalid JSON object: {p}")
+          shards = list(Path("data/market").glob("*.json"))
+          if len(shards) < 9:
+              raise SystemExit(f"Expected at least 9 symbol shards, got {len(shards)}")
+          print(f"JSON snapshot valid; shards={len(shards)}")
+          PY
+
+      - name: Commit complete market-data snapshot
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -59,16 +74,34 @@ jobs:
         run: |
           python - <<'PY'
           import json
+          from datetime import datetime, time
           from pathlib import Path
 
           s = json.loads(Path("data/latest_market_summary.json").read_text(encoding="utf-8"))
           total = int(s.get("total_symbols", 0))
           usable = int(s.get("usable_symbols", 0))
           fresh = int(s.get("fresh_symbols", 0))
+          today = int(s.get("symbols_with_today_data", 0))
           cover = int(s.get("symbols_covering_1400_bar", 0))
-          print(f"Market-data quality: usable={usable}/{total}, fresh={fresh}/{total}, covers_1400={cover}/{total}")
-          if usable == 0:
-              raise SystemExit("No symbol has sufficient daily + 15m history; workflow marked failed to avoid a misleading green run.")
+          ready = int(s.get("ready_for_1400_analysis_symbols", 0))
+          activity = bool(s.get("market_activity_today", False))
+          generated = datetime.fromisoformat(s["generated_at"])
+          print(f"Market-data quality: usable={usable}/{total}, fresh={fresh}/{total}, today={today}/{total}, covers_1400={cover}/{total}, ready={ready}/{total}, generated={generated.isoformat()}")
+
+          # 法定节假日也可能被周一到周五 cron 命中。没有当日市场活动时不制造红色告警，
+          # 后续14:00报告流程应据此直接判定“无当日行情/疑似休市”，不生成操作报告。
+          if not activity:
+              print("No broad same-day market activity detected; likely a non-trading day. Snapshot retained for diagnostics.")
+              raise SystemExit(0)
+
+          if usable != total:
+              bad = [k for k,v in s["symbols"].items() if not v.get("usable_for_analysis")]
+              raise SystemExit(f"Insufficient history for symbols: {bad}")
           if fresh == 0:
-              raise SystemExit("All symbols are cache/stale; workflow marked failed so the 14:05 analysis will not treat the data as fresh.")
+              raise SystemExit("All symbols are cache/stale; do not treat this snapshot as fresh market data.")
+
+          # 14:01以后（包括手动测试）应能覆盖完整截至14:00的15分钟结构。
+          if generated.timetz().replace(tzinfo=None) >= time(14, 1) and ready != total:
+              bad = [k for k,v in s["symbols"].items() if not (v.get("fresh_for_analysis") and v.get("covers_1400_bar"))]
+              raise SystemExit(f"14:00 snapshot incomplete for symbols: {bad}")
           PY
