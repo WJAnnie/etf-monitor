@@ -17,6 +17,7 @@ on:
 permissions:
   contents: write
 
+# 如果13:50预采集异常拖到14:01，优先让14:01最终刷新接管，避免旧任务阻塞最终快照。
 concurrency:
   group: portfolio-market-data
   cancel-in-progress: true
@@ -24,7 +25,7 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,45 +38,38 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
-        run: pip install requests
+      - name: Install dependencies with retry
+        run: python -m pip install --retries 5 --timeout 30 requests
 
-      - name: Collect complete daily and 15-minute OHLCV snapshot
-        run: python portfolio_market_data.py
-
-      - name: Validate JSON snapshot before publish
+      - name: Collect and quality-check snapshot with retry
+        shell: bash
         run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          for p in [Path("data/latest_market_data.json"), Path("data/latest_market_summary.json")]:
-              payload = json.loads(p.read_text(encoding="utf-8"))
-              if not isinstance(payload, dict):
-                  raise SystemExit(f"Invalid JSON object: {p}")
-          shards = list(Path("data/market").glob("*.json"))
-          if len(shards) < 9:
-              raise SystemExit(f"Expected at least 9 symbol shards, got {len(shards)}")
-          print(f"JSON snapshot valid; shards={len(shards)}")
-          PY
+          set -u
+          MAX_ATTEMPTS=4
+          attempt=1
 
-      - name: Commit complete market-data snapshot
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/latest_market_data.json data/latest_market_summary.json data/market/*.json
-          if git diff --cached --quiet; then
-            echo "No market-data change"
-          else
-            git commit -m "data: refresh portfolio market data"
-            git push
-          fi
+          while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
+            echo "========== market-data attempt ${attempt}/${MAX_ATTEMPTS} =========="
 
-      - name: Validate market data quality
-        run: |
-          python - <<'PY'
+            # 每次失败后都从仓库里的上一份已发布数据重新开始，避免把失败尝试产生的
+            # 半新半旧工作区文件当成下一次尝试的“可靠缓存”。
+            git restore --source=HEAD --worktree -- data/latest_market_data.json data/latest_market_summary.json data/market 2>/dev/null || true
+
+            if python portfolio_market_data.py; then
+              if python - <<'PY'
           import json
           from datetime import datetime, time
           from pathlib import Path
+
+          required = [Path("data/latest_market_data.json"), Path("data/latest_market_summary.json")]
+          for p in required:
+              payload = json.loads(p.read_text(encoding="utf-8"))
+              if not isinstance(payload, dict):
+                  raise SystemExit(f"Invalid JSON object: {p}")
+
+          shards = list(Path("data/market").glob("*.json"))
+          if len(shards) < 9:
+              raise SystemExit(f"Expected at least 9 symbol shards, got {len(shards)}")
 
           s = json.loads(Path("data/latest_market_summary.json").read_text(encoding="utf-8"))
           total = int(s.get("total_symbols", 0))
@@ -86,22 +80,82 @@ jobs:
           ready = int(s.get("ready_for_1400_analysis_symbols", 0))
           activity = bool(s.get("market_activity_today", False))
           generated = datetime.fromisoformat(s["generated_at"])
-          print(f"Market-data quality: usable={usable}/{total}, fresh={fresh}/{total}, today={today}/{total}, covers_1400={cover}/{total}, ready={ready}/{total}, generated={generated.isoformat()}")
 
-          # 法定节假日也可能被周一到周五 cron 命中。没有当日市场活动时不制造红色告警，
-          # 后续14:00报告流程应据此直接判定“无当日行情/疑似休市”，不生成操作报告。
+          print(
+              f"Quality gate: usable={usable}/{total}, fresh={fresh}/{total}, "
+              f"today={today}/{total}, covers_1400={cover}/{total}, ready={ready}/{total}, "
+              f"generated={generated.isoformat()}"
+          )
+
+          # 周一到周五也可能是法定休市日。此时把诊断快照视为有效，不制造红色失败。
           if not activity:
-              print("No broad same-day market activity detected; likely a non-trading day. Snapshot retained for diagnostics.")
+              print("No same-day market activity detected; likely non-trading day. Accept diagnostic snapshot.")
               raise SystemExit(0)
 
+          if total < 9:
+              raise SystemExit(f"Unexpected symbol count: {total}")
           if usable != total:
-              bad = [k for k,v in s["symbols"].items() if not v.get("usable_for_analysis")]
-              raise SystemExit(f"Insufficient history for symbols: {bad}")
-          if fresh == 0:
-              raise SystemExit("All symbols are cache/stale; do not treat this snapshot as fresh market data.")
+              bad = [k for k,v in s.get("symbols", {}).items() if not v.get("usable_for_analysis")]
+              raise SystemExit(f"Insufficient history: {bad}")
+          if fresh != total:
+              bad = [k for k,v in s.get("symbols", {}).items() if not v.get("fresh_for_analysis")]
+              raise SystemExit(f"Stale/cache-backed symbols: {bad}")
 
-          # 14:01以后（包括手动测试）应能覆盖完整截至14:00的15分钟结构。
+          # 14:01以后必须拿到截至14:00的完整15分钟结构；如果行情供应商短时延迟，
+          # 让外层循环等待后重采，而不是立刻把工作流标红或提交残缺数据。
           if generated.timetz().replace(tzinfo=None) >= time(14, 1) and ready != total:
-              bad = [k for k,v in s["symbols"].items() if not (v.get("fresh_for_analysis") and v.get("covers_1400_bar"))]
-              raise SystemExit(f"14:00 snapshot incomplete for symbols: {bad}")
+              bad = [
+                  k for k,v in s.get("symbols", {}).items()
+                  if not (v.get("fresh_for_analysis") and v.get("covers_1400_bar"))
+              ]
+              raise SystemExit(f"14:00 snapshot incomplete: {bad}")
+
+          print(f"Snapshot accepted; shards={len(shards)}")
           PY
+              then
+                echo "Market-data snapshot passed on attempt ${attempt}."
+                exit 0
+              fi
+            fi
+
+            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+              wait_seconds=$((attempt * 15))
+              echo "Attempt ${attempt} failed quality gate; retrying in ${wait_seconds}s..."
+              sleep "$wait_seconds"
+            fi
+            attempt=$((attempt + 1))
+          done
+
+          echo "All ${MAX_ATTEMPTS} market-data attempts failed. Previous published snapshot remains untouched."
+          exit 1
+
+      - name: Publish only validated snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/latest_market_data.json data/latest_market_summary.json data/market/*.json
+
+          if git diff --cached --quiet; then
+            echo "No market-data change"
+            exit 0
+          fi
+
+          git commit -m "data: refresh portfolio market data"
+
+          # 极少数情况下，采集期间 master 可能有别的提交。先rebase再push，降低
+          # non-fast-forward 导致“数据本身成功但发布失败”的概率。
+          for push_attempt in 1 2 3; do
+            if git pull --rebase origin master && git push origin HEAD:master; then
+              echo "Published validated snapshot."
+              exit 0
+            fi
+            git rebase --abort 2>/dev/null || true
+            if [ "$push_attempt" -lt 3 ]; then
+              sleep $((push_attempt * 5))
+            fi
+          done
+
+          echo "Validated snapshot could not be pushed after 3 attempts."
+          exit 1
