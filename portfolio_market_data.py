@@ -26,7 +26,7 @@ SYMBOLS = [
     {"key":"hk_stock_connect_tech","name":"中证港股通科技指数","secid":"1.931573","tx_symbol":"sh931573","yahoo_symbol":"513980.SS","market":"CN_INDEX","proxy_for":"016496","proxy_note":"主取931573；Yahoo后备使用目标ETF 513980"},
     {"key":"hk_stock_connect_tech_etf","name":"港股通科技ETF","secid":"1.513980","tx_symbol":"sh513980","yahoo_symbol":"513980.SS","market":"CN","proxy_for":"016496目标ETF","proxy_note":"目标ETF本身"},
     {"key":"hang_seng_tech","name":"恒生科技指数","secid":"100.HSTECH","tx_symbol":"hkHSTECH","yahoo_symbol":"HSTECH.HK","market":"HK_INDEX","proxy_for":"013172","proxy_note":"恒生科技指数"},
-    {"key":"bse50","name":"北证50","secid":"0.899050","tx_symbol":"bj899050","yahoo_symbol":null,"market":"CN_INDEX","proxy_for":"北证50","proxy_note":"指数本身；无可靠Yahoo后备"},
+    {"key":"bse50","name":"北证50","secid":"0.899050","tx_symbol":"bj899050","yahoo_symbol":None,"market":"CN_INDEX","proxy_for":"北证50","proxy_note":"指数本身；无可靠Yahoo后备"},
     {"key":"china_film","name":"中国电影","secid":"1.600977","tx_symbol":"sh600977","yahoo_symbol":"600977.SS","market":"CN","proxy_for":"600977","proxy_note":"个股本身"},
     {"key":"battery_etf","name":"电池ETF","secid":"1.561160","tx_symbol":"sh561160","yahoo_symbol":"561160.SS","market":"CN","proxy_for":"561160","proxy_note":"ETF本身"},
     {"key":"medical_device","name":"中证全指医疗器械指数","secid":"1.931484","tx_symbol":"sh931484","yahoo_symbol":"159797.SZ","market":"CN_INDEX","proxy_for":"017633","proxy_note":"主取931484；Yahoo后备使用目标ETF 159797"},
