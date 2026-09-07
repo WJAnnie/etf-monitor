@@ -6,6 +6,11 @@ on:
     # 预留约10分钟给行情采集和提交，供14:00持仓分析读取。
     - cron: "50 5 * * 1-5"
   workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - "portfolio_market_data.py"
+      - ".github/workflows/portfolio-market-data.yml"
 
 permissions:
   contents: write
