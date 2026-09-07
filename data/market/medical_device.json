@@ -1,22 +1,29 @@
 {
-  "generated_at": "2026-09-07T15:26:37.984937+08:00",
+  "generated_at": "2026-09-07T15:30:42.433072+08:00",
   "note": "场外基金采用跟踪指数/ETF代理；缠论买卖点不由脚本机械确认。",
   "symbol": {
     "key": "medical_device",
     "name": "中证全指医疗器械指数",
     "secid": "1.931484",
+    "tx_symbol": "sh931484",
     "market": "CN_INDEX",
     "proxy_for": "017633",
     "daily": [],
     "m15": [],
+    "sources": {
+      "daily": "none",
+      "m15": "none"
+    },
+    "warnings": [],
     "errors": [
-      "daily: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
-      "m15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+      "daily: tencent klt=101: https://web.ifzq.gtimg.cn/appstock/app/fqkline/get: Tencent daily returned empty/invalid kline | https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get: Tencent daily returned empty/invalid kline ; eastmoney klt=101: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
+      "m15: tencent klt=15: https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 returned empty/invalid kline | https://web.ifzq.gtimg.cn/appstock/app/kline/mkline: HTTPSConnectionPool(host='web3.ifzq.gtimg.cn', port=443): Max retries exceeded with url: /appstock/app/kline/mkline?param=sh931484%2Cm15%2C%2C320 (Caused by NameResolutionError(\"HTTPSConnection(host='web3.ifzq.gtimg.cn', port=443): Failed to resolve 'web3.ifzq.gtimg.cn' ([Errno -2] Name or service not known)\")) ; eastmoney klt=15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
     ],
     "indicators": {
       "daily": {},
       "m15": {}
     },
-    "usable_for_analysis": false
+    "usable_for_analysis": false,
+    "fresh_for_analysis": false
   }
 }

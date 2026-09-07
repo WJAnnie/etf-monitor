@@ -1,191 +1,249 @@
 {
-  "generated_at": "2026-09-07T15:26:37.984937+08:00",
+  "generated_at": "2026-09-07T15:30:42.433072+08:00",
   "source_file": "data/latest_market_data.json",
   "total_symbols": 9,
   "usable_symbols": 0,
+  "fresh_symbols": 0,
   "all_usable": false,
+  "all_fresh": false,
   "symbols_covering_1400_bar": 0,
   "all_cover_1400_bar": false,
-  "note": "14:01后运行时，covers_1400_bar用于检查数据源是否已包含当日14:00收盘的15分钟K线；休市标的可能为false。",
+  "note": "优先腾讯财经，东方财富兜底；两者都失败时保留上一次可用K线并标记using_cache。14:01后covers_1400_bar用于检查是否包含当日14:00收盘的15分钟K线。",
   "symbols": {
     "csi500": {
       "name": "中证500",
       "secid": "1.000905",
+      "tx_symbol": "sh000905",
       "market": "CN",
       "proxy_for": "中证500核心仓",
       "data_file": "data/market/csi500.json",
-      "daily_count": 0,
+      "sources": {
+        "daily": "tencent",
+        "m15": "none"
+      },
+      "daily_count": 181,
       "m15_count": 0,
-      "latest_daily_time": null,
+      "latest_daily_time": "2026-09-07",
       "latest_m15_time": null,
-      "daily_history_ok": false,
+      "daily_history_ok": true,
       "m15_history_ok": false,
-      "no_errors": false,
+      "using_cache": false,
       "usable_for_analysis": false,
+      "fresh_for_analysis": false,
       "covers_1400_bar": false,
+      "warnings": [],
       "errors": [
-        "daily: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
-        "m15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+        "m15: tencent klt=15: https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 returned empty/invalid kline | https://web.ifzq.gtimg.cn/appstock/app/kline/mkline: HTTPSConnectionPool(host='web3.ifzq.gtimg.cn', port=443): Max retries exceeded with url: /appstock/app/kline/mkline?param=sh000905%2Cm15%2C%2C320 (Caused by NameResolutionError(\"HTTPSConnection(host='web3.ifzq.gtimg.cn', port=443): Failed to resolve 'web3.ifzq.gtimg.cn' ([Errno -2] Name or service not known)\")) ; eastmoney klt=15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
       ]
     },
     "hk_stock_connect_tech": {
       "name": "中证港股通科技指数",
       "secid": "1.931573",
+      "tx_symbol": "sh931573",
       "market": "HK_INDEX",
       "proxy_for": "016496",
       "data_file": "data/market/hk_stock_connect_tech.json",
+      "sources": {
+        "daily": "none",
+        "m15": "none"
+      },
       "daily_count": 0,
       "m15_count": 0,
       "latest_daily_time": null,
       "latest_m15_time": null,
       "daily_history_ok": false,
       "m15_history_ok": false,
-      "no_errors": false,
+      "using_cache": false,
       "usable_for_analysis": false,
+      "fresh_for_analysis": false,
       "covers_1400_bar": false,
+      "warnings": [],
       "errors": [
-        "daily: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
-        "m15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+        "daily: tencent klt=101: https://web.ifzq.gtimg.cn/appstock/app/fqkline/get: Tencent daily returned empty/invalid kline | https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get: Tencent daily returned empty/invalid kline ; eastmoney klt=101: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
+        "m15: tencent klt=15: https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 returned empty/invalid kline | https://web.ifzq.gtimg.cn/appstock/app/kline/mkline: HTTPSConnectionPool(host='web3.ifzq.gtimg.cn', port=443): Max retries exceeded with url: /appstock/app/kline/mkline?param=sh931573%2Cm15%2C%2C320 (Caused by NameResolutionError(\"HTTPSConnection(host='web3.ifzq.gtimg.cn', port=443): Failed to resolve 'web3.ifzq.gtimg.cn' ([Errno -2] Name or service not known)\")) ; eastmoney klt=15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
       ]
     },
     "hk_stock_connect_tech_etf": {
       "name": "港股通科技ETF",
       "secid": "1.513980",
+      "tx_symbol": "sh513980",
       "market": "CN",
       "proxy_for": "016496目标ETF",
       "data_file": "data/market/hk_stock_connect_tech_etf.json",
-      "daily_count": 0,
+      "sources": {
+        "daily": "tencent",
+        "m15": "none"
+      },
+      "daily_count": 181,
       "m15_count": 0,
-      "latest_daily_time": null,
+      "latest_daily_time": "2026-09-07",
       "latest_m15_time": null,
-      "daily_history_ok": false,
+      "daily_history_ok": true,
       "m15_history_ok": false,
-      "no_errors": false,
+      "using_cache": false,
       "usable_for_analysis": false,
+      "fresh_for_analysis": false,
       "covers_1400_bar": false,
+      "warnings": [],
       "errors": [
-        "daily: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
-        "m15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+        "m15: tencent klt=15: https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 returned empty/invalid kline | https://web.ifzq.gtimg.cn/appstock/app/kline/mkline: HTTPSConnectionPool(host='web3.ifzq.gtimg.cn', port=443): Max retries exceeded with url: /appstock/app/kline/mkline?param=sh513980%2Cm15%2C%2C320 (Caused by NameResolutionError(\"HTTPSConnection(host='web3.ifzq.gtimg.cn', port=443): Failed to resolve 'web3.ifzq.gtimg.cn' ([Errno -2] Name or service not known)\")) ; eastmoney klt=15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
       ]
     },
     "hang_seng_tech": {
       "name": "恒生科技指数",
       "secid": "100.HSTECH",
+      "tx_symbol": "hkHSTECH",
       "market": "HK_INDEX",
       "proxy_for": "013172",
       "data_file": "data/market/hang_seng_tech.json",
-      "daily_count": 0,
+      "sources": {
+        "daily": "tencent",
+        "m15": "none"
+      },
+      "daily_count": 181,
       "m15_count": 0,
-      "latest_daily_time": null,
+      "latest_daily_time": "2026-09-07",
       "latest_m15_time": null,
-      "daily_history_ok": false,
+      "daily_history_ok": true,
       "m15_history_ok": false,
-      "no_errors": false,
+      "using_cache": false,
       "usable_for_analysis": false,
+      "fresh_for_analysis": false,
       "covers_1400_bar": false,
+      "warnings": [],
       "errors": [
-        "daily: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
-        "m15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+        "m15: tencent klt=15: https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 returned empty/invalid kline | https://web.ifzq.gtimg.cn/appstock/app/kline/mkline: HTTPSConnectionPool(host='web3.ifzq.gtimg.cn', port=443): Max retries exceeded with url: /appstock/app/kline/mkline?param=hkHSTECH%2Cm15%2C%2C320 (Caused by NameResolutionError(\"HTTPSConnection(host='web3.ifzq.gtimg.cn', port=443): Failed to resolve 'web3.ifzq.gtimg.cn' ([Errno -2] Name or service not known)\")) ; eastmoney klt=15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
       ]
     },
     "bse50": {
       "name": "北证50",
       "secid": "0.899050",
+      "tx_symbol": "bj899050",
       "market": "CN",
       "proxy_for": "北证50",
       "data_file": "data/market/bse50.json",
-      "daily_count": 0,
+      "sources": {
+        "daily": "tencent",
+        "m15": "none"
+      },
+      "daily_count": 1,
       "m15_count": 0,
-      "latest_daily_time": null,
+      "latest_daily_time": "2026-09-07",
       "latest_m15_time": null,
       "daily_history_ok": false,
       "m15_history_ok": false,
-      "no_errors": false,
+      "using_cache": false,
       "usable_for_analysis": false,
+      "fresh_for_analysis": false,
       "covers_1400_bar": false,
+      "warnings": [],
       "errors": [
-        "daily: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
-        "m15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+        "m15: tencent klt=15: https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 returned empty/invalid kline | https://web.ifzq.gtimg.cn/appstock/app/kline/mkline: HTTPSConnectionPool(host='web3.ifzq.gtimg.cn', port=443): Max retries exceeded with url: /appstock/app/kline/mkline?param=bj899050%2Cm15%2C%2C320 (Caused by NameResolutionError(\"HTTPSConnection(host='web3.ifzq.gtimg.cn', port=443): Failed to resolve 'web3.ifzq.gtimg.cn' ([Errno -2] Name or service not known)\")) ; eastmoney klt=15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
       ]
     },
     "china_film": {
       "name": "中国电影",
       "secid": "1.600977",
+      "tx_symbol": "sh600977",
       "market": "CN",
       "proxy_for": "600977",
       "data_file": "data/market/china_film.json",
-      "daily_count": 0,
+      "sources": {
+        "daily": "tencent",
+        "m15": "none"
+      },
+      "daily_count": 180,
       "m15_count": 0,
-      "latest_daily_time": null,
+      "latest_daily_time": "2026-09-07",
       "latest_m15_time": null,
-      "daily_history_ok": false,
+      "daily_history_ok": true,
       "m15_history_ok": false,
-      "no_errors": false,
+      "using_cache": false,
       "usable_for_analysis": false,
+      "fresh_for_analysis": false,
       "covers_1400_bar": false,
+      "warnings": [],
       "errors": [
-        "daily: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
-        "m15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+        "m15: tencent klt=15: https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 returned empty/invalid kline | https://web.ifzq.gtimg.cn/appstock/app/kline/mkline: HTTPSConnectionPool(host='web3.ifzq.gtimg.cn', port=443): Max retries exceeded with url: /appstock/app/kline/mkline?param=sh600977%2Cm15%2C%2C320 (Caused by NameResolutionError(\"HTTPSConnection(host='web3.ifzq.gtimg.cn', port=443): Failed to resolve 'web3.ifzq.gtimg.cn' ([Errno -2] Name or service not known)\")) ; eastmoney klt=15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
       ]
     },
     "battery_etf": {
       "name": "电池ETF",
       "secid": "1.561160",
+      "tx_symbol": "sh561160",
       "market": "CN",
       "proxy_for": "561160",
       "data_file": "data/market/battery_etf.json",
-      "daily_count": 0,
+      "sources": {
+        "daily": "tencent",
+        "m15": "none"
+      },
+      "daily_count": 181,
       "m15_count": 0,
-      "latest_daily_time": null,
+      "latest_daily_time": "2026-09-07",
       "latest_m15_time": null,
-      "daily_history_ok": false,
+      "daily_history_ok": true,
       "m15_history_ok": false,
-      "no_errors": false,
+      "using_cache": false,
       "usable_for_analysis": false,
+      "fresh_for_analysis": false,
       "covers_1400_bar": false,
+      "warnings": [],
       "errors": [
-        "daily: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
-        "m15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+        "m15: tencent klt=15: https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 returned empty/invalid kline | https://web.ifzq.gtimg.cn/appstock/app/kline/mkline: HTTPSConnectionPool(host='web3.ifzq.gtimg.cn', port=443): Max retries exceeded with url: /appstock/app/kline/mkline?param=sh561160%2Cm15%2C%2C320 (Caused by NameResolutionError(\"HTTPSConnection(host='web3.ifzq.gtimg.cn', port=443): Failed to resolve 'web3.ifzq.gtimg.cn' ([Errno -2] Name or service not known)\")) ; eastmoney klt=15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
       ]
     },
     "medical_device": {
       "name": "中证全指医疗器械指数",
       "secid": "1.931484",
+      "tx_symbol": "sh931484",
       "market": "CN_INDEX",
       "proxy_for": "017633",
       "data_file": "data/market/medical_device.json",
+      "sources": {
+        "daily": "none",
+        "m15": "none"
+      },
       "daily_count": 0,
       "m15_count": 0,
       "latest_daily_time": null,
       "latest_m15_time": null,
       "daily_history_ok": false,
       "m15_history_ok": false,
-      "no_errors": false,
+      "using_cache": false,
       "usable_for_analysis": false,
+      "fresh_for_analysis": false,
       "covers_1400_bar": false,
+      "warnings": [],
       "errors": [
-        "daily: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
-        "m15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+        "daily: tencent klt=101: https://web.ifzq.gtimg.cn/appstock/app/fqkline/get: Tencent daily returned empty/invalid kline | https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get: Tencent daily returned empty/invalid kline ; eastmoney klt=101: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
+        "m15: tencent klt=15: https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 returned empty/invalid kline | https://web.ifzq.gtimg.cn/appstock/app/kline/mkline: HTTPSConnectionPool(host='web3.ifzq.gtimg.cn', port=443): Max retries exceeded with url: /appstock/app/kline/mkline?param=sh931484%2Cm15%2C%2C320 (Caused by NameResolutionError(\"HTTPSConnection(host='web3.ifzq.gtimg.cn', port=443): Failed to resolve 'web3.ifzq.gtimg.cn' ([Errno -2] Name or service not known)\")) ; eastmoney klt=15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
       ]
     },
     "dividend_lowvol": {
       "name": "红利低波ETF",
       "secid": "1.512890",
+      "tx_symbol": "sh512890",
       "market": "CN",
       "proxy_for": "红利组合",
       "data_file": "data/market/dividend_lowvol.json",
-      "daily_count": 0,
+      "sources": {
+        "daily": "tencent",
+        "m15": "none"
+      },
+      "daily_count": 181,
       "m15_count": 0,
-      "latest_daily_time": null,
+      "latest_daily_time": "2026-09-07",
       "latest_m15_time": null,
-      "daily_history_ok": false,
+      "daily_history_ok": true,
       "m15_history_ok": false,
-      "no_errors": false,
+      "using_cache": false,
       "usable_for_analysis": false,
+      "fresh_for_analysis": false,
       "covers_1400_bar": false,
+      "warnings": [],
       "errors": [
-        "daily: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
-        "m15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+        "m15: tencent klt=15: https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 returned empty/invalid kline | https://web.ifzq.gtimg.cn/appstock/app/kline/mkline: HTTPSConnectionPool(host='web3.ifzq.gtimg.cn', port=443): Max retries exceeded with url: /appstock/app/kline/mkline?param=sh512890%2Cm15%2C%2C320 (Caused by NameResolutionError(\"HTTPSConnection(host='web3.ifzq.gtimg.cn', port=443): Failed to resolve 'web3.ifzq.gtimg.cn' ([Errno -2] Name or service not known)\")) ; eastmoney klt=15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
       ]
     }
   }
