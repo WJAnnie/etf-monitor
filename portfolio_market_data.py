@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time as dt_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -9,9 +10,12 @@ from zoneinfo import ZoneInfo
 import requests
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
-TIMEOUT = 15
+TIMEOUT = 8
+RETRIES = 3
+MAX_WORKERS = 4
 OUT = Path("data/latest_market_data.json")
 SUMMARY_OUT = Path("data/latest_market_summary.json")
+SYMBOL_DIR = Path("data/market")
 
 # 技术分析代理标的。场外联接基金不伪造盘中K线，使用其跟踪指数/目标ETF代理。
 SYMBOLS = [
@@ -30,12 +34,14 @@ SYMBOLS = [
 def get_json(url: str, params: dict) -> dict:
     headers={"User-Agent":"Mozilla/5.0","Referer":"https://quote.eastmoney.com/"}
     last=None
-    for i in range(4):
+    for i in range(RETRIES):
         try:
             r=requests.get(url,params=params,headers=headers,timeout=TIMEOUT)
             r.raise_for_status(); return r.json()
         except Exception as e:
-            last=e; time.sleep(1.5*(i+1))
+            last=e
+            if i < RETRIES-1:
+                time.sleep(0.8*(i+1))
     raise RuntimeError(str(last))
 
 
@@ -94,6 +100,17 @@ def covers_1400_bar(rows: list[dict], generated_at: datetime) -> bool:
     return bar_time.date()==generated_at.date() and bar_time.time()>=dt_time(14,0)
 
 
+def collect_symbol(s: dict) -> dict:
+    item={**s,"daily":[],"m15":[],"errors":[]}
+    try:item["daily"]=kline(s["secid"],101,180)
+    except Exception as e:item["errors"].append("daily: "+str(e))
+    try:item["m15"]=kline(s["secid"],15,320)
+    except Exception as e:item["errors"].append("m15: "+str(e))
+    item["indicators"]={"daily":indicators(item["daily"]),"m15":indicators(item["m15"])}
+    item["usable_for_analysis"] = len(item["daily"]) >= 60 and len(item["m15"]) >= 80 and not item["errors"]
+    return item
+
+
 def build_summary(result: dict, generated_at: datetime) -> dict:
     symbols={}
     for key,item in result["symbols"].items():
@@ -108,6 +125,7 @@ def build_summary(result: dict, generated_at: datetime) -> dict:
             "secid":item["secid"],
             "market":item["market"],
             "proxy_for":item["proxy_for"],
+            "data_file":f"{SYMBOL_DIR.as_posix()}/{key}.json",
             "daily_count":daily_count,
             "m15_count":m15_count,
             "latest_daily_time":latest_time(item["daily"]),
@@ -137,22 +155,24 @@ def build_summary(result: dict, generated_at: datetime) -> dict:
 def main():
     now=datetime.now(CN_TZ)
     result={"generated_at":now.isoformat(),"note":"场外基金采用跟踪指数/ETF代理；缠论买卖点不由脚本机械确认。","symbols":{}}
-    for s in SYMBOLS:
-        item={**s,"daily":[],"m15":[],"errors":[]}
-        try:item["daily"]=kline(s["secid"],101,180)
-        except Exception as e:item["errors"].append("daily: "+str(e))
-        try:item["m15"]=kline(s["secid"],15,320)
-        except Exception as e:item["errors"].append("m15: "+str(e))
-        item["indicators"]={"daily":indicators(item["daily"]),"m15":indicators(item["m15"])}
-        item["usable_for_analysis"] = len(item["daily"]) >= 60 and len(item["m15"]) >= 80 and not item["errors"]
-        result["symbols"][s["key"]]=item
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
+        items=list(pool.map(collect_symbol,SYMBOLS))
+    for item in items:
+        result["symbols"][item["key"]]=item
 
     OUT.parent.mkdir(parents=True,exist_ok=True)
+    SYMBOL_DIR.mkdir(parents=True,exist_ok=True)
     OUT.write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding="utf-8")
+
+    for key,item in result["symbols"].items():
+        shard={"generated_at":result["generated_at"],"note":result["note"],"symbol":item}
+        (SYMBOL_DIR/f"{key}.json").write_text(json.dumps(shard,ensure_ascii=False,indent=2),encoding="utf-8")
+
     summary=build_summary(result,now)
     SUMMARY_OUT.write_text(json.dumps(summary,ensure_ascii=False,indent=2),encoding="utf-8")
 
-    print(f"wrote {OUT} and {SUMMARY_OUT}; symbols={len(result['symbols'])}")
+    print(f"wrote {OUT}, {SUMMARY_OUT}, and {len(result['symbols'])} symbol shards")
     for k,v in summary["symbols"].items():
         print(k,v["daily_count"],v["m15_count"],v["latest_m15_time"],v["usable_for_analysis"],v["covers_1400_bar"],v["errors"])
 
