@@ -30,6 +30,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: master
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -53,3 +54,21 @@ jobs:
             git commit -m "data: refresh portfolio market data"
             git push
           fi
+
+      - name: Validate market data quality
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          s = json.loads(Path("data/latest_market_summary.json").read_text(encoding="utf-8"))
+          total = int(s.get("total_symbols", 0))
+          usable = int(s.get("usable_symbols", 0))
+          fresh = int(s.get("fresh_symbols", 0))
+          cover = int(s.get("symbols_covering_1400_bar", 0))
+          print(f"Market-data quality: usable={usable}/{total}, fresh={fresh}/{total}, covers_1400={cover}/{total}")
+          if usable == 0:
+              raise SystemExit("No symbol has sufficient daily + 15m history; workflow marked failed to avoid a misleading green run.")
+          if fresh == 0:
+              raise SystemExit("All symbols are cache/stale; workflow marked failed so the 14:05 analysis will not treat the data as fresh.")
+          PY
