@@ -7,6 +7,13 @@ scan:
   "14:30": true
   "14:50": true
   after_close: true
+full_a_buy_scan:
+  timezone: Asia/Shanghai
+  trading_days_only: true
+  "14:30": intraday_scan
+  "14:50": preclose_scan
+  "16:30": after_close_confirmed_scan
+  notify_when_no_candidate: true
 monitoring:
   M0: daily_after_close
   M1: fixed_intraday
