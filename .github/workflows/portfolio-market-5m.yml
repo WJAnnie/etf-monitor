@@ -1,0 +1,95 @@
+name: Portfolio Real 5m Market Data
+
+on:
+  pull_request:
+    paths:
+      - 'portfolio_market_data_5m.py'
+      - 'trading-skill/tests/unit/test_m5_collector.py'
+      - '.github/workflows/portfolio-market-5m.yml'
+  push:
+    branches:
+      - master
+    paths:
+      - 'portfolio_market_data_5m.py'
+      - 'trading-skill/tests/unit/test_m5_collector.py'
+      - '.github/workflows/portfolio-market-5m.yml'
+  workflow_dispatch:
+  schedule:
+    # Beijing 13:52 / 14:02 / 14:50 on weekdays.
+    - cron: '52 5 * * 1-5'
+    - cron: '2 6 * * 1-5'
+    - cron: '50 6 * * 1-5'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: portfolio-real-m5-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  collect-m5:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run focused 5m normalization tests
+        run: |
+          pip install pytest
+          PYTHONPATH=trading-skill/src python -m pytest trading-skill/tests/unit/test_m5_collector.py -q
+
+      - name: Collect real 5m snapshot
+        run: python portfolio_market_data_5m.py --strict
+
+      - name: Validate snapshot contract
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=json.loads(Path('data/latest_market_5m_summary.json').read_text(encoding='utf-8'))
+          print('generated_at=',p['generated_at'])
+          print('history=',f"{p['history_ok_symbols']}/{p['total_symbols']}")
+          print('fresh=',f"{p['fresh_symbols']}/{p['total_symbols']}")
+          print('covers_1400=',f"{p['symbols_covering_1400_bar']}/{p['total_symbols']}")
+          print('covers_1450=',f"{p['symbols_covering_1450_bar']}/{p['total_symbols']}")
+          for key,item in p['symbols'].items():
+              print(key,item['source'],item['m5_count'],item['latest_m5_end_time'],item['fresh_for_analysis'],item['errors'])
+          assert p['total_symbols'] >= 9
+          assert p['all_history_ok']
+          assert p['all_fresh']
+          PY
+
+      - name: Upload 5m validation artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: portfolio-real-m5
+          path: |
+            data/latest_market_5m_summary.json
+            data/market5/*.json
+          if-no-files-found: error
+
+      - name: Publish validated 5m snapshot to master
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/latest_market_5m_summary.json data/market5/
+          if git diff --cached --quiet; then
+            echo 'No 5m snapshot change.'
+            exit 0
+          fi
+          git commit -m 'data: refresh validated real 5m market snapshot'
+          git push origin HEAD:master
