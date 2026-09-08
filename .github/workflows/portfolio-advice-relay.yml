@@ -21,9 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      # 两种飞书方式二选一：Webhook 优先；未配置 Webhook 时回退到原有应用机器人。
-      FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
-      FEISHU_SECRET: ${{ secrets.FEISHU_SECRET }}
+      FEISHU_WEBHOOK: ''
+      FEISHU_SECRET: ''
       FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
       FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
       FEISHU_CHAT_ID: oc_9df5fff3a390da378fc2714fdb2ea541
