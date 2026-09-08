@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "trading-skill"
-version = "0.3.0"
-description = "Deterministic Chan-theory trading engine core"
+version = "1.0.0"
+description = "Deterministic Chan-theory trading decision, risk and monitoring engine"
 requires-python = ">=3.11"
 dependencies = []
 

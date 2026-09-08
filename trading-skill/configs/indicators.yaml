@@ -1,0 +1,28 @@
+version: 1.0.0
+macd:
+  fast: 6
+  slow: 13
+  signal: 4
+  enable_standard_macd_reference: false
+kdj:
+  n: 9
+  k: 3
+  d: 3
+  low_reference: 20
+  high_reference: 80
+boll:
+  period: 20
+  std: 2
+  bandwidth_lookback: 120
+volume:
+  short_ma: 5
+  long_ma: 20
+  expand_ratio: 1.20
+  shrink_ratio: 0.80
+  extreme_ratio: 2.00
+  intraday_same_slot_lookback: 20
+turnover:
+  lookback: 250
+  use_free_float_turnover: true
+fibonacci:
+  enabled_levels: [0.382, 0.500, 0.618]

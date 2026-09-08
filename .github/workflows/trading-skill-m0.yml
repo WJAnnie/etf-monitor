@@ -11,18 +11,20 @@ on:
     paths:
       - 'trading-skill/**'
       - '.github/workflows/trading-skill-m0.yml'
+  workflow_dispatch:
 
 jobs:
   test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: trading-skill
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - name: Install
-        working-directory: trading-skill
         run: python -m pip install -e '.[dev]'
       - name: Test frozen core
-        working-directory: trading-skill
         run: python -m pytest

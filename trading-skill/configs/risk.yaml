@@ -1,0 +1,24 @@
+version: 1.0.0
+trade_risk:
+  S: 0.009
+  A: 0.007
+  B: 0.004
+  C: 0.000
+max_position:
+  core_leader: 0.15
+  quality_name: 0.10
+  turnaround: 0.06
+portfolio:
+  max_single_trade_risk: 0.010
+  max_industry_risk: 0.018
+  max_theme_cluster_risk: 0.025
+  max_total_stop_risk: 0.045
+entry_tranche:
+  S_first: 0.35
+  A_first: 0.30
+  B_first: 0.20
+risk_buffer:
+  usable_fraction: 0.85
+reentry:
+  initial_risk_multiplier: 0.80
+  max_child_failures_under_same_parent: 3
