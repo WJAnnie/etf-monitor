@@ -54,6 +54,22 @@ def cn(value: Any, default: str = "暂无") -> str:
     return _STATE_CN.get(text, _SIGNAL_CN.get(text, _ACTION_CN.get(text, text)))
 
 
+def _money(value: Any, default: str = "暂无") -> str:
+    if value is None or value == "":
+        return default
+    if isinstance(value, (int, float)):
+        return f"约{value:,.0f}元"
+    return str(value)
+
+
+def _price(value: Any, default: str = "暂无") -> str:
+    if value is None or value == "":
+        return default
+    if isinstance(value, (int, float)):
+        return f"{value:.2f}元"
+    return str(value)
+
+
 def _requests():
     try:
         import requests
@@ -217,8 +233,56 @@ def build_stock_scan_report(scan: dict) -> tuple[str, str]:
             f"量价：{item.get('volume_price', '暂无')}｜技术确认：{cn(item.get('technical'))}",
             f"机会等级：{item.get('opportunity', '暂无')}｜风险：{item.get('risk', '暂无')}",
             f"操作：{cn(item.get('action'))}",
+            f"建议买入点：{item.get('buy_point', '暂无')}",
+            f"建议首笔资金：{_money(item.get('buy_amount'))}｜建议股数：{item.get('buy_quantity', '暂无')}",
+            f"建议首笔仓位：{item.get('buy_fraction', '暂无')}",
+            f"后续加仓条件：{item.get('add_plan', '等待新的确认结构后再加仓')}",
             f"结构止损：{item.get('stop', '暂无')}",
             f"入选理由：{item.get('reason', '暂无')}",
         ])
-    lines.extend(["", "说明：缠论决定是否具备买点，量价和其他指标只做确认或暂停执行。"])
+    lines.extend([
+        "",
+        "说明：缠论决定是否具备买点，量价和其他指标只做确认或暂停执行。",
+        "资金建议由总资金、机会等级、风险等级、买入点到结构止损的距离、现有仓位和行业风险共同计算，不采用固定金额，也不因下跌机械补仓。",
+    ])
+    return title, "\n".join(lines)
+
+
+def build_holding_monitor_report(report: dict) -> tuple[str, str]:
+    positions = list(report.get("positions") or [])
+    urgent_actions = {"EXIT", "REDUCE_CORE", "REDUCE_TACTICAL"}
+    urgent = any(str(item.get("action") or "") in urgent_actions for item in positions)
+    title = "🚨 持仓风险提醒" if urgent else "📌 每日持仓监控"
+    lines = [
+        f"【监控时间】{report.get('generated_at') or '暂无'}",
+        f"【组合结论】{report.get('summary') or '按结构继续监控。'}",
+        "",
+        f"持仓股票：{len(positions)}只",
+    ]
+    if not positions:
+        lines.extend(["", "当前没有已登记的股票持仓。"])
+        return title, "\n".join(lines)
+
+    for idx, item in enumerate(positions, 1):
+        signal = item.get("signal") or item.get("chan_signal")
+        lines.extend([
+            "",
+            f"{idx}. {item.get('name', '未知')}（{item.get('code', '')}）",
+            f"持仓成本：{_price(item.get('cost_price'))}｜现价：{_price(item.get('current_price'))}",
+            f"持仓金额：{_money(item.get('position_value'))}｜持仓盈亏：{item.get('pnl_pct', '暂无')}",
+            f"当前缠论：{cn(signal)}｜主要级别：{item.get('timeframe', '暂无')}",
+            f"日线/上级结构：{item.get('parent_structure', '暂无')}",
+            f"量价：{item.get('volume_price', '暂无')}｜技术确认：{cn(item.get('technical'))}",
+            f"风险：{item.get('risk', '暂无')}｜今日建议：{cn(item.get('action'))}",
+            f"补仓触发点：{item.get('add_point', '暂无')}",
+            f"建议补仓资金：{_money(item.get('add_amount'))}｜补仓股数：{item.get('add_quantity', '暂无')}",
+            f"减仓/卖出触发点：{item.get('sell_point', '暂无')}",
+            f"结构保护位：{item.get('stop', '暂无')}",
+            f"建议减仓金额：{_money(item.get('reduce_amount'))}",
+            f"判断依据：{item.get('reason', '暂无')}",
+        ])
+    lines.extend([
+        "",
+        "持仓原则：为什么买，就因为什么失效而卖。补仓必须出现新的确认结构，不因浮亏机械摊低成本；风险恶化优先处理，结构恢复后才允许重新加仓。",
+    ])
     return title, "\n".join(lines)
