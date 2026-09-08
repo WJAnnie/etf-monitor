@@ -1,0 +1,8 @@
+case_id: GS-009
+title: Core-separated centers with envelope overlap are expansion pending
+category: center
+case_type: synthetic_engine_boundary
+status: FROZEN
+critical_rules:
+  - separated core intervals do not automatically imply trend
+  - envelope overlap produces EXPANSION_PENDING

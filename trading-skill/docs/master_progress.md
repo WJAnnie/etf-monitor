@@ -4,7 +4,7 @@
 |---|---|---|
 | Task 001-013 | M0 Stroke Core | FROZEN |
 | Task 014-020 | M1 Segment Core | FROZEN |
-| Task 021-027 | M2 Center Core | NOT_STARTED |
+| Task 021-027 | M2 Center Core | FROZEN |
 | Task 028-036 | M3 Chan Signal Core | NOT_STARTED |
 | Task 037-043 | M4 Multi-Timeframe | NOT_STARTED |
 | Task 044-050 | M5 Technical Confirmation | NOT_STARTED |
@@ -14,16 +14,14 @@
 | Task 072-078 | M9 Persistence / Replay | NOT_STARTED |
 | Task 079-086 | M10 Production Monitoring | NOT_STARTED |
 
-## M0 task status
+## Frozen gates
 
-- Task 001-013 — FROZEN (`M0_STROKE_CORE_FROZEN`)
-
-## M1 task status
-
-- Task 014 Segment Domain + Seed — FROZEN
-- Task 015 Raw Feature Sequence — FROZEN
-- Task 016 Feature Inclusion — FROZEN
-- Task 017 Feature Fractal + Case1 — FROZEN
-- Task 018 Case2 + Second Feature Sequence — FROZEN
-- Task 019 Segment Lifecycle — FROZEN
-- Task 020 Segment Gold + Review — FROZEN
+- Task 001-013 — `M0_STROKE_CORE_FROZEN`
+- Task 014-020 — `M1_SEGMENT_CORE_FROZEN`
+- Task 021 Center Domain + Seed — FROZEN
+- Task 022 Center Extension — FROZEN
+- Task 023 Leave / Return / Structural Events — FROZEN
+- Task 024 New Center Relation — FROZEN
+- Task 025 Expansion Pending — FROZEN
+- Task 026 Recursive Center + Center Stack — FROZEN
+- Task 027 Center Gold + Review — FROZEN

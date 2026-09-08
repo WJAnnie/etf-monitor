@@ -1,0 +1,9 @@
+case_id: GS-008
+title: Center extension preserves original core
+category: center
+case_type: synthetic_engine_boundary
+status: FROZEN
+critical_rules:
+  - extension overlaps fixed center core
+  - ZD/ZG never drift
+  - DD/GG may expand
