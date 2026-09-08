@@ -1,0 +1,201 @@
+{
+  "generated_at": "2026-09-08T21:58:06.418833+08:00",
+  "total_symbols": 9,
+  "history_ok_symbols": 9,
+  "fresh_symbols": 9,
+  "symbols_covering_1400_bar": 9,
+  "symbols_covering_1450_bar": 9,
+  "all_history_ok": true,
+  "all_fresh": true,
+  "all_cover_1400_bar": true,
+  "all_cover_1450_bar": true,
+  "timestamp_semantics": "interval_end",
+  "note": "Real 5m bars only. Yahoo start timestamps are normalized to interval end. No 15m-to-5m synthesis.",
+  "symbols": {
+    "csi500": {
+      "name": "中证500",
+      "market": "CN",
+      "proxy_for": "中证500核心仓",
+      "proxy_note": "指数本身",
+      "data_file": "data/market5/csi500.json",
+      "source": "sina",
+      "proxy_substitution": false,
+      "m5_count": 600,
+      "latest_m5_end_time": "2026-09-08T15:00:00+08:00",
+      "history_ok": true,
+      "fresh_for_analysis": true,
+      "covers_1400_bar": true,
+      "covers_1450_bar": true,
+      "using_cache": false,
+      "warnings": [
+        "tencent: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 returned empty/invalid kline | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 returned empty/invalid kline"
+      ],
+      "errors": []
+    },
+    "hk_stock_connect_tech": {
+      "name": "中证港股通科技指数",
+      "market": "CN_INDEX",
+      "proxy_for": "016496",
+      "proxy_note": "主取931573；Yahoo后备使用目标ETF 513980",
+      "data_file": "data/market5/hk_stock_connect_tech.json",
+      "source": "yahoo",
+      "proxy_substitution": true,
+      "m5_count": 598,
+      "latest_m5_end_time": "2026-09-08T15:00:00+08:00",
+      "history_ok": true,
+      "fresh_for_analysis": true,
+      "covers_1400_bar": true,
+      "covers_1450_bar": true,
+      "using_cache": false,
+      "warnings": [
+        "tencent: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 empty; stock_keys=['qt', 'm5'] | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 empty; stock_keys=['qt', 'm5']",
+        "sina: Sina unexpected payload type=NoneType",
+        "eastmoney: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+      ],
+      "errors": []
+    },
+    "hk_stock_connect_tech_etf": {
+      "name": "港股通科技ETF",
+      "market": "CN",
+      "proxy_for": "016496目标ETF",
+      "proxy_note": "目标ETF本身",
+      "data_file": "data/market5/hk_stock_connect_tech_etf.json",
+      "source": "sina",
+      "proxy_substitution": false,
+      "m5_count": 600,
+      "latest_m5_end_time": "2026-09-08T15:00:00+08:00",
+      "history_ok": true,
+      "fresh_for_analysis": true,
+      "covers_1400_bar": true,
+      "covers_1450_bar": true,
+      "using_cache": false,
+      "warnings": [
+        "tencent: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 returned empty/invalid kline | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 returned empty/invalid kline"
+      ],
+      "errors": []
+    },
+    "hang_seng_tech": {
+      "name": "恒生科技指数",
+      "market": "HK_INDEX",
+      "proxy_for": "013172",
+      "proxy_note": "恒生科技指数",
+      "data_file": "data/market5/hang_seng_tech.json",
+      "source": "yahoo",
+      "proxy_substitution": false,
+      "m5_count": 564,
+      "latest_m5_end_time": "2026-09-08T16:00:00+08:00",
+      "history_ok": true,
+      "fresh_for_analysis": true,
+      "covers_1400_bar": true,
+      "covers_1450_bar": true,
+      "using_cache": false,
+      "warnings": [
+        "tencent: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 empty; stock_keys=[] | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 empty; stock_keys=[]",
+        "sina: Sina CN endpoint unsupported symbol: hkHSTECH"
+      ],
+      "errors": []
+    },
+    "bse50": {
+      "name": "北证50",
+      "market": "CN_INDEX",
+      "proxy_for": "北证50",
+      "proxy_note": "指数本身；优先东方财富，避免腾讯仅返回单根日K",
+      "data_file": "data/market5/bse50.json",
+      "source": "sina",
+      "proxy_substitution": false,
+      "m5_count": 600,
+      "latest_m5_end_time": "2026-09-08T15:00:00+08:00",
+      "history_ok": true,
+      "fresh_for_analysis": true,
+      "covers_1400_bar": true,
+      "covers_1450_bar": true,
+      "using_cache": false,
+      "warnings": [
+        "eastmoney: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+      ],
+      "errors": []
+    },
+    "china_film": {
+      "name": "中国电影",
+      "market": "CN",
+      "proxy_for": "600977",
+      "proxy_note": "个股本身",
+      "data_file": "data/market5/china_film.json",
+      "source": "sina",
+      "proxy_substitution": false,
+      "m5_count": 600,
+      "latest_m5_end_time": "2026-09-08T15:00:00+08:00",
+      "history_ok": true,
+      "fresh_for_analysis": true,
+      "covers_1400_bar": true,
+      "covers_1450_bar": true,
+      "using_cache": false,
+      "warnings": [
+        "tencent: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 returned empty/invalid kline | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 returned empty/invalid kline"
+      ],
+      "errors": []
+    },
+    "battery_etf": {
+      "name": "电池ETF",
+      "market": "CN",
+      "proxy_for": "561160",
+      "proxy_note": "ETF本身",
+      "data_file": "data/market5/battery_etf.json",
+      "source": "sina",
+      "proxy_substitution": false,
+      "m5_count": 600,
+      "latest_m5_end_time": "2026-09-08T15:00:00+08:00",
+      "history_ok": true,
+      "fresh_for_analysis": true,
+      "covers_1400_bar": true,
+      "covers_1450_bar": true,
+      "using_cache": false,
+      "warnings": [
+        "tencent: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 returned empty/invalid kline | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 returned empty/invalid kline"
+      ],
+      "errors": []
+    },
+    "medical_device": {
+      "name": "中证全指医疗器械指数",
+      "market": "CN_INDEX",
+      "proxy_for": "017633",
+      "proxy_note": "主取931484；Yahoo后备使用目标ETF 159797",
+      "data_file": "data/market5/medical_device.json",
+      "source": "yahoo",
+      "proxy_substitution": true,
+      "m5_count": 437,
+      "latest_m5_end_time": "2026-09-08T15:00:00+08:00",
+      "history_ok": true,
+      "fresh_for_analysis": true,
+      "covers_1400_bar": true,
+      "covers_1450_bar": true,
+      "using_cache": false,
+      "warnings": [
+        "tencent: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 empty; stock_keys=['qt', 'm5'] | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 empty; stock_keys=['qt', 'm5']",
+        "sina: Sina unexpected payload type=NoneType",
+        "eastmoney: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+      ],
+      "errors": []
+    },
+    "dividend_lowvol": {
+      "name": "红利低波ETF",
+      "market": "CN",
+      "proxy_for": "红利组合",
+      "proxy_note": "红利组合技术代理",
+      "data_file": "data/market5/dividend_lowvol.json",
+      "source": "sina",
+      "proxy_substitution": false,
+      "m5_count": 600,
+      "latest_m5_end_time": "2026-09-08T15:00:00+08:00",
+      "history_ok": true,
+      "fresh_for_analysis": true,
+      "covers_1400_bar": true,
+      "covers_1450_bar": true,
+      "using_cache": false,
+      "warnings": [
+        "tencent: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 returned empty/invalid kline | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 returned empty/invalid kline"
+      ],
+      "errors": []
+    }
+  }
+}
