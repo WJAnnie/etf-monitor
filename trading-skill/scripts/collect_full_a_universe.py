@@ -50,6 +50,15 @@ def _headers(*, sina: bool = False) -> dict[str, str]:
     }
 
 
+def _safe_float(value: object, default: float = 0.0) -> float:
+    if value in (None, "", "-"):
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _get_json(url: str, params: dict[str, object], *, sina: bool = False) -> dict:
     last: Exception | None = None
     for attempt in range(RETRIES):
@@ -126,7 +135,6 @@ def _decode_sina_js(text: str) -> list[dict]:
     raw = text.strip()
     if raw in ("", "null", "[]"):
         return []
-    # 新浪接口返回 JavaScript 对象字面量，键通常未加引号；只给键补引号后按 JSON 解析。
     normalized = re.sub(r'([,{])\s*([A-Za-z_][A-Za-z0-9_]*)\s*:', r'\1"\2":', raw)
     try:
         payload = json.loads(normalized)
@@ -157,7 +165,6 @@ def _sina_page(page: int) -> tuple[int, list[dict]]:
 
 def fetch_all_a_sina() -> list[dict]:
     rows: list[dict] = []
-    # 不依赖“总页数”接口；连续遇到空页即结束。A股数量约五千多只，80页留足余量。
     for page in range(1, 81):
         _, items = _sina_page(page)
         if not items:
@@ -179,8 +186,8 @@ def fetch_all_a_sina() -> list[dict]:
                     "f6": item.get("amount"),
                     "f8": item.get("turnoverratio"),
                     "f9": item.get("per"),
-                    "f20": (float(item.get("mktcap") or 0) * 10_000),
-                    "f21": (float(item.get("nmc") or 0) * 10_000),
+                    "f20": (_safe_float(item.get("mktcap")) * 10_000),
+                    "f21": (_safe_float(item.get("nmc")) * 10_000),
                     "f23": item.get("pb"),
                     "f24": 0,
                     "f25": 0,
@@ -215,7 +222,6 @@ def fetch_industries() -> list[dict]:
 
 
 def fetch_industry_members(board_code: str) -> list[dict]:
-    # 只需要龙头/前三，按总市值排序读取前100名已经足够；后续深度缠论不会扫全板块。
     return fetch_paginated(f"b:{board_code} f:!50", STOCK_FIELDS, fid="f20", max_pages=1)
 
 
@@ -296,8 +302,8 @@ def main() -> int:
         )
 
     eligible = [item for item in candidates if item["fundamental_prefilter"]["eligible"]]
-    advancers = sum(1 for row in all_stocks if float(row.get("f3") or 0) > 0)
-    decliners = sum(1 for row in all_stocks if float(row.get("f3") or 0) < 0)
+    advancers = sum(1 for row in all_stocks if _safe_float(row.get("f3")) > 0)
+    decliners = sum(1 for row in all_stocks if _safe_float(row.get("f3")) < 0)
     payload = {
         "mode": "FULL_A_PHASE1_SCREEN",
         "generated_at": now.isoformat(),
