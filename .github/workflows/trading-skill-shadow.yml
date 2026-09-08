@@ -1,0 +1,93 @@
+name: Trading Skill Shadow Smoke
+
+on:
+  pull_request:
+    paths:
+      - 'trading-skill/src/trading_skill/shadow.py'
+      - 'trading-skill/scripts/run_shadow.py'
+      - 'trading-skill/tests/unit/test_shadow.py'
+      - '.github/workflows/trading-skill-shadow.yml'
+  push:
+    branches:
+      - master
+    paths:
+      - 'trading-skill/src/trading_skill/shadow.py'
+      - 'trading-skill/scripts/run_shadow.py'
+      - 'trading-skill/tests/unit/test_shadow.py'
+      - '.github/workflows/trading-skill-shadow.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shadow-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: trading-skill
+    env:
+      FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+      FEISHU_SECRET: ${{ secrets.FEISHU_SECRET }}
+      FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+      FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+      FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install
+        run: |
+          python -m pip install -e '.[dev]'
+          python -m pip install requests
+
+      - name: Frozen core regression
+        run: python -m pytest
+
+      - name: Real market shadow smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(
+            --summary ../data/latest_market_summary.json
+            --market-dir ../data/market
+            --output shadow-results/latest_shadow_smoke.json
+            --strict
+          )
+          # Only the merged master smoke sends one real Feishu test message.
+          # PR validation never touches notification credentials.
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF}" == "refs/heads/master" ]]; then
+            args+=(--notify-feishu)
+          fi
+          python scripts/run_shadow.py "${args[@]}"
+
+      - name: Print shadow summary
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=json.loads(Path('shadow-results/latest_shadow_smoke.json').read_text(encoding='utf-8'))
+          print('snapshot=',p['generated_from_market_snapshot'])
+          print('analyzed=',f"{p['analyzed_symbols']}/{p['total_symbols']}")
+          print('ready_1400=',p['ready_for_1400_analysis_symbols'])
+          print('failures=',p['failures'])
+          for s in p['symbols']:
+              daily=s['structures']['daily']
+              m120=s['structures']['120m']
+              m30=s['structures']['30m']
+              print(s['symbol'], 'daily=',daily['status'], '120m=',m120['status'], '30m=',m30['status'], 'm5=',s['execution_5m']['status'])
+          PY
+
+      - name: Upload shadow result
+        uses: actions/upload-artifact@v4
+        with:
+          name: trading-skill-shadow-smoke
+          path: trading-skill/shadow-results/latest_shadow_smoke.json
+          if-no-files-found: error
