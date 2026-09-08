@@ -1,0 +1,14 @@
+case_id: GS-001
+gold_layer: G1_GEOMETRY
+engine: InclusionEngine
+fixture_mode: RAW_PIPELINE
+rule_refs:
+  - INC-RECURSIVE
+  - INC-UP-MERGE
+market: CN_A
+symbol: TEST
+timeframe: 30m
+tick_size: 0.01
+timezone: Asia/Shanghai
+expected_file: expected.json
+schema_version: 1.0.0
