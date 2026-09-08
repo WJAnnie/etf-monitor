@@ -1,0 +1,97 @@
+from __future__ import annotations
+from dataclasses import dataclass, replace
+from datetime import datetime
+from enum import StrEnum
+from trading_skill.decision import Action
+from trading_skill.sizing import StopCandidate, StopLevel, TrancheRole
+from trading_skill.domain.models import stable_id
+
+class TradeState(StrEnum):
+    PLANNED="PLANNED"; OPENING="OPENING"; ACTIVE="ACTIVE"; PYRAMIDING="PYRAMIDING"; PROFIT_PROTECTED="PROFIT_PROTECTED"; REDUCING="REDUCING"; CLOSED="CLOSED"
+class ThesisState(StrEnum): ACTIVE="ACTIVE"; INVALIDATED="INVALIDATED"; PROMOTED="PROMOTED"; CLOSED="CLOSED"
+class ProfitLockState(StrEnum): NONE="NONE"; INITIAL="INITIAL"; PROTECTED="PROTECTED"; LOCKED="LOCKED"; STRUCTURAL_EXIT_PENDING="STRUCTURAL_EXIT_PENDING"
+class BreakState(StrEnum): WICK_BREAK="WICK_BREAK"; CLOSE_BREAK="CLOSE_BREAK"; BREAK_AND_FAILED_RECLAIM="BREAK_AND_FAILED_RECLAIM"
+class ReentryState(StrEnum): INACTIVE="INACTIVE"; WATCH_NEW_STRUCTURE="WATCH_NEW_STRUCTURE"; ELIGIBLE="ELIGIBLE"; READY="READY"; EXECUTED="EXECUTED"; LOCKED="LOCKED"
+
+@dataclass(frozen=True, slots=True)
+class EntryThesis:
+    id:str; trade_id:str; tranche_id:str; role:TrancheRole; management_level:StopLevel
+    entry_signal_id:str; parent_structure_id:str|None; stop:StopCandidate
+    state:ThesisState=ThesisState.ACTIVE; revision:int=1
+@dataclass(frozen=True, slots=True)
+class Tranche: id:str; value:float; entry_price:float; thesis:EntryThesis
+@dataclass(frozen=True, slots=True)
+class Trade: id:str; symbol:str; state:TradeState; tranches:tuple[Tranche,...]; created_at:datetime; revision:int=1
+@dataclass(frozen=True, slots=True)
+class Protection: tranche_id:str; level:StopLevel; price_ticks:int; source_structure_id:str; revision:int=1
+@dataclass(frozen=True, slots=True)
+class SellScope: affected_tranche_ids:tuple[str,...]; unaffected_tranche_ids:tuple[str,...]; action:Action
+@dataclass(frozen=True, slots=True)
+class ExitRecord: tranche_id:str; expected_exit:float; actual_exit:float; slippage:float; reason:str; realized_pnl:float
+@dataclass(frozen=True, slots=True)
+class ReentryTracker:
+    old_trade_id:str; parent_structure_id:str; failure_level:StopLevel; child_failure_count:int; state:ReentryState; risk_multiplier:float=0.80
+
+def create_trade(symbol:str, created_at:datetime) -> Trade:
+    return Trade(stable_id("trade",symbol,created_at.isoformat()),symbol,TradeState.PLANNED,(),created_at)
+
+def add_tranche(trade:Trade, *, value:float, entry_price:float, role:TrancheRole, management_level:StopLevel,
+    entry_signal_id:str, parent_structure_id:str|None, stop:StopCandidate) -> Trade:
+    tid=stable_id("tranche",trade.id,len(trade.tranches),entry_signal_id)
+    thesis=EntryThesis(stable_id("thesis",tid,entry_signal_id),trade.id,tid,role,management_level,entry_signal_id,parent_structure_id,stop)
+    tranche=Tranche(tid,value,entry_price,thesis)
+    return replace(trade,state=TradeState.ACTIVE if not trade.tranches else TradeState.PYRAMIDING,tranches=trade.tranches+(tranche,),revision=trade.revision+1)
+
+def invalidate_thesis(tranche:Tranche) -> Tranche:
+    return replace(tranche,thesis=replace(tranche.thesis,state=ThesisState.INVALIDATED,revision=tranche.thesis.revision+1))
+
+def promote_thesis(tranche:Tranche, *, new_role:TrancheRole, new_level:StopLevel, new_stop:StopCandidate, new_structure_confirmed:bool) -> Tranche:
+    if not new_structure_confirmed: raise ValueError("PROMOTION_REQUIRES_NEW_STRUCTURE")
+    if new_stop.price_ticks < tranche.thesis.stop.price_ticks: raise ValueError("PROTECTION_CANNOT_LOOSEN")
+    return replace(tranche,thesis=replace(tranche.thesis,role=new_role,management_level=new_level,stop=new_stop,state=ThesisState.PROMOTED,revision=tranche.thesis.revision+1))
+
+def raise_protection(current:Protection|None, *, tranche_id:str, level:StopLevel, price_ticks:int, source_structure_id:str, new_structure_confirmed:bool) -> Protection:
+    if not new_structure_confirmed: raise ValueError("PROTECTION_REQUIRES_NEW_STRUCTURE")
+    if current and price_ticks < current.price_ticks: return current
+    return Protection(tranche_id,level,price_ticks,source_structure_id,1 if current is None else current.revision+1)
+
+def map_sell_scope(trade:Trade, *, timeframe:str, sell_class:int) -> SellScope:
+    affected=[]
+    for tr in trade.tranches:
+        role=tr.thesis.role
+        if timeframe=="5m" and role in (TrancheRole.TEST,TrancheRole.TACTICAL): affected.append(tr.id)
+        elif timeframe=="30m" and role in (TrancheRole.TEST,TrancheRole.TACTICAL,TrancheRole.TREND_ADD): affected.append(tr.id)
+        elif timeframe=="120m" and role in (TrancheRole.TEST,TrancheRole.TACTICAL,TrancheRole.CONFIRMATION,TrancheRole.TREND_ADD): affected.append(tr.id)
+        elif timeframe=="daily":
+            if sell_class==1 and role in (TrancheRole.TEST,TrancheRole.TACTICAL,TrancheRole.TREND_ADD): affected.append(tr.id)
+            elif sell_class==2 and role in (TrancheRole.TEST,TrancheRole.TACTICAL,TrancheRole.CONFIRMATION,TrancheRole.TREND_ADD,TrancheRole.CORE): affected.append(tr.id)
+            elif sell_class>=3: affected.append(tr.id)
+    if timeframe=="daily" and sell_class>=3: action=Action.EXIT
+    elif timeframe=="daily" and sell_class==2: action=Action.REDUCE_CORE
+    else: action=Action.REDUCE_TACTICAL
+    unaffected=tuple(t.id for t in trade.tranches if t.id not in affected)
+    return SellScope(tuple(affected),unaffected,action)
+
+def target_exposure(trade:Trade, scope:SellScope) -> float:
+    return sum(t.value for t in trade.tranches if t.id not in scope.affected_tranche_ids)
+
+def execute_exit(tranche:Tranche, *, expected_exit:float, actual_exit:float, reason:str) -> ExitRecord:
+    pnl=(actual_exit-tranche.entry_price)*(tranche.value/tranche.entry_price if tranche.entry_price else 0)
+    return ExitRecord(tranche.id,expected_exit,actual_exit,actual_exit-expected_exit,reason,pnl)
+
+def close_trade(trade:Trade) -> Trade:
+    return replace(trade,state=TradeState.CLOSED,tranches=tuple(replace(t,thesis=replace(t.thesis,state=ThesisState.CLOSED,revision=t.thesis.revision+1)) for t in trade.tranches),revision=trade.revision+1)
+
+def new_reentry_tracker(trade:Trade, parent_structure_id:str, failure_level:StopLevel, failures:int=1) -> ReentryTracker:
+    state=ReentryState.LOCKED if failures>=3 else ReentryState.WATCH_NEW_STRUCTURE
+    return ReentryTracker(trade.id,parent_structure_id,failure_level,failures,state)
+
+def record_child_failure(tracker:ReentryTracker) -> ReentryTracker:
+    n=tracker.child_failure_count+1
+    return replace(tracker,child_failure_count=n,state=ReentryState.LOCKED if n>=3 else ReentryState.WATCH_NEW_STRUCTURE)
+
+def allow_reentry(tracker:ReentryTracker, *, new_structure_id:str|None, fundamental_eligible:bool, same_parent:bool=True):
+    if not fundamental_eligible:return replace(tracker,state=ReentryState.LOCKED)
+    if tracker.state is ReentryState.LOCKED and same_parent:return tracker
+    if not new_structure_id:return replace(tracker,state=ReentryState.WATCH_NEW_STRUCTURE)
+    return replace(tracker,state=ReentryState.ELIGIBLE)
