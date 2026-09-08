@@ -1,0 +1,30 @@
+version: 1.0.0
+scan:
+  premarket: true
+  "10:30": true
+  "11:30": true
+  "13:30": true
+  "14:30": true
+  "14:50": true
+  after_close: true
+monitoring:
+  M0: daily_after_close
+  M1: fixed_intraday
+  M2: 30m_120m
+  M3: 5m_30m
+dedup:
+  state_change_only: true
+  max_p2_same_state_per_day: 1
+priority:
+  - P4_POSITION_RISK
+  - P3_POSITION_ACTION
+  - P3_NEW_BUY
+  - P2_ATTENTION
+  - P1_INFORMATION
+channels:
+  feishu:
+    enabled: true
+  github:
+    enabled: true
+  serverchan:
+    enabled: false
