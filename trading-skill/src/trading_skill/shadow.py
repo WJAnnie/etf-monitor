@@ -160,10 +160,10 @@ def analyze_structure(raw_bars: tuple[RawBar, ...], *, tick_size: Decimal) -> di
         return {"status": "DATA_INCOMPLETE", "issues": ["EMPTY_INPUT"]}
     validated = validate_raw_bars(raw_bars, tick_size)
     if not validated.result.valid:
-        return {"status": "DATA_INCOMPLETE", "issues": list(validated.result.reasons)}
+        return {"status": "DATA_INCOMPLETE", "issues": list(validated.result.reason_codes)}
     inclusion = process_inclusions(validated.bars)
     if not inclusion.result.valid:
-        return {"status": "UNRESOLVED", "issues": list(inclusion.result.reasons)}
+        return {"status": "UNRESOLVED", "issues": list(inclusion.result.reason_codes)}
     fractals = detect_fractals(inclusion.bars)
     strokes = build_strokes(
         fractals.fractals,
