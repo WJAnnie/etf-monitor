@@ -1,0 +1,10 @@
+case_id: GS-004
+title: Segment Case1 without E1/E2 gap
+category: segment
+case_type: synthetic_engine_boundary
+status: FROZEN
+target_engines: [SegmentEngine, FeatureSequenceEngine]
+critical_rules:
+  - three strokes seed but do not finalize by themselves
+  - target feature fractal confirms Case1 only when E1/E2 have no gap
+  - structural endpoint precedes confirmation timestamp

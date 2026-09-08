@@ -1,0 +1,11 @@
+case_id: GS-005
+title: Segment Case2 with second feature sequence
+category: segment
+case_type: synthetic_engine_boundary
+status: FROZEN
+target_engines: [SegmentEngine, FeatureSequenceEngine]
+critical_rules:
+  - target feature fractal has E1/E2 gap
+  - second feature sequence is separate
+  - opposite feature fractal confirms the old segment
+  - original gap need not be filled

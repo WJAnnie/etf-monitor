@@ -1,0 +1,9 @@
+case_id: GS-006
+title: One reverse stroke is not a segment break
+category: segment
+case_type: synthetic_engine_boundary
+status: FROZEN
+target_engines: [SegmentEngine]
+critical_rules:
+  - reverse stroke alone cannot finalize old segment
+  - pending reverse evidence remains STROKE_BREAK_PENDING
