@@ -10,7 +10,7 @@ import sys
 import time
 from pathlib import Path
 
-from trading_skill.shadow import run_shadow_smoke
+from trading_skill.shadow_m5 import run_shadow_smoke_with_m5
 
 
 def _requests():
@@ -94,29 +94,36 @@ def notify_feishu(title: str, body: str) -> str:
 
 def build_message(payload: dict) -> tuple[str, str]:
     failures = payload.get("failures") or []
+    m5_failures = payload.get("m5_failures") or []
     analyzed = int(payload.get("analyzed_symbols") or 0)
     total = int(payload.get("total_symbols") or 0)
     ready = int(payload.get("ready_for_1400_analysis_symbols") or 0)
-    title = "✅ Trading Skill Shadow Smoke" if not failures else "⚠️ Trading Skill Shadow Smoke"
+    m5_loaded = int((payload.get("guardrails") or {}).get("real_5m_loaded_symbols") or 0)
+    title = "✅ Trading Skill Shadow Smoke" if not failures and not m5_failures else "⚠️ Trading Skill Shadow Smoke"
     lines = [
-        f"行情快照：{payload.get('generated_from_market_snapshot')}",
+        f"基础行情快照：{payload.get('generated_from_market_snapshot')}",
+        f"5m行情快照：{payload.get('m5_snapshot')}",
         f"真实标的：{analyzed}/{total}",
         f"14:00可分析：{ready}/{total}",
-        f"失败：{len(failures)}",
-        "5m：真实源未接入，明确禁用（不会由15m伪造）",
+        f"真实5m：{m5_loaded}/{total}",
+        f"失败：基础{len(failures)} / 5m{len(m5_failures)}",
+        "5m：只使用真实5分钟K线，不允许15m反推",
         "交易：Shadow only，不连接券商、不产生正式买卖提醒",
         "",
     ]
     for item in payload.get("symbols") or []:
         daily = (item.get("structures") or {}).get("daily") or {}
         m30 = (item.get("structures") or {}).get("30m") or {}
-        tech = (item.get("technical") or {}).get("30m") or {}
+        tech30 = (item.get("technical") or {}).get("30m") or {}
+        m5 = item.get("execution_5m") or {}
         trend = (daily.get("trend") or {}).get("classification") or "NO_TREND"
         lines.append(
-            f"{item.get('name')}｜日线:{trend}｜30m笔:{m30.get('strokes', 0)}｜30m确认:{tech.get('confirmation', 'NA')}"
+            f"{item.get('name')}｜日线:{trend}｜30m笔:{m30.get('strokes', 0)}｜30m:{tech30.get('confirmation', 'NA')}｜5m:{m5.get('technical_confirmation', m5.get('status', 'NA'))}"
         )
-    if failures:
-        lines.extend(["", "失败明细：", *[f"- {x}" for x in failures]])
+    if failures or m5_failures:
+        lines.extend(["", "失败明细："])
+        lines.extend(f"- 基础 {x}" for x in failures)
+        lines.extend(f"- 5m {x}" for x in m5_failures)
     return title, "\n".join(lines)
 
 
@@ -124,18 +131,28 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--summary", type=Path, default=Path("../data/latest_market_summary.json"))
     parser.add_argument("--market-dir", type=Path, default=Path("../data/market"))
+    parser.add_argument("--m5-summary", type=Path, default=Path("../data/latest_market_5m_summary.json"))
+    parser.add_argument("--m5-market-dir", type=Path, default=Path("../data/market5"))
     parser.add_argument("--output", type=Path, default=Path("shadow-results/latest_shadow_smoke.json"))
     parser.add_argument("--strict", action="store_true")
     parser.add_argument("--notify-feishu", action="store_true")
     args = parser.parse_args()
 
-    payload = run_shadow_smoke(args.summary, args.market_dir, args.output)
+    payload = run_shadow_smoke_with_m5(
+        args.summary,
+        args.market_dir,
+        args.m5_summary,
+        args.m5_market_dir,
+        args.output,
+    )
     print(json.dumps({
         "snapshot": payload.get("generated_from_market_snapshot"),
+        "m5_snapshot": payload.get("m5_snapshot"),
         "total": payload.get("total_symbols"),
         "analyzed": payload.get("analyzed_symbols"),
         "ready_1400": payload.get("ready_for_1400_analysis_symbols"),
         "failures": payload.get("failures"),
+        "m5_failures": payload.get("m5_failures"),
         "guardrails": payload.get("guardrails"),
     }, ensure_ascii=False, indent=2))
 
@@ -146,13 +163,19 @@ def main() -> int:
 
     if args.strict:
         if payload.get("failures"):
-            print("[FATAL] shadow smoke contains failures", file=sys.stderr)
+            print("[FATAL] shadow smoke contains base failures", file=sys.stderr)
+            return 1
+        if payload.get("m5_failures"):
+            print("[FATAL] shadow smoke contains real 5m failures", file=sys.stderr)
             return 1
         if int(payload.get("analyzed_symbols") or 0) != int(payload.get("total_symbols") or 0):
             print("[FATAL] not every symbol was analyzed", file=sys.stderr)
             return 1
         if not payload.get("all_ready_for_1400_analysis"):
-            print("[FATAL] market snapshot is not fully ready for 14:00 analysis", file=sys.stderr)
+            print("[FATAL] base market snapshot is not fully ready for 14:00 analysis", file=sys.stderr)
+            return 1
+        if int((payload.get("guardrails") or {}).get("real_5m_loaded_symbols") or 0) != int(payload.get("total_symbols") or 0):
+            print("[FATAL] real 5m was not loaded for every symbol", file=sys.stderr)
             return 1
     return 0
 
