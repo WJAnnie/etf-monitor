@@ -4,16 +4,18 @@ on:
   pull_request:
     paths:
       - 'trading-skill/src/trading_skill/shadow.py'
+      - 'trading-skill/src/trading_skill/shadow_m5.py'
       - 'trading-skill/scripts/run_shadow.py'
-      - 'trading-skill/tests/unit/test_shadow.py'
+      - 'trading-skill/tests/unit/test_shadow*.py'
       - '.github/workflows/trading-skill-shadow.yml'
   push:
     branches:
       - master
     paths:
       - 'trading-skill/src/trading_skill/shadow.py'
+      - 'trading-skill/src/trading_skill/shadow_m5.py'
       - 'trading-skill/scripts/run_shadow.py'
-      - 'trading-skill/tests/unit/test_shadow.py'
+      - 'trading-skill/tests/unit/test_shadow*.py'
       - '.github/workflows/trading-skill-shadow.yml'
   workflow_dispatch:
 
@@ -46,23 +48,26 @@ jobs:
       - name: Install
         run: |
           python -m pip install -e '.[dev]'
-          python -m pip install requests
+          python -m pip install -r ../requirements.txt
 
       - name: Frozen core regression
         run: python -m pytest
 
-      - name: Real market shadow smoke
+      - name: Real five-timeframe shadow smoke
         shell: bash
         run: |
           set -euo pipefail
           args=(
             --summary ../data/latest_market_summary.json
             --market-dir ../data/market
+            --m5-summary ../data/latest_market_5m_summary.json
+            --m5-market-dir ../data/market5
             --output shadow-results/latest_shadow_smoke.json
             --strict
           )
-          # Only the merged master smoke sends one real Feishu test message.
-          # PR validation never touches notification credentials.
+          # Only a code/config merge to master sends one Shadow Smoke message.
+          # Market-data refresh commits do not match this workflow's push paths,
+          # so data refreshes cannot spam Feishu.
           if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF}" == "refs/heads/master" ]]; then
             args+=(--notify-feishu)
           fi
@@ -74,15 +79,27 @@ jobs:
           import json
           from pathlib import Path
           p=json.loads(Path('shadow-results/latest_shadow_smoke.json').read_text(encoding='utf-8'))
-          print('snapshot=',p['generated_from_market_snapshot'])
+          print('base_snapshot=',p['generated_from_market_snapshot'])
+          print('m5_snapshot=',p['m5_snapshot'])
           print('analyzed=',f"{p['analyzed_symbols']}/{p['total_symbols']}")
           print('ready_1400=',p['ready_for_1400_analysis_symbols'])
-          print('failures=',p['failures'])
+          print('real_m5_loaded=',p['guardrails'].get('real_5m_loaded_symbols'))
+          print('base_failures=',p['failures'])
+          print('m5_failures=',p.get('m5_failures'))
           for s in p['symbols']:
               daily=s['structures']['daily']
               m120=s['structures']['120m']
               m30=s['structures']['30m']
-              print(s['symbol'], 'daily=',daily['status'], '120m=',m120['status'], '30m=',m30['status'], 'm5=',s['execution_5m']['status'])
+              m5=s['structures'].get('5m') or {}
+              print(
+                  s['symbol'],
+                  'daily=',daily['status'],
+                  '120m=',m120['status'],
+                  '30m=',m30['status'],
+                  '5m=',s['execution_5m']['status'],
+                  '5m_structure=',m5.get('status'),
+                  '5m_source=',s['execution_5m'].get('source'),
+              )
           PY
 
       - name: Upload shadow result
