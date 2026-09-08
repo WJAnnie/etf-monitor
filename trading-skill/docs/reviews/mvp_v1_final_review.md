@@ -24,23 +24,28 @@ Candidate final gate: `TRADING_SKILL_MVP_V1_FROZEN`
 - added staged Universe scanning and 14:30/14:50 Daily provisional policy;
 - found and fixed missing canonical Second Sell / Third Sell mirror implementation;
 - added deterministic annual+interim fundamental eligibility, hard vetoes, anomaly detection, leader/industry gating and separate valuation grade;
-- wrote frozen v1 indicator/risk/strategy/alert configuration files.
+- wrote frozen v1 indicator/risk/strategy/alert configuration files;
+- extended `Trading Skill Core` CI to rerun automatically on pushes to `master`.
 
-## Pre-freeze regression evidence
+## Regression evidence
 
-GitHub Actions run #14 on the complete implementation candidate: **137 passed, 0 failed** on Python 3.11.
+- integration checkpoint: 110 passed
+- production-hardening checkpoint: 125 passed
+- canonical sell-mirror checkpoint: 129 passed
+- fundamentals checkpoint: 137 passed
+- freeze-state CI: 137 passed
+- final PR-head CI after enabling post-merge master verification: PASS
 
-Earlier integration checkpoints were also green at 110, 125 and 129 tests; later counts include the additional production, sell-mirror and fundamental regressions.
+All runs use Python 3.11 and install the package from the repository itself. The freeze-state build installs `trading-skill==1.0.0`.
 
 ## Final release conditions
 
-The candidate is approved for `TRADING_SKILL_MVP_V1_FROZEN` only when all are true:
+The candidate is approved for merge because the final PR-head CI is green. The final gate becomes fully operationally verified only when all are true:
 
-1. the final documentation/version/config freeze commit passes the complete `Trading Skill Core` workflow;
-2. PR #5 is mergeable and merged without bypassing CI;
-3. the resulting `master` commit passes the complete test suite again;
-4. no live-broker auto-execution is enabled;
-5. Shadow Trading is the next operational phase.
+1. PR #5 is squash-merged without bypassing CI;
+2. the resulting `master` push automatically runs the complete `Trading Skill Core` suite and succeeds;
+3. no live-broker auto-execution is enabled;
+4. Shadow Trading is the next operational phase.
 
 ## Known runtime boundary
 
