@@ -5,8 +5,11 @@ on:
     paths:
       - 'trading-skill/src/trading_skill/shadow.py'
       - 'trading-skill/src/trading_skill/shadow_m5.py'
+      - 'trading-skill/src/trading_skill/notifications.py'
       - 'trading-skill/scripts/run_shadow.py'
+      - 'trading-skill/scripts/send_test_report.py'
       - 'trading-skill/tests/unit/test_shadow*.py'
+      - 'trading-skill/tests/unit/test_notifications.py'
       - '.github/workflows/trading-skill-shadow.yml'
   push:
     branches:
@@ -14,8 +17,11 @@ on:
     paths:
       - 'trading-skill/src/trading_skill/shadow.py'
       - 'trading-skill/src/trading_skill/shadow_m5.py'
+      - 'trading-skill/src/trading_skill/notifications.py'
       - 'trading-skill/scripts/run_shadow.py'
+      - 'trading-skill/scripts/send_test_report.py'
       - 'trading-skill/tests/unit/test_shadow*.py'
+      - 'trading-skill/tests/unit/test_notifications.py'
       - '.github/workflows/trading-skill-shadow.yml'
   workflow_dispatch:
 
@@ -50,61 +56,86 @@ jobs:
           python -m pip install -e '.[dev]'
           python -m pip install -r ../requirements.txt
 
-      - name: Frozen core regression
-        run: python -m pytest
+      - name: 核心回归测试
+        id: core_test
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          python -m pytest 2>&1 | tee core-test.log
+          status=${PIPESTATUS[0]}
+          count=$(python - <<'PY'
+          import re
+          from pathlib import Path
+          text=Path('core-test.log').read_text(encoding='utf-8', errors='ignore')
+          matches=re.findall(r'(\d+) passed', text)
+          print(matches[-1] if matches else '')
+          PY
+          )
+          echo "count=${count}" >> "$GITHUB_OUTPUT"
+          exit "$status"
 
-      - name: Real five-timeframe shadow smoke
+      - name: 收盘五周期真实行情测试
+        id: shadow_test
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
-          args=(
-            --summary ../data/latest_market_summary.json
-            --market-dir ../data/market
-            --m5-summary ../data/latest_market_5m_summary.json
-            --m5-market-dir ../data/market5
-            --output shadow-results/latest_shadow_smoke.json
+          python scripts/run_shadow.py \
+            --summary ../data/latest_market_summary.json \
+            --market-dir ../data/market \
+            --m5-summary ../data/latest_market_5m_summary.json \
+            --m5-market-dir ../data/market5 \
+            --output shadow-results/latest_shadow_smoke.json \
             --strict
-          )
-          # Only a code/config merge to master sends one Shadow Smoke message.
-          # Market-data refresh commits do not match this workflow's push paths,
-          # so data refreshes cannot spam Feishu.
-          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF}" == "refs/heads/master" ]]; then
-            args+=(--notify-feishu)
-          fi
-          python scripts/run_shadow.py "${args[@]}"
 
-      - name: Print shadow summary
+      - name: 打印测试摘要
+        if: always()
+        shell: bash
         run: |
-          python - <<'PY'
+          echo "核心回归：${{ steps.core_test.outcome }}"
+          echo "核心测试数：${{ steps.core_test.outputs.count }}"
+          echo "真实行情链：${{ steps.shadow_test.outcome }}"
+          if [[ -f shadow-results/latest_shadow_smoke.json ]]; then
+            python - <<'PY'
           import json
           from pathlib import Path
           p=json.loads(Path('shadow-results/latest_shadow_smoke.json').read_text(encoding='utf-8'))
-          print('base_snapshot=',p['generated_from_market_snapshot'])
-          print('m5_snapshot=',p['m5_snapshot'])
-          print('analyzed=',f"{p['analyzed_symbols']}/{p['total_symbols']}")
-          print('ready_1400=',p['ready_for_1400_analysis_symbols'])
-          print('real_m5_loaded=',p['guardrails'].get('real_5m_loaded_symbols'))
-          print('base_failures=',p['failures'])
-          print('m5_failures=',p.get('m5_failures'))
-          for s in p['symbols']:
-              daily=s['structures']['daily']
-              m120=s['structures']['120m']
-              m30=s['structures']['30m']
-              m5=s['structures'].get('5m') or {}
-              print(
-                  s['symbol'],
-                  'daily=',daily['status'],
-                  '120m=',m120['status'],
-                  '30m=',m30['status'],
-                  '5m=',s['execution_5m']['status'],
-                  '5m_structure=',m5.get('status'),
-                  '5m_source=',s['execution_5m'].get('source'),
-              )
+          print('基础行情快照=',p.get('generated_from_market_snapshot'))
+          print('5分钟行情快照=',p.get('m5_snapshot'))
+          print('分析标的=',f"{p.get('analyzed_symbols',0)}/{p.get('total_symbols',0)}")
+          print('真实5分钟=',p.get('guardrails',{}).get('real_5m_loaded_symbols'))
+          print('基础异常=',p.get('failures'))
+          print('5分钟异常=',p.get('m5_failures'))
           PY
+          fi
+
+      - name: 发送中文测试报告到飞书
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/master'
+        env:
+          CORE_TEST_OK: ${{ steps.core_test.outcome == 'success' }}
+          SHADOW_TEST_OK: ${{ steps.shadow_test.outcome == 'success' }}
+          CORE_TEST_COUNT: ${{ steps.core_test.outputs.count }}
+          TEST_REPORT_NOTE: '测试报告与正式选股消息分开发送。'
+        run: python scripts/send_test_report.py --shadow-result shadow-results/latest_shadow_smoke.json
 
       - name: Upload shadow result
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: trading-skill-shadow-smoke
           path: trading-skill/shadow-results/latest_shadow_smoke.json
-          if-no-files-found: error
+          if-no-files-found: warn
+
+      - name: 最终质量门
+        if: always()
+        shell: bash
+        run: |
+          if [[ "${{ steps.core_test.outcome }}" != "success" ]]; then
+            echo "[FATAL] 核心回归测试失败" >&2
+            exit 1
+          fi
+          if [[ "${{ steps.shadow_test.outcome }}" != "success" ]]; then
+            echo "[FATAL] 真实行情链测试失败" >&2
+            exit 1
+          fi
