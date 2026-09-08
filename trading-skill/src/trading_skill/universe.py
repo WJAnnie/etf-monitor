@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Callable, Iterable
 
+from trading_skill.fundamentals import FundamentalProfile, IndustryLifecycle, LeaderType
 from trading_skill.monitoring import MonitoringLevel
 
 
@@ -14,6 +15,8 @@ class UniverseInput:
     liquidity_ok: bool = True
     listing_age_ok: bool = True
     fundamental_eligible: bool = True
+    leader_eligible: bool = True
+    industry_eligible: bool = True
     prospects_score: float = 0.0
     low_position_score: float = 0.0
     heat_score: float = 0.0
@@ -31,6 +34,32 @@ class CandidateRecord:
     deep_scanned: bool
     deep_result: object | None
     reason_codes: tuple[str, ...]
+
+
+def universe_input_from_profile(
+    profile: FundamentalProfile,
+    *,
+    low_position_score: float,
+    liquidity_ok: bool = True,
+    listing_age_ok: bool = True,
+    open_position: bool = False,
+) -> UniverseInput:
+    return UniverseInput(
+        symbol=profile.symbol,
+        data_complete=profile.data_complete,
+        hard_veto=bool(profile.vetoes),
+        liquidity_ok=liquidity_ok,
+        listing_age_ok=listing_age_ok,
+        fundamental_eligible=profile.fundamental_eligible,
+        leader_eligible=profile.leader_type is not LeaderType.NON_LEADER,
+        industry_eligible=profile.industry.lifecycle is not IndustryLifecycle.DECLINING,
+        prospects_score=profile.industry.prospects_score,
+        low_position_score=low_position_score,
+        heat_score=profile.industry.heat_score,
+        overheated=profile.industry.heat_state.value == "OVERHEATED",
+        value_trap_risk=(profile.fundamental_grade.value in ("D", "E")),
+        open_position=open_position,
+    )
 
 
 def candidate_rank(item: UniverseInput) -> float:
@@ -53,6 +82,10 @@ def cheap_eligibility(item: UniverseInput) -> tuple[bool, tuple[str, ...]]:
         reasons.append("LISTING_AGE_FILTER")
     if not item.fundamental_eligible:
         reasons.append("FUNDAMENTAL_INELIGIBLE")
+    if not item.leader_eligible:
+        reasons.append("NON_LEADER")
+    if not item.industry_eligible:
+        reasons.append("INDUSTRY_INELIGIBLE")
     if item.value_trap_risk:
         reasons.append("VALUE_TRAP_RISK")
     blocking = {
@@ -61,6 +94,8 @@ def cheap_eligibility(item: UniverseInput) -> tuple[bool, tuple[str, ...]]:
         "LIQUIDITY_FILTER",
         "LISTING_AGE_FILTER",
         "FUNDAMENTAL_INELIGIBLE",
+        "NON_LEADER",
+        "INDUSTRY_INELIGIBLE",
     }
     return not any(reason in blocking for reason in reasons), tuple(reasons)
 
