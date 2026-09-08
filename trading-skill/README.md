@@ -4,25 +4,21 @@ Deterministic Chan-theory trading engine developed inside `etf-monitor` without 
 
 ## Current frozen milestone
 
-`M1_SEGMENT_CORE_FROZEN`
+`M2_CENTER_CORE_FROZEN`
 
-Implemented scope through M1:
+Implemented scope through M2:
 
-- deterministic domain primitives and tick-normalized prices;
-- raw OHLCV validation, recursive inclusion, strict fractals and M0 stroke engine;
-- Segment seed validation: at least three alternating strokes with common overlap;
-- raw and standardized feature sequences with independent inclusion processing;
-- strict feature fractals;
-- Segment Case1 confirmation when the first two feature elements have no gap;
-- Segment Case2 confirmation through a separate second feature sequence when a gap exists;
-- one reverse stroke remains `STROKE_BREAK_PENDING`, never an automatic segment end;
-- Case2 break failure can return the original segment to `ACTIVE`;
-- structural endpoint and observed/actual envelope remain separate;
-- active segment identity/revision semantics and finalized-history immutability;
-- `NormalizedSegment` output for the next Center engine;
-- Gold fixtures GS-001 through GS-006.
+- deterministic tick-normalized data, inclusion, fractal and Stroke core;
+- Segment seed, feature sequences, Case1/Case2 confirmation and `NormalizedSegment` output;
+- Center seed geometry with fixed `ZD/ZG` core and wider `DD/GG` envelope;
+- Center extension without core drift or automatic level upgrade;
+- deterministic leave / first-return state and generic break-return foundation events;
+- independent-center vs expansion-pending classification;
+- recursive higher-center infrastructure based on completed lower-level TrendType-compatible motions;
+- simultaneous CenterStack levels with cycle protection;
+- Gold fixtures GS-001 through GS-009.
 
-Out of scope for M1: Center, TrendType, Divergence, buy/sell points, indicators and trading actions.
+Out of scope for M2: TrendType, Divergence, buy/sell points, indicators, risk and trading actions.
 
 ## Run tests
 
@@ -34,4 +30,4 @@ python -m pytest
 
 ## Theory boundary
 
-Geometry engines must not import MACD, volume, fundamental, portfolio or action logic. Segment confirmation is driven only by Stroke / Feature Sequence structure. Downstream stages are added only after the preceding freeze gate is reviewed.
+Geometry engines cannot import indicators, fundamentals, portfolio or action logic. The Center engine emits center geometry and generic structural events only; it does not classify TrendType, divergence or Third Buy/Sell.

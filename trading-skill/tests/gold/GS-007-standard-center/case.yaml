@@ -1,0 +1,9 @@
+case_id: GS-007
+title: Standard center from three completed lower-level motions
+category: center
+case_type: synthetic_engine_boundary
+status: FROZEN
+critical_rules:
+  - ZD is max of lows
+  - ZG is min of highs
+  - ZD <= ZG
