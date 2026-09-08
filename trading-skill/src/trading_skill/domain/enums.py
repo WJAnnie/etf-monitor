@@ -59,3 +59,31 @@ class IssueSeverity(StrEnum):
     WARNING = "WARNING"
     ERROR = "ERROR"
     BLOCKER = "BLOCKER"
+
+
+class SegmentState(StrEnum):
+    SEED = "SEED"
+    ACTIVE = "ACTIVE"
+    STROKE_BREAK_PENDING = "STROKE_BREAK_PENDING"
+    CASE1_PENDING = "CASE1_PENDING"
+    CASE2_PENDING = "CASE2_PENDING"
+    FINALIZED = "FINALIZED"
+    INVALIDATED = "INVALIDATED"
+
+
+class SegmentCase(StrEnum):
+    NONE = "NONE"
+    CASE1 = "CASE1"
+    CASE2 = "CASE2"
+
+
+class SegmentBreakState(StrEnum):
+    NONE = "NONE"
+    STROKE_BREAK_PENDING = "STROKE_BREAK_PENDING"
+    BREAK_FAILED = "BREAK_FAILED"
+    BREAK_CONFIRMED = "BREAK_CONFIRMED"
+
+
+class FeatureFractalType(StrEnum):
+    FEATURE_TOP = "FEATURE_TOP"
+    FEATURE_BOTTOM = "FEATURE_BOTTOM"

@@ -1,0 +1,1 @@
+The primary UP-segment feature sequence has a strict top fractal but a gap between E1 and E2. Case1 is therefore forbidden. A separately standardized second feature sequence for the candidate opposite segment forms the required bottom feature fractal and confirms the original segment. Filling the first gap is not required.

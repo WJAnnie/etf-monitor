@@ -1,0 +1,1 @@
+The first three alternating strokes seed an UP segment. The DOWN-stroke feature sequence forms a strict FEATURE_TOP. E1 and E2 overlap, so this is Case1. The structural endpoint is the UP stroke immediately before the middle feature element; confirmation arrives only after the right feature element is complete.

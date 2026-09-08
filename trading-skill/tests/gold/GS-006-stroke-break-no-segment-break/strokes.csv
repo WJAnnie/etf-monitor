@@ -1,0 +1,5 @@
+id,direction,start_ticks,end_ticks,state
+s0,UP,0,10,FINALIZED
+s1,DOWN,10,5,FINALIZED
+s2,UP,5,12,FINALIZED
+s3,DOWN,12,8,ACTIVE
