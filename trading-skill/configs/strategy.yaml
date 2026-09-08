@@ -1,0 +1,25 @@
+version: 1.0.0
+timeframes:
+  long_term: [weekly]
+  medium_short: [daily, 120m]
+  execution: [30m, 5m]
+core_entry:
+  allow_daily_first_buy: false
+  allow_daily_second_buy: true
+  allow_strong_class2_buy: true
+  allow_center_class2_buy: true
+fibonacci:
+  may_create_signal: false
+indicator_policy:
+  indicators_may_define_chan_signal: false
+  negative_indicators_may_pause_execution: true
+risk_state:
+  upgrade_fast: true
+  recovery_requires_new_structure_confirmation: true
+position_policy:
+  average_down_after_structure_failure: false
+  add_requires_new_confirmed_structure: true
+protection:
+  can_move_down: false
+  require_new_confirmed_structure: true
+  use_cost_basis_as_primary_stop: false
