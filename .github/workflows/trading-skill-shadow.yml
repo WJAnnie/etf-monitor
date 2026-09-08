@@ -110,15 +110,6 @@ jobs:
           PY
           fi
 
-      - name: 发送中文测试报告到飞书
-        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/master'
-        env:
-          CORE_TEST_OK: ${{ steps.core_test.outcome == 'success' }}
-          SHADOW_TEST_OK: ${{ steps.shadow_test.outcome == 'success' }}
-          CORE_TEST_COUNT: ${{ steps.core_test.outputs.count }}
-          TEST_REPORT_NOTE: '测试报告与正式选股消息分开发送。'
-        run: python scripts/send_test_report.py --shadow-result shadow-results/latest_shadow_smoke.json
-
       - name: Upload shadow result
         if: always()
         uses: actions/upload-artifact@v4
