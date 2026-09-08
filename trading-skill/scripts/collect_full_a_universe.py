@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import random
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
@@ -23,31 +24,37 @@ PAGE_SIZE = 100
 MAX_WORKERS = 8
 UT = "bd1d9ddb04089700cf9c27f6f7426281"
 PUSH2_HOSTS = (
+    "https://push2.eastmoney.com/webguest/api/qt/clist/get",
+    "https://82.push2.eastmoney.com/webguest/api/qt/clist/get",
+    "https://73.push2.eastmoney.com/webguest/api/qt/clist/get",
     "https://push2.eastmoney.com/api/qt/clist/get",
-    "https://82.push2.eastmoney.com/api/qt/clist/get",
-    "https://73.push2.eastmoney.com/api/qt/clist/get",
 )
 DATACENTER = "https://datacenter-web.eastmoney.com/api/data/v1/get"
-A_SHARE_FS = "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23,m:0 t:81 s:2048"
+SINA_MARKET_CENTER = "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData"
+A_SHARE_MARKETS = (
+    "m:1 t:2,m:1 t:23",
+    "m:0 t:6,m:0 t:80",
+    "m:0 t:81 s:2048",
+)
 INDUSTRY_FS = "m:90 t:2 f:!50"
 STOCK_FIELDS = "f2,f3,f5,f6,f8,f9,f12,f13,f14,f20,f21,f23,f24,f25"
 INDUSTRY_FIELDS = "f2,f3,f6,f8,f12,f14,f24,f25,f62,f104,f105,f184"
 
 
-def _headers() -> dict[str, str]:
+def _headers(*, sina: bool = False) -> dict[str, str]:
     return {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152 Safari/537.36",
         "Accept": "application/json,text/plain,*/*",
-        "Referer": "https://quote.eastmoney.com/center/",
+        "Referer": "https://vip.stock.finance.sina.com.cn/" if sina else "https://quote.eastmoney.com/center/",
         "Connection": "close",
     }
 
 
-def _get_json(url: str, params: dict[str, object]) -> dict:
+def _get_json(url: str, params: dict[str, object], *, sina: bool = False) -> dict:
     last: Exception | None = None
     for attempt in range(RETRIES):
         try:
-            response = requests.get(url, params=params, headers=_headers(), timeout=TIMEOUT)
+            response = requests.get(url, params=params, headers=_headers(sina=sina), timeout=TIMEOUT)
             response.raise_for_status()
             payload = response.json()
             if not isinstance(payload, dict):
@@ -115,9 +122,92 @@ def fetch_paginated(fs: str, fields: str, *, fid: str, max_pages: int | None = N
     return out
 
 
-def fetch_all_a_shares() -> list[dict]:
-    rows = fetch_paginated(A_SHARE_FS, STOCK_FIELDS, fid="f3")
-    return [row for row in rows if valid_stock_name(str(row.get("f14") or "")) and str(row.get("f12") or "")]
+def _decode_sina_js(text: str) -> list[dict]:
+    raw = text.strip()
+    if raw in ("", "null", "[]"):
+        return []
+    # 新浪接口返回 JavaScript 对象字面量，键通常未加引号；只给键补引号后按 JSON 解析。
+    normalized = re.sub(r'([,{])\s*([A-Za-z_][A-Za-z0-9_]*)\s*:', r'\1"\2":', raw)
+    try:
+        payload = json.loads(normalized)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"新浪列表解析失败: {exc}: {raw[:160]}") from exc
+    return [row for row in payload if isinstance(row, dict)] if isinstance(payload, list) else []
+
+
+def _sina_page(page: int) -> tuple[int, list[dict]]:
+    last: Exception | None = None
+    for attempt in range(RETRIES):
+        try:
+            response = requests.get(
+                SINA_MARKET_CENTER,
+                params={"page": page, "num": 100, "sort": "symbol", "asc": 1, "node": "hs_a", "symbol": "", "_s_r_a": "page"},
+                headers=_headers(sina=True),
+                timeout=TIMEOUT,
+            )
+            response.raise_for_status()
+            response.encoding = "utf-8"
+            return page, _decode_sina_js(response.text)
+        except Exception as exc:
+            last = exc
+            if attempt + 1 < RETRIES:
+                time.sleep(0.7 * (attempt + 1) + random.uniform(0.1, 0.4))
+    raise RuntimeError(f"新浪全A第{page}页失败: {last}")
+
+
+def fetch_all_a_sina() -> list[dict]:
+    rows: list[dict] = []
+    # 不依赖“总页数”接口；连续遇到空页即结束。A股数量约五千多只，80页留足余量。
+    for page in range(1, 81):
+        _, items = _sina_page(page)
+        if not items:
+            break
+        for item in items:
+            code = str(item.get("code") or "")
+            symbol = str(item.get("symbol") or "")
+            market = 1 if symbol.startswith("sh") else 0
+            name = str(item.get("name") or "")
+            if not code or not valid_stock_name(name):
+                continue
+            rows.append(
+                {
+                    "f12": code,
+                    "f13": market,
+                    "f14": name,
+                    "f2": item.get("trade"),
+                    "f3": item.get("changepercent"),
+                    "f6": item.get("amount"),
+                    "f8": item.get("turnoverratio"),
+                    "f9": item.get("per"),
+                    "f20": (float(item.get("mktcap") or 0) * 10_000),
+                    "f21": (float(item.get("nmc") or 0) * 10_000),
+                    "f23": item.get("pb"),
+                    "f24": 0,
+                    "f25": 0,
+                }
+            )
+    return rows
+
+
+def fetch_all_a_shares() -> tuple[list[dict], str]:
+    rows: list[dict] = []
+    eastmoney_errors: list[str] = []
+    for fs in A_SHARE_MARKETS:
+        try:
+            rows.extend(fetch_paginated(fs, STOCK_FIELDS, fid="f3"))
+        except Exception as exc:
+            eastmoney_errors.append(f"{fs}: {exc}")
+            rows = []
+            break
+    clean = [row for row in rows if valid_stock_name(str(row.get("f14") or "")) and str(row.get("f12") or "")]
+    if len(clean) >= 4000:
+        return clean, "东方财富分市场"
+    sina = fetch_all_a_sina()
+    if len(sina) >= 4000:
+        return sina, "新浪全A兜底"
+    raise RuntimeError(
+        f"全A多源均不足：东财={len(clean)} 新浪={len(sina)} 东财错误={'；'.join(eastmoney_errors)[:500]}"
+    )
 
 
 def fetch_industries() -> list[dict]:
@@ -162,7 +252,7 @@ def main() -> int:
     args = parser.parse_args()
 
     now = datetime.now(CN_TZ)
-    all_stocks = fetch_all_a_shares()
+    all_stocks, all_a_source = fetch_all_a_shares()
     industry_rows = fetch_industries()
     selected = screen_industries(industry_rows, limit=args.industry_limit)
 
@@ -212,6 +302,7 @@ def main() -> int:
         "mode": "FULL_A_PHASE1_SCREEN",
         "generated_at": now.isoformat(),
         "all_a_stocks_loaded": len(all_stocks),
+        "all_a_source": all_a_source,
         "market_breadth": {"advancers": advancers, "decliners": decliners},
         "industry_rows_loaded": len(industry_rows),
         "selected_industries": [asdict(item) for item in selected],
@@ -229,7 +320,7 @@ def main() -> int:
     }
     atomic_json(args.output, payload)
 
-    print(f"全A加载: {len(all_stocks)}")
+    print(f"全A加载: {len(all_stocks)}（{all_a_source}）")
     print(f"行业加载: {len(industry_rows)}")
     print("入选行业:", ", ".join(item.name for item in selected))
     print(f"龙头候选: {len(candidates)}，财务预筛通过: {len(eligible)}")
