@@ -6,7 +6,8 @@ from trading_skill.chan.divergence import Divergence
 from trading_skill.chan.trend import TrendType
 from trading_skill.domain.enums import (
     ChanSignalType, Direction, DivergenceState, DivergenceType, SecondBuyTrackerState,
-    SignalState, ThirdBuyTrackerState, TrendClassification, TrendState,
+    SecondSellTrackerState, SignalState, ThirdBuyTrackerState, ThirdSellTrackerState,
+    TrendClassification, TrendState,
 )
 from trading_skill.domain.models import ValidationResult, stable_id
 
@@ -70,6 +71,30 @@ class ThirdBuyTracker:
     center_id: str
     level_rank: int
     state: ThirdBuyTrackerState = ThirdBuyTrackerState.WAIT_DEPARTURE
+    departure: LowerMove | None = None
+    first_return: LowerMove | None = None
+    return_sequence_number: int = 0
+    revision: int = 1
+
+@dataclass(frozen=True, slots=True)
+class SecondSellTracker:
+    id: str
+    symbol: str
+    level_rank: int
+    anchor: ReversalAnchor
+    state: SecondSellTrackerState = SecondSellTrackerState.WAIT_FIRST_DOWN_MOVE
+    first_down_move: LowerMove | None = None
+    first_rebound: LowerMove | None = None
+    rebound_sequence_number: int = 0
+    revision: int = 1
+
+@dataclass(frozen=True, slots=True)
+class ThirdSellTracker:
+    id: str
+    symbol: str
+    center_id: str
+    level_rank: int
+    state: ThirdSellTrackerState = ThirdSellTrackerState.WAIT_DEPARTURE
     departure: LowerMove | None = None
     first_return: LowerMove | None = None
     return_sequence_number: int = 0
@@ -158,6 +183,73 @@ def third_buy_step(tracker: ThirdBuyTracker, center: Center, move: LowerMove) ->
             symbol=tracker.symbol, standard_types=(ChanSignalType.THIRD_BUY,), extended_types=(), side="BUY",
             level_rank=tracker.level_rank, timeframe=str(center.source_timeframe), state=SignalState.CONFIRMED,
             structural_price_ticks=move.low_ticks, structural_timestamp=move.structural_end_timestamp,
+            confirmation_timestamp=move.confirmation_timestamp, anchor_ids=(center.id,),
+            evidence_ids=(tracker.departure.id if tracker.departure else "", move.id))
+        return updated, sig
+    return tracker, None
+
+def new_second_sell_tracker(anchor: ReversalAnchor) -> SecondSellTracker:
+    return SecondSellTracker(stable_id("sstrk", anchor.symbol, anchor.id, anchor.level_rank), anchor.symbol, anchor.level_rank, anchor)
+
+def second_sell_step(tracker: SecondSellTracker, move: LowerMove) -> tuple[SecondSellTracker, ChanSignal | None]:
+    if not tracker.anchor.valid:
+        return replace(tracker, state=SecondSellTrackerState.SECOND_SELL_INVALIDATED, revision=tracker.revision + 1), None
+    if tracker.state in (SecondSellTrackerState.WAIT_FIRST_DOWN_MOVE, SecondSellTrackerState.FIRST_DOWN_MOVE_FORMING):
+        if move.direction is Direction.DOWN:
+            if move.completed:
+                return replace(tracker, state=SecondSellTrackerState.WAIT_REBOUND, first_down_move=move, revision=tracker.revision + 1), None
+            return replace(tracker, state=SecondSellTrackerState.FIRST_DOWN_MOVE_FORMING, revision=tracker.revision + 1), None
+        return tracker, None
+    if tracker.state in (SecondSellTrackerState.WAIT_REBOUND, SecondSellTrackerState.REBOUND_FORMING):
+        if move.direction is not Direction.UP:
+            return tracker, None
+        if not move.completed:
+            return replace(tracker, state=SecondSellTrackerState.REBOUND_FORMING, revision=tracker.revision + 1), None
+        seq = tracker.rebound_sequence_number + 1
+        if seq != 1:
+            return replace(tracker, rebound_sequence_number=seq, revision=tracker.revision + 1), None
+        updated = replace(tracker, state=SecondSellTrackerState.SECOND_SELL_CONFIRMED,
+            first_rebound=move, rebound_sequence_number=1, revision=tracker.revision + 1)
+        sig = ChanSignal(
+            id=stable_id("sig", tracker.symbol, ChanSignalType.SECOND_SELL, tracker.anchor.id, move.id),
+            symbol=tracker.symbol, standard_types=(ChanSignalType.SECOND_SELL,), extended_types=(), side="SELL",
+            level_rank=tracker.level_rank, timeframe="recursive", state=SignalState.CONFIRMED,
+            structural_price_ticks=move.high_ticks, structural_timestamp=move.structural_end_timestamp,
+            confirmation_timestamp=move.confirmation_timestamp, anchor_ids=(tracker.anchor.id,),
+            evidence_ids=(tracker.first_down_move.id if tracker.first_down_move else "", move.id))
+        return updated, sig
+    return tracker, None
+
+def new_third_sell_tracker(center: Center) -> ThirdSellTracker:
+    return ThirdSellTracker(stable_id("tstrk", center.id, center.level_rank), center.symbol, center.id, center.level_rank)
+
+def third_sell_step(tracker: ThirdSellTracker, center: Center, move: LowerMove) -> tuple[ThirdSellTracker, ChanSignal | None]:
+    if tracker.state in (ThirdSellTrackerState.WAIT_DEPARTURE, ThirdSellTrackerState.DEPARTURE_FORMING):
+        if move.direction is Direction.DOWN:
+            if not move.completed:
+                return replace(tracker, state=ThirdSellTrackerState.DEPARTURE_FORMING, revision=tracker.revision + 1), None
+            if move.high_ticks >= center.zd_ticks:
+                return tracker, None
+            return replace(tracker, state=ThirdSellTrackerState.WAIT_FIRST_RETURN, departure=move, revision=tracker.revision + 1), None
+        return tracker, None
+    if tracker.state in (ThirdSellTrackerState.WAIT_FIRST_RETURN, ThirdSellTrackerState.FIRST_RETURN_FORMING):
+        if move.direction is not Direction.UP:
+            return tracker, None
+        if not move.completed:
+            return replace(tracker, state=ThirdSellTrackerState.FIRST_RETURN_FORMING, revision=tracker.revision + 1), None
+        seq = tracker.return_sequence_number + 1
+        if seq != 1:
+            return replace(tracker, return_sequence_number=seq, revision=tracker.revision + 1), None
+        if move.high_ticks > center.zd_ticks:
+            return replace(tracker, state=ThirdSellTrackerState.THIRD_SELL_FAILED,
+                first_return=move, return_sequence_number=1, revision=tracker.revision + 1), None
+        updated = replace(tracker, state=ThirdSellTrackerState.THIRD_SELL_CONFIRMED,
+            first_return=move, return_sequence_number=1, revision=tracker.revision + 1)
+        sig = ChanSignal(
+            id=stable_id("sig", tracker.symbol, ChanSignalType.THIRD_SELL, center.id, move.id),
+            symbol=tracker.symbol, standard_types=(ChanSignalType.THIRD_SELL,), extended_types=(), side="SELL",
+            level_rank=tracker.level_rank, timeframe=str(center.source_timeframe), state=SignalState.CONFIRMED,
+            structural_price_ticks=move.high_ticks, structural_timestamp=move.structural_end_timestamp,
             confirmation_timestamp=move.confirmation_timestamp, anchor_ids=(center.id,),
             evidence_ids=(tracker.departure.id if tracker.departure else "", move.id))
         return updated, sig
