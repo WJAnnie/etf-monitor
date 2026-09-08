@@ -1,0 +1,9 @@
+case_id: GS-003
+gold_layer: G1_GEOMETRY
+engine: StrokeEngine
+fixture_mode: UPSTREAM_OBJECT_FIXTURE
+rule_refs:
+  - ST-ACTIVE-EXTENSION
+  - ST-STABLE-ID
+expected_file: expected.json
+schema_version: 1.0.0

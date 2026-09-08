@@ -1,0 +1,4 @@
+{
+  "STRICT_OLD": {"valid": false, "reason": "NO_INDEPENDENT_PROCESSED_BAR"},
+  "RELAXED_LATE": {"valid": true}
+}

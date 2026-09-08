@@ -1,0 +1,13 @@
+spec_id,task_id,rule,engine,test_case,gold_case,status,version,notes
+DATA-VALID,005,Raw bars must pass deterministic OHLC/time validation,MarketDataValidator,test_validation_valid,,PASS,0.1.0,
+INC-UP,006,UP inclusion uses max high and max low,InclusionEngine,test_up_inclusion_merge_uses_max_high_max_low,GS-001,PASS,0.1.0,
+INC-DOWN,006,DOWN inclusion uses min high and min low,InclusionEngine,test_down_inclusion_merge_uses_min_high_min_low,,PASS,0.1.0,
+INC-EQUAL,006,Equal range is inclusion,InclusionEngine,test_equal_range_is_inclusion,,PASS,0.1.0,
+FRA-STRICT,008,Fractals use strict inequalities,FractalEngine,test_equal_edge_not_standard,,PASS,0.1.0,
+FRA-NO-FUTURE,008,Incomplete third bar cannot confirm fractal,FractalEngine,test_unfinished_third_bar_cannot_confirm,,PASS,0.1.0,
+ST-RELAXED,010,RELAXED_LATE requires at least three raw bars between extreme sources,StrokeEngine,test_relaxed_accepts_three_raw_between,GS-002,PASS,0.1.0,
+ST-STRICT,011,STRICT_OLD requires independent ProcessedBar,StrokeEngine,test_strict_old_rejects_where_relaxed_accepts,GS-002,PASS,0.1.0,
+ST-TIE,010,Tied extreme sources use conservative minimum spacing,StrokeEngine,test_relaxed_tie_extremes_use_conservative_min_spacing,,PASS,0.1.0,
+ST-EXTEND,012,Active same-type more-extreme endpoint keeps ID and increments revision,StrokeEngine,test_active_stroke_extends_same_id,GS-003,PASS,0.1.0,
+ST-IMMUTABLE,012,Finalized stroke is not rewritten by later active extension,StrokeEngine,test_finalized_stroke_not_rewritten_by_later_active_extension,,PASS,0.1.0,
+ST-TIME,012,Stroke structural and confirmation timestamps are distinct,StrokeEngine,test_stroke_confirmation_uses_end_fractal_confirmation_time,,PASS,0.1.0,

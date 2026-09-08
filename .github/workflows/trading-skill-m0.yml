@@ -1,0 +1,28 @@
+name: Trading Skill M0
+
+on:
+  pull_request:
+    paths:
+      - 'trading-skill/**'
+      - '.github/workflows/trading-skill-m0.yml'
+  push:
+    branches:
+      - master
+    paths:
+      - 'trading-skill/**'
+      - '.github/workflows/trading-skill-m0.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install
+        working-directory: trading-skill
+        run: python -m pip install -e '.[dev]'
+      - name: Test M0
+        working-directory: trading-skill
+        run: python -m pytest
