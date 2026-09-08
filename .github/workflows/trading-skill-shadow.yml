@@ -36,8 +36,8 @@ jobs:
       run:
         working-directory: trading-skill
     env:
-      FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
-      FEISHU_SECRET: ${{ secrets.FEISHU_SECRET }}
+      FEISHU_WEBHOOK: ''
+      FEISHU_SECRET: ''
       FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
       FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
       FEISHU_CHAT_ID: oc_9df5fff3a390da378fc2714fdb2ea541
