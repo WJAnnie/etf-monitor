@@ -189,11 +189,24 @@ def _enforce_first_buy_permission(candidate: dict) -> None:
         candidate["recent_signal_note"] = "30分钟一买：反转初期，仅观察；优先等待标准二买/三买和5分钟执行条件"
 
 
-def _major_negative_industry_events(industry: dict) -> list[dict]:
+def _major_negative_events(events: list[dict] | tuple[dict, ...]) -> list[dict]:
     return [
-        event for event in (industry.get("events") or [])
+        event for event in (events or [])
         if event.get("importance") == "重大" and event.get("impact") == "利空"
     ]
+
+
+def _major_negative_industry_events(industry: dict) -> list[dict]:
+    """向后兼容测试和旧调用。"""
+    return _major_negative_events(list(industry.get("events") or []))
+
+
+def _events_for_symbol(symbol: dict, industry_map: dict) -> list[dict]:
+    # 跨行业补充路线必须优先使用已解析的真实行业事件，不能因industry_code=CROSS_MARKET绕过行业风险。
+    if "industry_events" in symbol:
+        return list(symbol.get("industry_events") or [])
+    industry = industry_map.get(str(symbol.get("industry_code"))) or {}
+    return list(industry.get("events") or [])
 
 
 def analyze_symbol_v3(symbol, industry_map, *, as_of, equity):
@@ -236,16 +249,25 @@ def analyze_symbol_v3(symbol, industry_map, *, as_of, equity):
             blockers.append("EXECUTION_STRUCTURE_CONFLICT")
         candidate["blockers"] = blockers
 
-    industry = industry_map.get(str(symbol.get("industry_code"))) or {}
-    candidate["industry_major_events"] = list(industry.get("events") or [])
-    major_negative = _major_negative_industry_events(industry)
+    industry_events = _events_for_symbol(symbol, industry_map)
+    candidate["industry_major_events"] = industry_events
+    major_negative = _major_negative_events(industry_events)
     if major_negative:
         candidate["push"] = False
         candidate["action"] = "OBSERVE"
-        candidate["recent_signal_note"] = "缠论结构仍保留，但行业出现36小时内重大利空，暂停新开仓并等待事件影响重新定价"
+        candidate["recent_signal_note"] = "缠论结构仍保留，但真实所属行业出现36小时内重大利空，暂停新开仓并等待事件影响重新定价"
         blockers = list(candidate.get("blockers") or [])
         if "INDUSTRY_MAJOR_NEGATIVE_EVENT" not in blockers:
             blockers.append("INDUSTRY_MAJOR_NEGATIVE_EVENT")
+        candidate["blockers"] = blockers
+
+    if symbol.get("candidate_route") == "跨行业结构补充" and symbol.get("industry_context_complete") is False:
+        candidate["push"] = False
+        candidate["action"] = "OBSERVE"
+        candidate["recent_signal_note"] = "缠论结构保留观察，但跨行业候选真实细分行业未成功解析，行业风险上下文不完整，禁止新开仓"
+        blockers = list(candidate.get("blockers") or [])
+        if "INDUSTRY_CONTEXT_INCOMPLETE" not in blockers:
+            blockers.append("INDUSTRY_CONTEXT_INCOMPLETE")
         candidate["blockers"] = blockers
 
     signal_price_text = str(candidate.get("buy_point") or "").split("～", 1)[0].replace("元", "")
@@ -260,10 +282,13 @@ def analyze_symbol_v3(symbol, industry_map, *, as_of, equity):
 
     candidate["industry_rotation_state"] = symbol.get("industry_rotation_state")
     candidate["industry_analysis_profile"] = symbol.get("industry_analysis_profile")
+    candidate["candidate_route"] = symbol.get("candidate_route")
     candidate["recent_report"] = symbol.get("recent_report")
     candidate["sector_financial_metrics"] = symbol.get("sector_financial_metrics")
     candidate["sector_observation_override"] = symbol.get("sector_observation_override", False)
     candidate["sector_observation_reason"] = symbol.get("sector_observation_reason")
+    candidate["industry_context_complete"] = symbol.get("industry_context_complete", True)
+    candidate["industry_context_note"] = symbol.get("industry_context_note")
     candidate["pe"] = symbol.get("pe")
     candidate["pb"] = symbol.get("pb")
     candidate["stop_logic"] = f"止损跟随{candidate.get('timeframe','主结构')}买点/中枢失效；单根5分钟影线或短线卖点不能直接否定更高周期核心结构。"
