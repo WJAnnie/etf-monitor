@@ -117,7 +117,10 @@ def map_sell_scope(trade:Trade, *, timeframe:str, sell_class:int) -> SellScope:
     return SellScope(tuple(affected),unaffected,action,tuple(fractions))
 
 def target_exposure(trade:Trade, scope:SellScope) -> float:
+    # 向后兼容旧SellScope：没有显式比例时，affected_tranche_ids仍表示整笔退出。
     fractions=dict(scope.reduction_fractions)
+    if not fractions and scope.affected_tranche_ids:
+        fractions={tranche_id:1.0 for tranche_id in scope.affected_tranche_ids}
     return sum(t.value*(1.0-fractions.get(t.id,0.0)) for t in trade.tranches)
 
 def execute_exit(tranche:Tranche, *, expected_exit:float, actual_exit:float, reason:str, fraction:float=1.0) -> ExitRecord:
