@@ -142,6 +142,36 @@ def test_fund_name_edge_cases_do_not_confuse_asset_class_with_keywords():
         assert classify_fund_category(item) is expected
 
 
+def test_production_etf_names_that_were_once_other_are_now_explicitly_classified():
+    samples = [
+        ("159731", "石化ETF华夏", FundCategory.EQUITY_SECTOR),
+        ("159666", "交通运输ETF华夏", FundCategory.EQUITY_SECTOR),
+        ("515210", "钢铁ETF国泰", FundCategory.EQUITY_SECTOR),
+        ("512670", "国防ETF鹏华", FundCategory.EQUITY_SECTOR),
+        ("516910", "物流ETF富国", FundCategory.EQUITY_SECTOR),
+        ("159275", "农牧渔ETF华宝", FundCategory.EQUITY_SECTOR),
+        ("159003", "招商快线ETF", FundCategory.CASH),
+        ("512690", "酒ETF鹏华", FundCategory.EQUITY_SECTOR),
+        ("562550", "绿电ETF华夏", FundCategory.EQUITY_SECTOR),
+        ("510410", "资源ETF博时", FundCategory.EQUITY_SECTOR),
+        ("159766", "旅游ETF富国", FundCategory.EQUITY_SECTOR),
+        ("159635", "基建ETF华夏", FundCategory.EQUITY_SECTOR),
+        ("515800", "中证800ETF汇添富", FundCategory.EQUITY_BROAD),
+        ("159005", "快钱ETF汇添富", FundCategory.CASH),
+        ("560050", "中国A50ETF汇添富", FundCategory.EQUITY_BROAD),
+        ("561330", "矿业ETF国泰", FundCategory.EQUITY_SECTOR),
+        ("159601", "A50ETF华夏", FundCategory.EQUITY_BROAD),
+        ("513360", "教育ETF博时", FundCategory.EQUITY_SECTOR),
+        ("159301", "公用事业ETF华夏", FundCategory.EQUITY_SECTOR),
+        ("159378", "通用航空ETF永赢", FundCategory.EQUITY_SECTOR),
+        ("515110", "一带一路ETF易方达", FundCategory.EQUITY_SECTOR),
+        ("512090", "MSCIA股ETF易方达", FundCategory.EQUITY_BROAD),
+        ("159901", "深证100ETF易方达", FundCategory.EQUITY_BROAD),
+    ]
+    for code, name, expected in samples:
+        assert classify_fund_category(sec(code, name=name, security_type=SecurityType.ETF)) is expected
+
+
 def test_lofs_are_classified_by_underlying_asset_and_risk_tags_are_separate():
     samples = [
         (sec("160216", name="国泰商品LOF", security_type=SecurityType.LOF), FundCategory.COMMODITY),
