@@ -28,7 +28,7 @@ class FundCategory(StrEnum):
     EQUITY_BROAD = "EQUITY_BROAD"
     EQUITY_SECTOR = "EQUITY_SECTOR"
     EQUITY_STRATEGY = "EQUITY_STRATEGY"
-    CROSS_BORDER = "CROSS_BORDER"
+    CROSS_BORDER = "CROSS_BORDER"  # 仅作无法继续识别底层资产时的兼容兜底；跨境风险主要由risk tag表达
     COMMODITY = "COMMODITY"
     BOND = "BOND"
     CASH = "CASH"
@@ -142,21 +142,25 @@ CROSS_BORDER_TOKENS = (
 )
 BOND_TOKENS = (
     "国债", "政金债", "信用债", "债券", "可转债", "公司债", "城投债", "短融", "利率债", "地方债",
-    "纯债", "双债", "债基", "美元债",
+    "纯债", "双债", "债基", "综债", "美元债",
 )
-CASH_TOKENS = ("货币", "现金", "同业存单")
+CASH_TOKENS = ("货币", "同业存单", "日利", "添益", "保证金", "现金管理")
 COMMODITY_TOKENS = (
-    "黄金", "白银", "豆粕", "原油", "油气", "商品ETF", "能源化工ETF", "有色期货",
+    "黄金", "白银", "豆粕", "原油", "石油", "油气", "商品ETF", "能源化工ETF", "有色期货",
 )
-STRATEGY_TOKENS = ("红利", "低波", "价值", "质量", "自由现金流", "ESG", "央企", "国企", "高股息", "增强")
+STRATEGY_TOKENS = (
+    "红利", "低波", "价值", "质量", "自由现金流", "现金流", "ESG", "央企", "国企", "高股息", "增强",
+)
 BROAD_TOKENS = (
     "中证A500", "A500", "中证A50", "沪深300", "中证500", "中证1000", "中证2000",
-    "上证50", "上证180", "创业板50", "创业板", "科创50", "科创100", "北证50", "全指",
+    "上证50", "上证180", "上证指数", "深证成指", "创业板50", "创业板", "科创50", "科创100", "北证50", "全指",
+    "纳指", "纳斯达克", "标普", "道琼斯", "日经", "德国", "法国", "英国", "越南", "印度", "沙特", "巴西",
+    "韩国", "日本", "美国", "亚太", "亚洲", "恒生指数",
 )
 SECTOR_TOKENS = (
-    "白酒", "食品", "消费", "医药", "医疗", "创新药", "证券", "券商", "银行", "保险", "地产",
+    "白酒", "食品", "消费", "医药", "医疗", "创新药", "证券", "券商", "银行", "保险", "金融", "地产",
     "科技", "互联网", "软件", "通信", "半导体", "芯片", "电子", "军工", "航天", "新能源", "光伏",
-    "电池", "汽车", "机械", "农业", "养殖", "煤炭", "有色", "传媒", "游戏", "人工智能", "机器人",
+    "电池", "汽车", "机械", "农业", "养殖", "煤炭", "有色", "传媒", "游戏", "人工智能", "机器人", "黄金股",
 )
 
 
@@ -164,23 +168,31 @@ def _has_token(text: str, tokens: Iterable[str]) -> bool:
     return any(token.upper() in text for token in tokens)
 
 
+def _is_cash_fund(text: str) -> bool:
+    if _has_token(text, CASH_TOKENS):
+        return True
+    # “自由现金流/全指现金流”是权益策略，不是货币基金。
+    return "现金" in text and "现金流" not in text
+
+
 def classify_fund_category(item: MarketSecurity) -> FundCategory:
-    """只描述底层资产类别；QDII/跨境等交易风险使用 fund_risk_tags 单独表达。"""
+    """描述底层资产类别；跨境/QDII等交易风险由 ``fund_risk_tags`` 单独表达。"""
     text = "".join(str(item.name or "").upper().split())
     if _has_token(text, BOND_TOKENS):
         return FundCategory.BOND
-    if _has_token(text, CASH_TOKENS):
-        return FundCategory.CASH
     if "黄金股" not in text and _has_token(text, COMMODITY_TOKENS):
         return FundCategory.COMMODITY
-    if _has_token(text, CROSS_BORDER_TOKENS):
-        return FundCategory.CROSS_BORDER
     if _has_token(text, STRATEGY_TOKENS):
         return FundCategory.EQUITY_STRATEGY
-    if _has_token(text, BROAD_TOKENS):
-        return FundCategory.EQUITY_BROAD
+    if _is_cash_fund(text):
+        return FundCategory.CASH
     if _has_token(text, SECTOR_TOKENS):
         return FundCategory.EQUITY_SECTOR
+    if _has_token(text, BROAD_TOKENS):
+        return FundCategory.EQUITY_BROAD
+    # 无法继续识别底层资产时才保留CROSS_BORDER兼容类别；不是跨境风险的主表达方式。
+    if _has_token(text, CROSS_BORDER_TOKENS):
+        return FundCategory.CROSS_BORDER
     if item.security_type is SecurityType.ETF:
         return FundCategory.EQUITY_SECTOR
     return FundCategory.OTHER
@@ -198,9 +210,9 @@ def fund_risk_tags(item: MarketSecurity) -> tuple[str, ...]:
 
 FAMILY_BENCHMARK_TOKENS = (
     "沪深300", "中证500", "中证1000", "中证2000", "中证A500", "A500", "中证A50",
-    "上证50", "科创50", "科创100", "创业板50", "创业板", "北证50", "恒生科技",
+    "上证50", "上证指数", "科创50", "科创100", "创业板50", "创业板", "北证50", "恒生科技",
     "恒生互联网", "恒生指数", "纳斯达克100", "纳指100", "标普500", "日经225",
-    "红利低波", "中证红利", "黄金", "白银", "原油", "国债", "政金债", "白酒", "美元债",
+    "红利低波", "中证红利", "黄金", "白银", "原油", "石油", "国债", "政金债", "综债", "白酒", "美元债",
 )
 
 
