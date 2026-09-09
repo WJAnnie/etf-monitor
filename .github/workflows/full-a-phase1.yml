@@ -104,7 +104,14 @@ jobs:
             --output full-a-results/step4_signal_lifecycle_latest.json \
             --strict
 
-      - name: 打印新版STEP1-4C摘要
+      - name: STEP4D 技术机会资格验证
+        run: |
+          python -m scripts.analyze_step4_technical_opportunity \
+            --lifecycle full-a-results/step4_signal_lifecycle_latest.json \
+            --output full-a-results/step4_technical_opportunity_latest.json \
+            --strict
+
+      - name: 打印新版STEP1-4D摘要
         if: always()
         run: |
           python - <<'PY'
@@ -116,6 +123,7 @@ jobs:
           b=Path('full-a-results/step4_bars_latest.json')
           s4=Path('full-a-results/step4_structure_latest.json')
           l4=Path('full-a-results/step4_signal_lifecycle_latest.json')
+          d4=Path('full-a-results/step4_technical_opportunity_latest.json')
           if c.exists():
               p=json.loads(c.read_text(encoding='utf-8'))
               s=p.get('summary',{})
@@ -127,20 +135,16 @@ jobs:
               print('候选路线=',s.get('candidate_by_route'))
               print('基金资产类别=',s.get('candidate_by_fund_category'))
               print('候选行业补全=',p.get('candidate_industry_enrichment'))
-              print('重点行业=',[(x.get('name'),x.get('pool'),x.get('state'),x.get('quality_score'),x.get('timing_score')) for x in p.get('selected_industries',[])[:20]])
           if f.exists():
               p=json.loads(f.read_text(encoding='utf-8'))
               print('STEP3摘要=',p.get('summary'))
-              print('基金参考增强=',p.get('fund_reference_enrichment'))
           if q.exists():
               p=json.loads(q.read_text(encoding='utf-8'))
               print('STEP3->4深扫资格=',p.get('summary'))
-              print('深扫身份前20=',[(x.get('code'),x.get('market'),x.get('security_type'),x.get('status'),x.get('tier')) for x in p.get('candidates',[])[:20]])
           if b.exists():
               p=json.loads(b.read_text(encoding='utf-8'))
               print('STEP4行情=',{
                   'candidate_count':p.get('candidate_count'),
-                  'identity_valid_count':p.get('identity_valid_count'),
                   'loaded_count':p.get('loaded_count'),
                   'history_limited_count':p.get('history_limited_count'),
                   'history_tiers':p.get('history_tiers'),
@@ -152,6 +156,9 @@ jobs:
           if l4.exists():
               p=json.loads(l4.read_text(encoding='utf-8'))
               print('STEP4C摘要=',p.get('summary'))
+          if d4.exists():
+              p=json.loads(d4.read_text(encoding='utf-8'))
+              print('STEP4D摘要=',p.get('summary'))
           PY
 
       - name: Upload new pipeline validation
@@ -230,7 +237,6 @@ jobs:
               p=json.loads(bars.read_text(encoding='utf-8'))
               print('旧链上游候选=',p.get('upstream_candidate_count'),'权限剔除=',p.get('permission_excluded_count'))
               print('旧链允许下载=',p.get('candidate_count'),'成功=',p.get('loaded_count'),'异常=',len(p.get('errors',[])))
-              print('权限剔除样本=',p.get('permission_excluded',[])[:10])
           if scan.exists():
               p=json.loads(scan.read_text(encoding='utf-8'))
               c=p.get('candidates',[])
