@@ -24,6 +24,7 @@ from scripts.collect_full_a_universe_v2 import (
 )
 from trading_skill.a_share_fundamentals import evaluate_prefilter
 from trading_skill.a_share_universe import rank_industry_leaders
+from trading_skill.industry_event_rotation import promote_major_event_industries
 from trading_skill.industry_financial_metrics import compare_snapshots, statement_snapshot
 from trading_skill.industry_intelligence import (
     fetch_eastmoney_news,
@@ -156,6 +157,7 @@ def main() -> int:
     parser.add_argument("--prospect-limit", type=int, default=20)
     parser.add_argument("--early-heat-limit", type=int, default=8)
     parser.add_argument("--dynamic-supplement", type=int, default=4)
+    parser.add_argument("--event-promotion-limit", type=int, default=4)
     parser.add_argument("--leaders-per-industry", type=int, default=5)
     parser.add_argument("--cross-market-limit", type=int, default=20)
     parser.add_argument("--strict", action="store_true")
@@ -170,9 +172,27 @@ def main() -> int:
         early_heat_limit=args.early_heat_limit,
         dynamic_supplement=args.dynamic_supplement,
     )
-    selected_map = {item.code: item for item in selected}
 
+    # 先抓行业资讯，再允许“重大事件”把原本未入池、但位置不过高的行业提入当日观察。
+    # 事件只扩大观察范围，不创造交易信号。
     news_rows, industry_events, intelligence_errors, news_source_counts = _industry_news(selected, now=now)
+    event_promoted, promoted_events, event_high_skipped = promote_major_event_industries(
+        industry_rows,
+        news_rows,
+        existing_codes={item.code for item in selected},
+        as_of=now,
+        limit=args.event_promotion_limit,
+    )
+    if event_promoted:
+        selected = tuple(list(selected) + list(event_promoted))
+        # 对扩展后的完整重点行业重新做一次事件归属，确保事件行业也进入正式报告。
+        industry_events = match_industry_events(
+            [asdict(item) for item in selected], news_rows, as_of=now, max_age_hours=36, max_per_industry=3
+        )
+        for name, events in promoted_events.items():
+            industry_events.setdefault(name, events)
+
+    selected_map = {item.code: item for item in selected}
 
     raw_leaders = []
     member_errors: list[dict] = []
@@ -307,6 +327,8 @@ def main() -> int:
         "industry_rows_loaded": len(industry_rows),
         "selected_industries": [_serialize_industry(item, industry_events) for item in selected],
         "paused_high_industries": [_serialize_industry(item, industry_events) for item in paused[:20]],
+        "event_promoted_industries": [item.name for item in event_promoted],
+        "event_high_position_skipped": list(event_high_skipped),
         "industry_recent_reports": industry_recent_reports,
         "industry_intelligence": {
             "news_sources": news_source_counts,
@@ -328,6 +350,9 @@ def main() -> int:
         "guardrails": {
             "long_term_prospect_primary": True,
             "early_heating_industries_added_daily": True,
+            "major_event_can_promote_observation_sector": True,
+            "major_event_cannot_create_buy_signal": True,
+            "major_event_high_position_still_not_chased": True,
             "overextended_industries_temporarily_paused": True,
             "paused_industries_reenter_after_cooling": True,
             "industry_specific_analysis_profile": True,
@@ -347,8 +372,12 @@ def main() -> int:
 
     print(f"全A加载: {len(all_stocks)}（{all_a_source}）")
     print(f"行业加载: {len(industry_rows)}")
-    print(f"当前重点行业: {len(selected)}，高位暂退: {len(paused)}")
+    print(f"当前重点行业: {len(selected)}，高位暂退: {len(paused)}，重大事件提入: {len(event_promoted)}")
     print("入选行业:", ", ".join(f"{item.name}[{industry_rotation_state(item)}]" for item in selected))
+    if event_promoted:
+        print("重大事件观察行业:", ", ".join(item.name for item in event_promoted))
+    if event_high_skipped:
+        print("重大事件但高位未追:", ", ".join(event_high_skipped[:10]))
     print(f"行业前五原始候选: {len(raw_leaders)}，行业去重后: {len(industry_leaders)}，跨行业补充: {len(cross_market)}")
     print(f"严格基本面通过: {len(strict_eligible)}，允许观察性深扫: {len(deep_eligible)}，行业专属观察覆盖: {sector_override_count}")
     print(f"资讯匹配行业: {len(industry_events)}，资讯来源: {news_source_counts}，近期财报行业: {len(industry_recent_reports)}，财报明细: {len(detailed_metrics)}，资讯异常: {len(intelligence_errors)}")
