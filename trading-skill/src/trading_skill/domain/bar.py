@@ -8,6 +8,22 @@ from .enums import Direction, Timeframe
 from .models import price_to_ticks, stable_id, to_decimal
 
 
+def _infer_adjustment(*, timeframe: Timeframe, source: str) -> str:
+    text = str(source or "").lower()
+    if "前复权" in source or "qfq" in text or source == "aggregate_daily":
+        return "forward"
+    if timeframe is Timeframe.M5 or "real_5m" in text:
+        return "raw"
+    if timeframe is Timeframe.WEEKLY:
+        # 周线通常由日线聚合；没有明确来源时不擅自假设。
+        return "unknown"
+    if timeframe is Timeframe.M120 and source == "真实30分钟聚合":
+        return "unknown"
+    if timeframe is Timeframe.M30:
+        return "raw"
+    return "unknown"
+
+
 @dataclass(frozen=True, slots=True)
 class RawBar:
     symbol: str
@@ -21,7 +37,7 @@ class RawBar:
     amount: Decimal = Decimal("0")
     is_complete: bool = True
     source: str = "fixture"
-    adjustment: str = "forward"
+    adjustment: str = "unknown"
 
     @classmethod
     def make(
@@ -38,8 +54,9 @@ class RawBar:
         amount: Decimal | str | int | float = 0,
         is_complete: bool = True,
         source: str = "fixture",
-        adjustment: str = "forward",
+        adjustment: str | None = None,
     ) -> "RawBar":
+        basis = str(adjustment or "").strip().lower() or _infer_adjustment(timeframe=timeframe, source=source)
         return cls(
             symbol=symbol,
             timeframe=timeframe,
@@ -52,7 +69,7 @@ class RawBar:
             amount=to_decimal(amount),
             is_complete=is_complete,
             source=source,
-            adjustment=adjustment,
+            adjustment=basis,
         )
 
     @property
