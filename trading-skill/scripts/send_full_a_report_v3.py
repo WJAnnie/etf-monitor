@@ -23,6 +23,20 @@ def _signal_cn(value: object) -> str:
     return "标准二买" if text == "二买" else text
 
 
+def _valuation(value: object, *, kind: str) -> str:
+    if value in (None, "", "-"):
+        return "暂无"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if kind == "PE" and number <= 0:
+        return f"{number:.2f}（亏损期，不以PE为主）"
+    if kind == "PB" and number <= 0:
+        return f"{number:.2f}（不适用）"
+    return f"{number:.2f}"
+
+
 def _fmt_report(report: dict | None) -> str:
     if not report:
         return "暂无新披露定期报告"
@@ -146,11 +160,13 @@ def build_report(scan: dict, universe: dict, *, stage: str) -> tuple[str, str]:
     for idx, item in enumerate(confirmed[:15], 1):
         profile = item.get("industry_analysis_profile") or {}
         variant = item.get("class2_label") or "无"
+        valuation_focus = "、".join((profile.get("valuation_focus") or [])[:2]) or "按行业画像"
         lines.extend([
             "",
             f"{idx}. {item.get('name','未知')}（{item.get('code','')}）",
             f"行业：{item.get('industry','暂无')}｜前景主题：{item.get('prospect_theme') or '跨行业结构补充'}｜轮动状态：{item.get('industry_rotation_state','暂无')}",
             f"行业位置：{item.get('leader_rank','暂无')}｜基本面：{item.get('fundamental_grade','暂无')}级",
+            f"当前估值：PE {_valuation(item.get('pe'), kind='PE')}｜PB {_valuation(item.get('pb'), kind='PB')}｜行业口径：{valuation_focus}",
             f"缠论主买点：{item.get('timeframe','暂无')} {_signal_cn(item.get('signal'))}｜类二买标注：{variant}",
             f"周期职责：{item.get('timeframe_role','暂无')}｜执行权限：{item.get('entry_permission','暂无')}",
             f"买点确认：{item.get('signal_confirmation_time','暂无')}｜买点后涨幅：{item.get('rise_since_signal_pct','暂无')}%",
@@ -162,7 +178,6 @@ def build_report(scan: dict, universe: dict, *, stage: str) -> tuple[str, str]:
             f"首笔：{_money(item.get('buy_amount'))}｜股数：{item.get('buy_quantity') or '待总资金配置'}｜{item.get('buy_fraction','')}",
             f"后续加仓：{item.get('add_plan','暂无')}",
             f"止盈/减仓：{item.get('take_profit_plan','暂无')}",
-            f"行业估值重点：{'、'.join((profile.get('valuation_focus') or [])[:2]) or '按行业画像'}",
             f"新财报：{_fmt_report(item.get('recent_report'))}",
         ])
         if item.get("recent_report"):
