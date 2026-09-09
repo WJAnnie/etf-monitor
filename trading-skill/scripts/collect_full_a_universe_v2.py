@@ -45,8 +45,14 @@ def _optional_float(value):
         return None
 
 
+def _bell(value: float, *, center: float, width: float, maximum: float) -> float:
+    if width <= 0:
+        return 0.0
+    return max(0.0, maximum * (1.0 - abs(value - center) / width))
+
+
 def build_cross_market_candidates(all_stocks: list[dict], *, existing_codes: set[str], limit: int) -> list[LeaderCandidate]:
-    """行业不是硬准入门槛：从全A额外挑一批未过度上涨、流动性足够的股票进入结构深扫。"""
+    """行业不是硬准入门槛：额外寻找流动性好、尚未过度上涨、位置与相对强度均衡的结构候选。"""
     provisional = []
     live_amount_available = any(_safe_float(row.get("f6")) >= 50_000_000 for row in all_stocks)
     for row in all_stocks:
@@ -57,6 +63,7 @@ def build_cross_market_candidates(all_stocks: list[dict], *, existing_codes: set
         price = _safe_float(row.get("f2"))
         pct = _safe_float(row.get("f3"))
         amount = _safe_float(row.get("f6"))
+        turnover = _safe_float(row.get("f8"))
         total_cap = _safe_float(row.get("f20"))
         float_cap = _safe_float(row.get("f21"))
         ch60 = _safe_float(row.get("f24"))
@@ -66,12 +73,17 @@ def build_cross_market_candidates(all_stocks: list[dict], *, existing_codes: set
             continue
         if ch60 < -18 or ch60 > 32 or pct < -5.5 or pct > 7.0:
             continue
-        liquidity = min(25.0, math.log10(max(amount, 1.0)) * 3.0) if live_amount_available else 12.0
-        size = min(25.0, math.log10(max(total_cap, 1.0)) * 2.2)
-        position = max(0.0, 25.0 - abs(ch60 - 8.0) * 0.65)
-        day_balance = max(0.0, 15.0 - abs(pct - 1.0) * 1.8)
-        score = liquidity + size + position + day_balance
+
+        liquidity = min(24.0, math.log10(max(amount, 1.0)) * 2.8) if live_amount_available else 12.0
+        log_cap = math.log10(max(total_cap, 1.0))
+        size_balance = _bell(log_cap, center=10.8, width=1.45, maximum=12.0)
+        relative_strength = _bell(ch60, center=10.0, width=24.0, maximum=26.0)
+        day_balance = _bell(pct, center=1.0, width=6.0, maximum=16.0)
+        turnover_score = _bell(turnover, center=3.0, width=5.0, maximum=14.0) if turnover > 0 else 7.0
+        float_balance = _bell(math.log10(max(float_cap, 1.0)), center=10.5, width=1.5, maximum=8.0)
+        score = liquidity + size_balance + relative_strength + day_balance + turnover_score + float_balance
         provisional.append((score, row))
+
     provisional.sort(key=lambda pair: pair[0], reverse=True)
     out = []
     for rank, (score, row) in enumerate(provisional[: max(0, limit)], 1):
@@ -221,6 +233,7 @@ def main() -> int:
             "industry_is_not_hard_entry_gate": True,
             "leaders_per_industry": args.leaders_per_industry,
             "duplicate_stocks_removed_before_deep_scan": True,
+            "cross_market_not_size_dominated": True,
             "grade_d_may_be_observed_but_cannot_directly_trigger_buy": True,
             "st_stocks_excluded": True,
         },
