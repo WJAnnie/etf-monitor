@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -80,6 +81,11 @@ def main() -> int:
                 })
 
     results.sort(key=lambda item: (str(item.get("security_type")), str(item.get("code"))))
+    history_limited = [item for item in results if bool((item.get("quality") or {}).get("history_limited"))]
+    history_tiers = Counter(
+        str((((item.get("quality") or {}).get("history_quality") or {}).get("long_term_tier") or "UNKNOWN"))
+        for item in results
+    )
     output = {
         "mode": "STEP4_OFFICIAL_MULTI_TIMEFRAME_BARS",
         "generated_at": now.isoformat(),
@@ -92,11 +98,15 @@ def main() -> int:
             "m30_is_direct_real_history": True,
             "m5_is_direct_real_history": True,
             "price_basis_is_explicit": True,
+            "short_history_is_degraded_not_dropped": True,
+            "history_policy_decides_timeframe_eligibility": True,
             "this_stage_emits_trade_signal": False,
         },
         "candidate_count": len(candidates),
         "identity_valid_count": len(tasks),
         "loaded_count": len(results),
+        "history_limited_count": len(history_limited),
+        "history_tiers": dict(history_tiers),
         "identity_errors": identity_errors,
         "errors": errors,
         "symbols": results,
@@ -104,9 +114,22 @@ def main() -> int:
     atomic_json(args.output, output)
 
     print(
-        f"STEP4队列={len(candidates)}，身份有效={len(tasks)}，五周期成功={len(results)}，"
-        f"身份错误={len(identity_errors)}，行情错误={len(errors)}"
+        f"STEP4队列={len(candidates)}，身份有效={len(tasks)}，行情成功={len(results)}，"
+        f"短历史降级={len(history_limited)}，身份错误={len(identity_errors)}，行情错误={len(errors)}"
     )
+    print("历史证据层级:", dict(history_tiers))
+    if history_limited:
+        print(
+            "短历史样本前10:",
+            [
+                (
+                    item.get("code"), item.get("name"),
+                    len(item.get("daily") or []), len(item.get("120m") or []),
+                    len(item.get("30m") or []), len(item.get("5m") or []),
+                )
+                for item in history_limited[:10]
+            ],
+        )
     if errors:
         print("行情异常前10:", errors[:10])
 
@@ -115,18 +138,22 @@ def main() -> int:
         if identity_errors:
             problems.append(f"STEP4存在证券身份缺失:{len(identity_errors)}")
         if candidates and len(results) / len(candidates) < 0.75:
-            problems.append(f"STEP4五周期行情成功率过低:{len(results)}/{len(candidates)}")
+            problems.append(f"STEP4行情成功率过低:{len(results)}/{len(candidates)}")
         bad_market = [item for item in results if item.get("market") not in {0, 1}]
         if bad_market:
             problems.append(f"STEP4输出出现非法market:{len(bad_market)}")
-        incomplete = [
+        missing_history_contract = [
             item for item in results
-            if not all((item.get("quality") or {}).get(key) for key in (
-                "daily_history_ok", "m30_history_ok", "m120_history_ok", "m5_history_ok"
-            ))
+            if not isinstance((item.get("quality") or {}).get("history_quality"), dict)
         ]
-        if incomplete:
-            problems.append(f"STEP4已加载证券存在周期历史门槛不足:{len(incomplete)}")
+        if missing_history_contract:
+            problems.append(f"STEP4缺少历史证据分级:{len(missing_history_contract)}")
+        empty_core_data = [
+            item for item in results
+            if not (item.get("daily") or []) and not (item.get("30m") or []) and not (item.get("5m") or [])
+        ]
+        if empty_core_data:
+            problems.append(f"STEP4加载结果完全没有可用K线:{len(empty_core_data)}")
         if problems:
             raise SystemExit("；".join(problems))
     return 0
