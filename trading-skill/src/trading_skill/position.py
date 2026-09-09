@@ -5,6 +5,7 @@ from enum import StrEnum
 from trading_skill.decision import Action
 from trading_skill.sizing import StopCandidate, StopLevel, TrancheRole
 from trading_skill.domain.models import stable_id
+from trading_skill.strategy_policy import sell_fraction
 
 class TradeState(StrEnum):
     PLANNED="PLANNED"; OPENING="OPENING"; ACTIVE="ACTIVE"; PYRAMIDING="PYRAMIDING"; PROFIT_PROTECTED="PROFIT_PROTECTED"; REDUCING="REDUCING"; CLOSED="CLOSED"
@@ -61,49 +62,11 @@ def raise_protection(current:Protection|None, *, tranche_id:str, level:StopLevel
     return Protection(tranche_id,level,price_ticks,source_structure_id,1 if current is None else current.revision+1)
 
 
-def _sell_fraction(timeframe:str, sell_class:int, role:TrancheRole) -> float:
-    """级别越高/卖点越强，影响越深；低级别不能直接否定高级别核心仓。"""
-    sell_class=max(1,min(3,int(sell_class)))
-    if timeframe=="5m":
-        table={
-            1:{TrancheRole.TEST:0.50},
-            2:{TrancheRole.TEST:1.00,TrancheRole.TACTICAL:0.50},
-            3:{TrancheRole.TEST:1.00,TrancheRole.TACTICAL:1.00},
-        }
-    elif timeframe=="30m":
-        table={
-            1:{TrancheRole.TEST:1.00,TrancheRole.TACTICAL:0.50},
-            2:{TrancheRole.TEST:1.00,TrancheRole.TACTICAL:1.00,TrancheRole.TREND_ADD:0.50},
-            3:{TrancheRole.TEST:1.00,TrancheRole.TACTICAL:1.00,TrancheRole.TREND_ADD:1.00,TrancheRole.CONFIRMATION:0.50},
-        }
-    elif timeframe=="120m":
-        table={
-            1:{TrancheRole.TEST:1.00,TrancheRole.TACTICAL:1.00,TrancheRole.TREND_ADD:0.50},
-            2:{TrancheRole.TEST:1.00,TrancheRole.TACTICAL:1.00,TrancheRole.TREND_ADD:1.00,TrancheRole.CONFIRMATION:0.50},
-            3:{TrancheRole.TEST:1.00,TrancheRole.TACTICAL:1.00,TrancheRole.TREND_ADD:1.00,TrancheRole.CONFIRMATION:1.00},
-        }
-    elif timeframe=="daily":
-        table={
-            1:{TrancheRole.TEST:1.00,TrancheRole.TACTICAL:1.00,TrancheRole.TREND_ADD:1.00,TrancheRole.CONFIRMATION:0.50},
-            2:{TrancheRole.TEST:1.00,TrancheRole.TACTICAL:1.00,TrancheRole.TREND_ADD:1.00,TrancheRole.CONFIRMATION:1.00,TrancheRole.CORE:0.50},
-            3:{r:1.00 for r in TrancheRole},
-        }
-    elif timeframe=="weekly":
-        table={
-            1:{TrancheRole.TEST:1.00,TrancheRole.TACTICAL:1.00,TrancheRole.TREND_ADD:1.00,TrancheRole.CONFIRMATION:1.00,TrancheRole.CORE:0.50},
-            2:{TrancheRole.TEST:1.00,TrancheRole.TACTICAL:1.00,TrancheRole.TREND_ADD:1.00,TrancheRole.CONFIRMATION:1.00,TrancheRole.CORE:0.75},
-            3:{r:1.00 for r in TrancheRole},
-        }
-    else:
-        return 0.0
-    return float(table[sell_class].get(role,0.0))
-
-
 def map_sell_scope(trade:Trade, *, timeframe:str, sell_class:int) -> SellScope:
     fractions=[]
     affected=[]
     for tr in trade.tranches:
-        fraction=_sell_fraction(timeframe,sell_class,tr.thesis.role)
+        fraction=sell_fraction(timeframe,sell_class,tr.thesis.role)
         if fraction>0:
             affected.append(tr.id)
             fractions.append((tr.id,fraction))
