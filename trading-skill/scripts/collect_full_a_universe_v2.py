@@ -12,6 +12,7 @@ from scripts.collect_full_a_universe import (
     CN_TZ,
     MAX_WORKERS,
     STOCK_FIELDS,
+    _get_json,
     _safe_float,
     atomic_json,
     fetch_all_a_shares,
@@ -19,9 +20,14 @@ from scripts.collect_full_a_universe import (
     fetch_industries,
     fetch_paginated,
 )
+from trading_skill.a_share_events import summarize_announcements
 from trading_skill.a_share_fundamentals import evaluate_prefilter
 from trading_skill.a_share_universe import LeaderCandidate, rank_industry_leaders, valid_stock_name
-from trading_skill.industry_prospects import select_industries_v2
+from trading_skill.industry_prospects import parked_prospect_industries, select_industries_v2
+
+
+ANNOUNCEMENTS_API = "https://np-anotice-stock.eastmoney.com/api/security/ann"
+ANNOUNCEMENT_LIMIT = 30
 
 
 def fetch_industry_members_v2(board_code: str) -> list[dict]:
@@ -34,6 +40,24 @@ def fetch_industry_members_v2(board_code: str) -> list[dict]:
         if code:
             dedup[code] = row
     return list(dedup.values())
+
+
+def fetch_company_announcements(code: str, *, limit: int = ANNOUNCEMENT_LIMIT) -> list[dict]:
+    payload = _get_json(
+        ANNOUNCEMENTS_API,
+        {
+            "sr": -1,
+            "page_size": max(1, min(int(limit), 100)),
+            "page_index": 1,
+            "ann_type": "A",
+            "client_source": "web",
+            "stock_list": str(code),
+            "f_node": 0,
+            "s_node": 0,
+        },
+    )
+    data = payload.get("data") or {}
+    return [row for row in (data.get("list") or []) if isinstance(row, dict)]
 
 
 def _optional_float(value):
@@ -133,6 +157,7 @@ def main() -> int:
         prospect_limit=args.prospect_limit,
         dynamic_supplement=args.dynamic_supplement,
     )
+    parked = parked_prospect_industries(industry_rows)
     selected_map = {item.code: item for item in selected}
 
     raw_leaders = []
@@ -167,16 +192,34 @@ def main() -> int:
 
     finance_rows: dict[str, list[dict]] = {}
     finance_errors: list[dict] = []
-    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, max(1, len(leaders)))) as pool:
-        futures = {pool.submit(fetch_financial_reports, item.code): item for item in leaders}
-        for future in as_completed(futures):
-            item = futures[future]
-            try:
-                finance_rows[item.code] = future.result()
-            except Exception as exc:
-                finance_errors.append({"code": item.code, "name": item.name, "error": str(exc)})
-                finance_rows[item.code] = []
+    announcement_rows: dict[str, list[dict]] = {}
+    event_errors: list[dict] = []
 
+    # Financials and announcements are independent evidence sources. Both are fail-soft
+    # at collection time; data gaps stay explicit in the output instead of being silently
+    # treated as "no bad news" or "no report".
+    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, max(1, len(leaders)))) as pool:
+        futures = {}
+        for item in leaders:
+            futures[pool.submit(fetch_financial_reports, item.code)] = ("finance", item)
+            futures[pool.submit(fetch_company_announcements, item.code)] = ("events", item)
+        for future in as_completed(futures):
+            kind, item = futures[future]
+            try:
+                value = future.result()
+                if kind == "finance":
+                    finance_rows[item.code] = value
+                else:
+                    announcement_rows[item.code] = value
+            except Exception as exc:
+                if kind == "finance":
+                    finance_errors.append({"code": item.code, "name": item.name, "error": str(exc)})
+                    finance_rows[item.code] = []
+                else:
+                    event_errors.append({"code": item.code, "name": item.name, "error": str(exc)})
+                    announcement_rows[item.code] = []
+
+    event_error_codes = {str(item.get("code")) for item in event_errors}
     candidates = []
     for leader in leaders:
         industry = selected_map.get(leader.industry_code)
@@ -191,6 +234,11 @@ def main() -> int:
         )
         reasons = list(prefilter.reasons)
         deep_scan_eligible = prefilter.eligible or (prefilter.grade == "D" and not _has_hard_financial_problem(reasons))
+        event_summary = summarize_announcements(
+            announcement_rows.get(leader.code, []),
+            as_of=now,
+            data_complete=leader.code not in event_error_codes,
+        )
         is_cross = leader.industry_code == "CROSS_MARKET"
         candidates.append(
             {
@@ -214,6 +262,7 @@ def main() -> int:
                     "annual": asdict(prefilter.annual) if prefilter.annual else None,
                     "interim": asdict(prefilter.interim) if prefilter.interim else None,
                 },
+                "event_summary": asdict(event_summary),
             }
         )
 
@@ -229,6 +278,7 @@ def main() -> int:
         "market_breadth": {"advancers": advancers, "decliners": decliners},
         "industry_rows_loaded": len(industry_rows),
         "selected_industries": [asdict(item) for item in selected],
+        "parked_overextended_industries": [asdict(item) for item in parked],
         "leader_candidates": candidates,
         "fundamental_eligible_candidates": len(strict_eligible),
         "deep_scan_eligible_candidates": len(deep_eligible),
@@ -238,13 +288,17 @@ def main() -> int:
         "deduped_leader_candidates": len(leaders),
         "member_errors": member_errors,
         "finance_errors": finance_errors,
+        "event_errors": event_errors,
         "guardrails": {
             "full_market_first": True,
             "prospect_pool_is_primary": True,
             "market_heat_is_secondary": True,
+            "overheated_long_term_themes_are_parked_not_deleted": True,
             "industry_is_not_hard_entry_gate": True,
             "industry_specific_financial_policies": True,
             "missing_industry_kpis_are_explicit_data_gaps": True,
+            "announcement_events_are_risk_context_not_signal_creators": True,
+            "announcement_fetch_is_fail_soft_and_explicit": True,
             "leaders_per_industry": args.leaders_per_industry,
             "duplicate_stocks_removed_before_deep_scan": True,
             "cross_market_not_size_dominated": True,
@@ -258,11 +312,13 @@ def main() -> int:
     supplement_count = len(selected) - prospect_count
     print(f"全A加载: {len(all_stocks)}（{all_a_source}）")
     print(f"行业加载: {len(industry_rows)}")
-    print(f"长期前景行业: {prospect_count}，市场补充行业: {supplement_count}")
+    print(f"长期前景行业: {prospect_count}，市场补充行业: {supplement_count}，过热停车: {len(parked)}")
     print("入选行业:", ", ".join(item.name for item in selected))
+    if parked:
+        print("过热停车:", ", ".join(item.name for item in parked[:12]))
     print(f"行业前五原始候选: {len(raw_leaders)}，行业去重后: {len(industry_leaders)}，跨行业补充: {len(cross_market)}")
     print(f"严格基本面通过: {len(strict_eligible)}，允许观察性深扫: {len(deep_eligible)}")
-    print(f"行业成员异常: {len(member_errors)}，财报异常: {len(finance_errors)}")
+    print(f"行业成员异常: {len(member_errors)}，财报异常: {len(finance_errors)}，公告异常: {len(event_errors)}")
 
     if args.strict:
         problems = []
