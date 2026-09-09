@@ -2,7 +2,6 @@ name: 全A正式买点扫描
 
 on:
   schedule:
-    # 报告口径为北京时间13:45 / 14:45 / 16:30。
     - cron: '45 5 * * 1-5'
     - cron: '45 6 * * 1-5'
     - cron: '30 8 * * 1-5'
@@ -28,7 +27,7 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: trading-skill
@@ -71,34 +70,36 @@ jobs:
           echo "stage=$STAGE" >> "$GITHUB_OUTPUT"
           echo "本轮时点：$STAGE"
 
-      - name: 全A行业与龙头预筛
+      - name: 前景行业与前五候选预筛
         run: |
-          python scripts/collect_full_a_universe.py \
+          python -m scripts.collect_full_a_universe_v2 \
             --output full-a-results/universe_latest.json \
-            --industry-limit 8 \
-            --leaders-per-industry 3 \
+            --prospect-limit 20 \
+            --dynamic-supplement 5 \
+            --leaders-per-industry 5 \
             --strict
 
-      - name: 候选五周期真实行情
+      - name: 候选长历史五周期行情
         run: |
-          python scripts/collect_candidate_bars.py \
+          python -m scripts.collect_candidate_bars_v2 \
             --universe full-a-results/universe_latest.json \
             --output full-a-results/candidate_bars_latest.json \
             --strict
 
-      - name: 正式缠论深度扫描
+      - name: 近期买点与正式缠论深度扫描
         run: |
-          python scripts/run_full_a_scan.py \
+          python -m scripts.run_full_a_scan_v2 \
             --universe full-a-results/universe_latest.json \
             --bars full-a-results/candidate_bars_latest.json \
             --output full-a-results/scan_latest.json \
             --stage '${{ steps.stage.outputs.stage }}'
 
-      - name: 飞书中文报告
+      - name: 飞书中文报告V2
         run: |
-          python scripts/send_full_a_report.py \
+          python -m scripts.send_full_a_report_v2 \
             --scan full-a-results/scan_latest.json \
             --bars full-a-results/candidate_bars_latest.json \
+            --universe full-a-results/universe_latest.json \
             --stage '${{ steps.stage.outputs.stage }}'
 
       - name: Upload scan result
