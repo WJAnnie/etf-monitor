@@ -14,7 +14,6 @@ class TimeframePolicy:
     may_be_primary_entry: bool
     may_standalone_open: bool
     stop_level: StopLevel
-    freshness_days: float
     parent_timeframes: tuple[Timeframe, ...]
 
 
@@ -28,50 +27,27 @@ class ScaleInDecision:
 
 TIMEFRAME_POLICY: dict[Timeframe, TimeframePolicy] = {
     Timeframe.WEEKLY: TimeframePolicy(
-        Timeframe.WEEKLY, "周线", "战略环境/长期仓位边界", False, False, StopLevel.LW, 60.0, ()
+        Timeframe.WEEKLY, "周线", "战略环境/长期仓位边界", False, False, StopLevel.LW, ()
     ),
     Timeframe.DAILY: TimeframePolicy(
-        Timeframe.DAILY, "日线", "中期核心结构", True, True, StopLevel.LD, 30.0, (Timeframe.WEEKLY,)
+        Timeframe.DAILY, "日线", "中期核心结构", True, True, StopLevel.LD, (Timeframe.WEEKLY,)
     ),
     Timeframe.M120: TimeframePolicy(
-        Timeframe.M120, "120分钟", "主要中短线结构/首要买点周期", True, True, StopLevel.L120, 15.0,
+        Timeframe.M120, "120分钟", "主要中短线结构/首要买点周期", True, True, StopLevel.L120,
         (Timeframe.WEEKLY, Timeframe.DAILY),
     ),
     Timeframe.M30: TimeframePolicy(
-        Timeframe.M30, "30分钟", "战术结构/主要执行买点周期", True, True, StopLevel.L30, 5.0,
+        Timeframe.M30, "30分钟", "战术结构/主要执行买点周期", True, True, StopLevel.L30,
         (Timeframe.DAILY, Timeframe.M120),
     ),
     Timeframe.M5: TimeframePolicy(
-        Timeframe.M5, "5分钟", "精细入场与短线风险确认", False, False, StopLevel.L5, 4.0 / 24.0,
+        Timeframe.M5, "5分钟", "精细入场与短线风险确认", False, False, StopLevel.L5,
         (Timeframe.M30,),
     ),
 }
 
 PRIMARY_ENTRY_TIMEFRAMES = (Timeframe.DAILY, Timeframe.M120, Timeframe.M30)
 EXECUTION_TIMEFRAME = Timeframe.M5
-
-ENTRY_PRIORITY_MATRIX: dict[tuple[Timeframe, ChanSignalType], int] = {
-    (Timeframe.DAILY, ChanSignalType.SECOND_BUY): 100,
-    (Timeframe.DAILY, ChanSignalType.THIRD_BUY): 95,
-    (Timeframe.M120, ChanSignalType.SECOND_BUY): 90,
-    (Timeframe.M120, ChanSignalType.THIRD_BUY): 85,
-    (Timeframe.M30, ChanSignalType.SECOND_BUY): 80,
-    (Timeframe.M30, ChanSignalType.THIRD_BUY): 75,
-    (Timeframe.M120, ChanSignalType.FIRST_BUY): 60,
-    (Timeframe.DAILY, ChanSignalType.FIRST_BUY): 50,
-    (Timeframe.M30, ChanSignalType.FIRST_BUY): 40,
-}
-
-STANDARD_BUY_PRIORITY = {
-    ChanSignalType.SECOND_BUY: 50,
-    ChanSignalType.THIRD_BUY: 40,
-    ChanSignalType.FIRST_BUY: 30,
-}
-TIMEFRAME_ENTRY_PRIORITY = {
-    Timeframe.DAILY: 30,
-    Timeframe.M120: 25,
-    Timeframe.M30: 20,
-}
 
 SIGNAL_CN = {
     ChanSignalType.FIRST_BUY: "一买",
@@ -105,18 +81,6 @@ def parent_timeframes(timeframe: Timeframe) -> tuple[Timeframe, ...]:
 
 def management_stop_level(timeframe: Timeframe) -> StopLevel:
     return TIMEFRAME_POLICY[timeframe].stop_level
-
-
-def entry_priority(timeframe: Timeframe, signal_type: ChanSignalType, extended_types=()) -> int:
-    """统一决定哪个正式买点成为本轮主交易逻辑；类二买只作为同级二买的加分标签。"""
-    score = ENTRY_PRIORITY_MATRIX.get((timeframe, signal_type), 0)
-    extended = set(extended_types or ())
-    if signal_type is ChanSignalType.SECOND_BUY:
-        if ChanSignalType.STRONG_CLASS2_BUY in extended:
-            score += 3
-        if ChanSignalType.CENTER_CLASS2_BUY in extended:
-            score += 2
-    return score
 
 
 def signal_label(signal) -> str:
