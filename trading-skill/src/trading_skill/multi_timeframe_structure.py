@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from enum import StrEnum
 from typing import Any, Mapping
 
 from trading_skill.domain.enums import Timeframe
-from trading_skill.strategy_policy import TIMEFRAME_POLICY, parent_timeframes
+from trading_skill.strategy_policy import parent_timeframes
 
 
 class StructureBias(StrEnum):
@@ -29,12 +29,6 @@ class StructurePhase(StrEnum):
     UNRESOLVED = "UNRESOLVED"
 
 
-class SignalRecency(StrEnum):
-    NONE = "NONE"
-    FRESH = "FRESH"
-    STALE = "STALE"
-
-
 class ParentContextState(StrEnum):
     SUPPORTIVE = "SUPPORTIVE"
     PERMISSIVE = "PERMISSIVE"
@@ -52,17 +46,17 @@ class LowerTimeframeState(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class SignalSnapshot:
+    """4A事实快照；4B不判断fresh/stale/active/expired。"""
+
     side: str | None
     signal_type: str | None
     confirmation_timestamp: datetime | None
-    recency: SignalRecency
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "side": self.side,
             "signal_type": self.signal_type,
             "confirmation_timestamp": self.confirmation_timestamp.isoformat() if self.confirmation_timestamp else None,
-            "recency": self.recency.value,
         }
 
 
@@ -161,6 +155,8 @@ def _parse_time(value: Any, *, reference: datetime | None = None) -> datetime | 
             return None
     if reference is not None and reference.tzinfo is not None and result.tzinfo is None:
         result = result.replace(tzinfo=reference.tzinfo)
+    elif reference is not None and reference.tzinfo is not None and result.tzinfo is not None:
+        result = result.astimezone(reference.tzinfo)
     return result
 
 
@@ -214,7 +210,7 @@ def _latest_center_state(result: Any, *, as_of: datetime) -> str | None:
             reference=as_of,
         )
         state = _enum_value(_get(center, "state"))
-        if when is not None and state:
+        if when is not None and when <= as_of and state:
             ordered.append((when, str(state)))
     if not ordered:
         return None
@@ -222,7 +218,7 @@ def _latest_center_state(result: Any, *, as_of: datetime) -> str | None:
     return ordered[-1][1]
 
 
-def _latest_signal(result: Any, *, timeframe: Timeframe, as_of: datetime) -> SignalSnapshot:
+def _latest_signal(result: Any, *, as_of: datetime) -> SignalSnapshot:
     signals = list(_get(result, "signals", ()) or ())
     ordered: list[tuple[datetime, Any]] = []
     for signal in signals:
@@ -230,13 +226,11 @@ def _latest_signal(result: Any, *, timeframe: Timeframe, as_of: datetime) -> Sig
         if when is not None and when <= as_of:
             ordered.append((when, signal))
     if not ordered:
-        return SignalSnapshot(None, None, None, SignalRecency.NONE)
-    ordered.sort(key=lambda item: item[0])
+        return SignalSnapshot(None, None, None)
+    ordered.sort(key=lambda item: (item[0], str(_get(item[1], "id", ""))))
     when, signal = ordered[-1]
     types = _signal_standard_types(signal)
-    freshness = timedelta(days=TIMEFRAME_POLICY[timeframe].freshness_days)
-    recency = SignalRecency.FRESH if when >= as_of - freshness else SignalRecency.STALE
-    return SignalSnapshot(_signal_side(signal), types[0] if types else None, when, recency)
+    return SignalSnapshot(_signal_side(signal), types[0] if types else None, when)
 
 
 def _classify_phase(
@@ -245,14 +239,12 @@ def _classify_phase(
     center_state: str | None,
     divergence_type: str | None,
     divergence_state: str | None,
-    latest_signal: SignalSnapshot,
 ) -> tuple[StructureBias, StructurePhase]:
+    """只用当前结构事实分类；买卖点新鲜度/生命周期由4C负责。"""
     trend = str(trend or "")
     center_state = str(center_state or "")
     div_type = str(divergence_type or "")
     div_state = str(divergence_state or "")
-    fresh_side = latest_signal.side if latest_signal.recency is SignalRecency.FRESH else None
-    fresh_type = latest_signal.signal_type if latest_signal.recency is SignalRecency.FRESH else None
     divergence_active = div_state in {"FORMING", "CONFIRMED"}
     bottom_divergence = divergence_active and "BOTTOM" in div_type
     top_divergence = divergence_active and "TOP" in div_type
@@ -260,28 +252,24 @@ def _classify_phase(
     if trend == "UPTREND":
         if top_divergence:
             return StructureBias.BULLISH, StructurePhase.REVERSAL_DOWN_FORMING
-        if fresh_side == "SELL":
-            return StructureBias.BULLISH, StructurePhase.BULL_PULLBACK
         return StructureBias.BULLISH, StructurePhase.BULL_TREND
 
     if trend == "DOWNTREND":
         if bottom_divergence:
             return StructureBias.BEARISH, StructurePhase.REVERSAL_UP_FORMING
-        if fresh_side == "BUY":
-            return StructureBias.BEARISH, StructurePhase.BEAR_REBOUND
         return StructureBias.BEARISH, StructurePhase.BEAR_TREND
 
     if trend == "CONSOLIDATION":
-        if center_state == "LEAVING_UP" or fresh_type == "THIRD_BUY":
+        if center_state == "LEAVING_UP":
             return StructureBias.NEUTRAL, StructurePhase.BREAKOUT_UP
-        if center_state == "LEAVING_DOWN" or fresh_type == "THIRD_SELL":
+        if center_state == "LEAVING_DOWN":
             return StructureBias.NEUTRAL, StructurePhase.BREAKDOWN_DOWN
         return StructureBias.NEUTRAL, StructurePhase.CONSOLIDATION
 
-    # 趋势尚未达到可分类门槛时，只保留局部结构事实，不把局部突破伪装成完整趋势。
-    if center_state == "LEAVING_UP" or fresh_type == "THIRD_BUY":
+    # 趋势尚未达到可分类门槛时，只保留中枢生命周期给出的局部突破事实。
+    if center_state == "LEAVING_UP":
         return StructureBias.UNRESOLVED, StructurePhase.BREAKOUT_UP
-    if center_state == "LEAVING_DOWN" or fresh_type == "THIRD_SELL":
+    if center_state == "LEAVING_DOWN":
         return StructureBias.UNRESOLVED, StructurePhase.BREAKDOWN_DOWN
     return StructureBias.UNRESOLVED, StructurePhase.UNRESOLVED
 
@@ -291,13 +279,12 @@ def snapshot_timeframe(result: Any, *, as_of: datetime, fallback: Timeframe | No
     trend, trend_state = _trend_fields(result)
     divergence_type, divergence_state = _divergence_fields(result)
     center_state = _latest_center_state(result, as_of=as_of)
-    latest_signal = _latest_signal(result, timeframe=timeframe, as_of=as_of)
+    latest_signal = _latest_signal(result, as_of=as_of)
     bias, phase = _classify_phase(
         trend=trend,
         center_state=center_state,
         divergence_type=divergence_type,
         divergence_state=divergence_state,
-        latest_signal=latest_signal,
     )
     issues = tuple(str(item) for item in (_get(result, "issues", ()) or ()))
     completed_bars = int(_get(result, "completed_bars", 0) or 0)
@@ -335,12 +322,8 @@ def _parent_state(snapshot: TimeframeStructureSnapshot) -> tuple[ParentContextSt
     if snapshot.status not in {"OK", "UNRESOLVED"}:
         return ParentContextState.UNRESOLVED, f"{snapshot.timeframe.value}分析不可用"
 
-    latest = snapshot.latest_signal
-    if latest.recency is SignalRecency.FRESH and latest.side == "SELL":
-        return ParentContextState.BLOCKED, f"{snapshot.timeframe.value}最新有效正式结构为卖点"
-
     if snapshot.phase in {StructurePhase.BEAR_TREND, StructurePhase.BREAKDOWN_DOWN}:
-        return ParentContextState.BLOCKED, f"{snapshot.timeframe.value}仍处明确空头/向下破坏结构"
+        return ParentContextState.BLOCKED, f"{snapshot.timeframe.value}当前仍处明确空头/向下破坏结构"
 
     if snapshot.phase in {StructurePhase.BULL_PULLBACK, StructurePhase.REVERSAL_DOWN_FORMING}:
         return ParentContextState.CAUTION, f"{snapshot.timeframe.value}高周期仍偏多但正在调整/顶背驰演化"
@@ -363,6 +346,7 @@ def _parent_state(snapshot: TimeframeStructureSnapshot) -> tuple[ParentContextSt
 def evaluate_parent_context(
     results: Mapping[Any, Any], *, primary_timeframe: Timeframe, as_of: datetime
 ) -> ParentContext:
+    """4B只评估上级结构环境；上级当前买卖点冲突由4C叠加。"""
     book = build_structure_book(results, as_of=as_of).by_timeframe()
     parent_states: list[tuple[Timeframe, ParentContextState]] = []
     reasons: list[str] = []
@@ -427,7 +411,7 @@ def _latest_signal_after(result: Any, *, after: datetime, as_of: datetime) -> tu
             ordered.append((when, signal))
     if not ordered:
         return None, None
-    ordered.sort(key=lambda item: item[0])
+    ordered.sort(key=lambda item: (item[0], str(_get(item[1], "id", ""))))
     _, signal = ordered[-1]
     types = _signal_standard_types(signal)
     return _signal_side(signal), types[0] if types else None
@@ -436,6 +420,7 @@ def _latest_signal_after(result: Any, *, after: datetime, as_of: datetime) -> tu
 def evaluate_lower_context(
     results: Mapping[Any, Any], *, primary_timeframe: Timeframe, primary_confirmation: datetime, as_of: datetime
 ) -> LowerTimeframeContext:
+    """低周期只描述主买点之后的执行关系；不会反向重写主周期买点生命周期。"""
     book = build_structure_book(results, as_of=as_of).by_timeframe()
     child_states: list[tuple[Timeframe, str]] = []
     reasons: list[str] = []
@@ -493,8 +478,6 @@ def evaluate_lower_context(
         state = LowerTimeframeState.WAITING_PULLBACK
     elif saw_unresolved:
         state = LowerTimeframeState.UNRESOLVED
-    elif saw_neutral and saw_aligned:
-        state = LowerTimeframeState.MIXED
     elif saw_neutral:
         state = LowerTimeframeState.MIXED
     else:
