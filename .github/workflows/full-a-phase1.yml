@@ -11,6 +11,10 @@ on:
       - '.github/workflows/full-a-production-scan.yml'
   workflow_dispatch:
 
+concurrency:
+  group: full-a-production-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
