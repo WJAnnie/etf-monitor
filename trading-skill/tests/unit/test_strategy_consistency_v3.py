@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
-from scripts.run_full_a_scan_v3 import _execution_structure_ok
+from scripts.run_full_a_scan_v3 import _execution_structure_ok, _major_negative_industry_events, choose_primary_v3, parent_valid_v3
+from scripts.send_full_a_report_v3 import _valuation
 from trading_skill.a_share_universe import IndustryCandidate
 from trading_skill.chan.signals import ChanSignal
 from trading_skill.chan_extensions import annotate_second_buy_variants
@@ -15,13 +17,13 @@ from trading_skill.industry_prospects import industry_rotation_state
 from trading_skill.position import add_tranche, create_trade, map_sell_scope, target_exposure
 from trading_skill.production_chan import ProductionChanResult
 from trading_skill.sizing import StopCandidate, StopLevel, StopType, TrancheRole
-from trading_skill.strategy_policy import entry_permission, primary_entry_timeframes, sell_fraction
+from trading_skill.strategy_policy import entry_permission, entry_priority, primary_entry_timeframes, sell_fraction
 
 
 def _signal(kind: ChanSignalType, *, side="BUY", price=1000, when=None):
     when = when or datetime(2026, 9, 9, 10, 0, tzinfo=timezone.utc)
     return ChanSignal(
-        id=f"sig-{kind.value}", symbol="000001", standard_types=(kind,), extended_types=(), side=side,
+        id=f"sig-{kind.value}-{when.isoformat()}", symbol="000001", standard_types=(kind,), extended_types=(), side=side,
         level_rank=1, timeframe="30m", state=SignalState.CONFIRMED, structural_price_ticks=price,
         structural_timestamp=when, confirmation_timestamp=when, anchor_ids=(), evidence_ids=(),
     )
@@ -31,13 +33,50 @@ def _stop(level=StopLevel.LD):
     return StopCandidate("s", level, StopType.BUY_POINT_INVALIDATION, 900, "structure")
 
 
+def _result(timeframe: Timeframe, signals=(), *, trend="UPTREND", divergence=None):
+    return SimpleNamespace(
+        timeframe=timeframe,
+        signals=tuple(signals),
+        status="OK",
+        trend_classification=trend,
+        divergence_state=divergence,
+    )
+
+
 def test_primary_entries_exclude_weekly_and_5m_and_daily_first_buy_waits():
     assert Timeframe.WEEKLY not in primary_entry_timeframes()
     assert Timeframe.M5 not in primary_entry_timeframes()
     assert set(primary_entry_timeframes()) == {Timeframe.DAILY, Timeframe.M120, Timeframe.M30}
-    assert "等待二买" in entry_permission(Timeframe.DAILY, ChanSignalType.FIRST_BUY)
+    assert "等待标准二买" in entry_permission(Timeframe.DAILY, ChanSignalType.FIRST_BUY)
     assert "执行确认" in entry_permission(Timeframe.M5, ChanSignalType.SECOND_BUY)
     assert "小试仓" in entry_permission(Timeframe.M120, ChanSignalType.FIRST_BUY)
+    assert "只观察" in entry_permission(Timeframe.M30, ChanSignalType.FIRST_BUY)
+
+
+def test_cross_timeframe_priority_does_not_let_30m_second_buy_override_daily_third_buy():
+    when = datetime(2026, 9, 9, 10, 0, tzinfo=timezone.utc)
+    daily_third = _signal(ChanSignalType.THIRD_BUY, when=when)
+    m30_second = _signal(ChanSignalType.SECOND_BUY, when=when + timedelta(minutes=30))
+    picked = choose_primary_v3(
+        {
+            Timeframe.DAILY: _result(Timeframe.DAILY, (daily_third,)),
+            Timeframe.M30: _result(Timeframe.M30, (m30_second,)),
+        },
+        as_of=when + timedelta(hours=1),
+    )
+    assert picked is not None and picked[0] is Timeframe.DAILY
+    assert entry_priority(Timeframe.DAILY, ChanSignalType.THIRD_BUY) > entry_priority(Timeframe.M30, ChanSignalType.SECOND_BUY)
+
+
+def test_parent_context_uses_latest_formal_signal_not_any_old_sell():
+    when = datetime(2026, 9, 9, 9, 0, tzinfo=timezone.utc)
+    old_sell = _signal(ChanSignalType.FIRST_SELL, side="SELL", when=when)
+    new_buy = _signal(ChanSignalType.SECOND_BUY, side="BUY", when=when + timedelta(hours=1))
+    weekly = _result(Timeframe.WEEKLY, (old_sell, new_buy), trend="UPTREND")
+    assert parent_valid_v3({Timeframe.WEEKLY: weekly}, Timeframe.DAILY, as_of=when + timedelta(hours=2)) is True
+    newer_sell = _signal(ChanSignalType.SECOND_SELL, side="SELL", when=when + timedelta(hours=1, minutes=30))
+    weekly2 = _result(Timeframe.WEEKLY, (old_sell, new_buy, newer_sell), trend="UPTREND")
+    assert parent_valid_v3({Timeframe.WEEKLY: weekly2}, Timeframe.DAILY, as_of=when + timedelta(hours=2)) is False
 
 
 def test_execution_structure_conflict_is_a_real_blocker():
@@ -139,6 +178,14 @@ def test_industry_rotation_pauses_high_position_and_profiles_differ():
     assert ship.name != bank.name
 
 
+def test_dynamic_rotation_industries_use_specific_profiles_not_generic_template():
+    assert profile_for("院线", None).name == "影视院线/传媒"
+    assert profile_for("专业连锁Ⅱ", None).name == "零售/专业连锁"
+    assert profile_for("橡胶助剂", None).name == "化工/橡胶"
+    assert profile_for("航空装备Ⅱ", None).name == "商业航天与军工电子"
+    assert profile_for("光伏设备", None).name == "光伏与新能源制造"
+
+
 def test_industry_news_identity_keywords_exclude_generic_order_word():
     keywords = industry_identity_keywords({"name": "机器人", "prospect_theme": "机器人与高端自动化"})
     assert "订单" not in keywords
@@ -162,17 +209,34 @@ def test_industry_news_and_recent_report_are_structured_without_network():
     assert report and report["report_type"] == "中报"
 
 
-def test_sector_specific_report_metrics_prioritize_shipbuilding_and_special_finance():
+def test_major_negative_industry_event_is_explicit_new_entry_pause():
+    events = [
+        {"importance": "重大", "impact": "利空", "content": "行业重大限制政策"},
+        {"importance": "重要", "impact": "利好", "content": "普通利好"},
+    ]
+    assert _major_negative_industry_events({"events": events}) == [events[0]]
+
+
+def test_sector_specific_report_metrics_prioritize_shipbuilding_and_dynamic_cycle_sector():
     metrics = {
         "changes": {
             "contract_liabilities_change_pct": 18.5,
             "construction_in_progress_change_pct": 12.0,
             "fixed_asset_change_pct": 5.0,
+            "inventory_change_pct": -8.0,
             "operating_cash_flow_change_pct": -3.0,
         }
     }
     ship = summarize_sector_metrics("造船与海工", metrics)
     assert ship[0].startswith("合同负债同比")
     assert any(item.startswith("在建工程同比") for item in ship)
+    chemical = summarize_sector_metrics("化工/橡胶", metrics)
+    assert chemical[0].startswith("存货同比")
     bank = summarize_sector_metrics("银行", metrics)
     assert len(bank) == 1 and "净息差" in bank[0] and "不良率" in bank[0]
+
+
+def test_valuation_display_keeps_loss_making_pe_context():
+    assert "亏损期" in _valuation(-12.3, kind="PE")
+    assert _valuation(25.2, kind="PE") == "25.20"
+    assert "不适用" in _valuation(-0.5, kind="PB")
