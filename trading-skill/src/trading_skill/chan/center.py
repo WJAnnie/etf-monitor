@@ -236,7 +236,10 @@ def _unresolved_center(motions: tuple[CenterMotion, ...], *, symbol: str, target
     )
 
 
-def _motion_ends_outside_core(center: Center, motion: CenterMotion) -> bool:
+def motion_leaves_core(center: Center, motion: CenterMotion) -> bool:
+    """结构事实：完成运动的终点是否有效离开中枢核心区。"""
+    if not motion.completed:
+        return False
     if motion.direction is Direction.UP:
         return motion.structural_end_ticks > center.zg_ticks
     if motion.direction is Direction.DOWN:
@@ -245,9 +248,11 @@ def _motion_ends_outside_core(center: Center, motion: CenterMotion) -> bool:
 
 
 def motion_overlaps_core(center: Center, motion: CenterMotion) -> bool:
-    # 一个完成运动即使从中枢内部启动，只要结构终点已经有效离开核心区，就不能继续当作中枢延伸。
-    if _motion_ends_outside_core(center, motion):
-        return False
+    """几何事实：运动包络是否与中枢核心区有交集。
+
+    overlap 与 leave 并不互斥：一段走势可以从中枢内部出发、穿过核心区并最终离开。
+    生命周期调用者必须先判断 leave，再决定是否按 extension 处理。
+    """
     return motion.low_ticks <= center.zg_ticks and motion.high_ticks >= center.zd_ticks
 
 
@@ -259,6 +264,10 @@ def extend_center(center: Center, motion: CenterMotion) -> CenterUpdate:
     if motion.level_rank + 1 != center.level_rank:
         return CenterUpdate(center, result=ValidationResult(False, ("CENTER_LEVEL_MISMATCH",)))
     if not motion_overlaps_core(center, motion):
+        return CenterUpdate(center, result=ValidationResult(False, ("CENTER_STILL_LEAVING",)))
+    # 正常确认/延伸阶段，终点已经离开就不能再把它记作中枢延伸。
+    # RETURNING 是例外：回试已经被确认重新进入中枢，即使该完成运动进一步穿越到另一侧，仍属于原中枢的回归/延伸处理。
+    if center.state is not CenterState.RETURNING and motion_leaves_core(center, motion):
         return CenterUpdate(center, result=ValidationResult(False, ("CENTER_STILL_LEAVING",)))
     updated = replace(
         center,
@@ -286,12 +295,9 @@ def register_leave(center: Center, motion: CenterMotion) -> CenterUpdate:
         return CenterUpdate(center, result=ValidationResult(False, ("CENTER_TIMEFRAME_MISMATCH",)))
     if motion.level_rank + 1 != center.level_rank:
         return CenterUpdate(center, result=ValidationResult(False, ("CENTER_LEVEL_MISMATCH",)))
-    if motion.direction is Direction.UP and motion.structural_end_ticks > center.zg_ticks:
-        state = CenterState.LEAVING_UP
-    elif motion.direction is Direction.DOWN and motion.structural_end_ticks < center.zd_ticks:
-        state = CenterState.LEAVING_DOWN
-    else:
+    if not motion_leaves_core(center, motion):
         return CenterUpdate(center, result=ValidationResult(False, ("MOTION_NOT_OUTSIDE_CENTER",)))
+    state = CenterState.LEAVING_UP if motion.direction is Direction.UP else CenterState.LEAVING_DOWN
     return CenterUpdate(replace(
         center,
         state=state,
