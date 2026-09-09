@@ -1,0 +1,89 @@
+name: 临时全A扫描预览
+
+on:
+  push:
+    paths:
+      - '.github/triggers/full-a-oneoff-preview.txt'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-a-oneoff-preview
+  cancel-in-progress: false
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: trading-skill
+    env:
+      FEISHU_WEBHOOK: ''
+      FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+      FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+      FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
+      TRADING_EQUITY: ${{ secrets.TRADING_EQUITY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install
+        run: |
+          python -m pip install -e '.[dev]'
+          python -m pip install -r ../requirements.txt
+
+      - name: 全A行业与龙头预筛
+        run: |
+          python scripts/collect_full_a_universe.py \
+            --output full-a-results/universe_latest.json \
+            --industry-limit 8 \
+            --leaders-per-industry 3 \
+            --strict
+
+      - name: 候选五周期真实行情
+        run: |
+          python scripts/collect_candidate_bars.py \
+            --universe full-a-results/universe_latest.json \
+            --output full-a-results/candidate_bars_latest.json \
+            --strict
+
+      - name: 正式缠论深度扫描
+        run: |
+          python scripts/run_full_a_scan.py \
+            --universe full-a-results/universe_latest.json \
+            --bars full-a-results/candidate_bars_latest.json \
+            --output full-a-results/scan_latest.json \
+            --stage '临时预览（截至当前已完成5分钟K线）'
+
+      - name: 发送一次性飞书预览
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from trading_skill.a_share_reporting import translate_scan_for_user
+          from trading_skill.notifications import build_stock_scan_report, notify_feishu
+
+          scan = json.loads(Path('full-a-results/scan_latest.json').read_text(encoding='utf-8'))
+          user_scan = translate_scan_for_user(scan)
+          title, body = build_stock_scan_report(user_scan)
+          title = f"{title}｜临时预览（仅本次）"
+          body = "【说明】这是一次性格式/内容预览，使用截至当前已完成的真实5分钟K线，不替代14:30、14:50、16:30正式扫描。\n\n" + body
+          channel = notify_feishu(title, body)
+          print(f'[OK] 一次性全A扫描预览已通过{channel}发送')
+          PY
+
+      - name: Upload preview result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-a-oneoff-preview-${{ github.run_id }}
+          path: trading-skill/full-a-results/*.json
+          if-no-files-found: warn
