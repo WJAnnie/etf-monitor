@@ -24,9 +24,40 @@ V3_METADATA_KEYS = (
     "industry_context_note",
 )
 
+# 腾讯两个 HTTPS 主机在 GitHub Runner 上会出现不同的瞬时 501/连接状态。
+# 只切换同一个前复权接口，不把未复权日线混进长期缠论。
+TENCENT_DAILY_HOSTS = (
+    "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
+    "https://ifzq.gtimg.cn/appstock/app/fqkline/get",
+)
+
 
 _fetch_daily_v2 = v2.fetch_daily_v2
 _collect_one_v2 = v2.collect_one
+
+# 长历史分页会显著增加请求数，降低并发可减少同一数据源瞬时限流/501。
+v2.MAX_WORKERS = min(int(getattr(v2, "MAX_WORKERS", 6)), 4)
+
+
+def _fetch_tencent_daily_page(symbol: str, *, end_date: str, count: int) -> tuple[list[dict], list[str]]:
+    """从腾讯多个等价 HTTPS 主机获取一页前复权日线。"""
+    errors: list[str] = []
+    for url in TENCENT_DAILY_HOSTS:
+        try:
+            response = v2._request(
+                url,
+                params={"param": f"{symbol},day,,{end_date},{count},qfq"},
+                referer="https://gu.qq.com/",
+            )
+            payload = v2._decode_json_or_jsonp(response.text)
+            stock = (payload.get("data") or {}).get(symbol) or {}
+            rows = v2._parse_array(stock.get("qfqday") or stock.get("day") or [])
+            if rows:
+                return rows, errors
+            errors.append(f"{url}:空页")
+        except Exception as exc:
+            errors.append(f"{url}:{exc}")
+    return [], errors
 
 
 def tencent_daily_long(code: str, *, limit: int = v2.DAILY_LIMIT, page_size: int = 500) -> tuple[list[dict], list[str]]:
@@ -45,19 +76,10 @@ def tencent_daily_long(code: str, *, limit: int = v2.DAILY_LIMIT, page_size: int
     for page_no in range(1, max_pages + 1):
         remaining = max(1, limit - len(collected))
         count = min(max(1, page_size), remaining)
-        try:
-            response = v2._request(
-                "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
-                params={"param": f"{symbol},day,,{end_date},{count},qfq"},
-                referer="https://gu.qq.com/",
-            )
-            payload = v2._decode_json_or_jsonp(response.text)
-            stock = (payload.get("data") or {}).get(symbol) or {}
-            page_rows = v2._parse_array(stock.get("qfqday") or stock.get("day") or [])
-        except Exception as exc:
-            warnings.append(f"腾讯前复权分段第{page_no}页:{exc}")
-            break
-
+        page_rows, page_errors = _fetch_tencent_daily_page(symbol, end_date=end_date, count=count)
+        if page_errors:
+            # 如果备用主机最终取到了数据，保留异常作为质量提示但不丢弃整只股票。
+            warnings.extend(f"腾讯前复权分段第{page_no}页:{item}" for item in page_errors)
         if not page_rows:
             break
 
@@ -88,7 +110,7 @@ def tencent_daily_long(code: str, *, limit: int = v2.DAILY_LIMIT, page_size: int
 
 
 def fetch_daily_v3(code: str, market: int) -> tuple[list[dict], str, list[str]]:
-    """V3日线：优先使用腾讯前复权分段长历史，失败时回退V2供应链。"""
+    """V3日线：优先腾讯多主机前复权分段长历史，不足时再回退V2前复权供应链。"""
     warnings: list[str] = []
     rows, tx_warnings = tencent_daily_long(code, limit=v2.DAILY_LIMIT)
     warnings.extend(tx_warnings)
