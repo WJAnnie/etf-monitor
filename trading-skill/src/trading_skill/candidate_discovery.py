@@ -51,6 +51,8 @@ class CandidateRecord:
     change_60d: float | None
     amount: float | None
     turnover_rate: float | None
+    valuation_pe: float | None = None
+    valuation_pb: float | None = None
     industry_code: str | None = None
     industry_name: str | None = None
     industry_state: str | None = None
@@ -134,16 +136,25 @@ def _research_priority(route_scores: Mapping[str, float], stage: PositionStage) 
 CROSS_BORDER_TOKENS = (
     "港股", "恒生", "纳指", "纳斯达克", "标普", "道琼斯", "日经", "德国", "法国", "英国",
     "越南", "印度", "沙特", "东南亚", "巴西", "韩国", "日本", "美国", "全球", "中概",
+    "海外", "亚太", "亚洲", "QDII",
 )
 BOND_TOKENS = (
     "国债", "政金债", "信用债", "债券", "可转债", "公司债", "城投债", "短融", "利率债", "地方债",
+    "纯债", "双债", "债基", "美元债",
 )
 CASH_TOKENS = ("货币", "现金", "同业存单")
-COMMODITY_TOKENS = ("黄金ETF", "白银", "豆粕", "原油ETF", "商品ETF", "能源化工ETF", "有色期货")
+COMMODITY_TOKENS = (
+    "黄金ETF", "白银", "豆粕", "原油ETF", "原油", "商品ETF", "能源化工ETF", "有色期货",
+)
 STRATEGY_TOKENS = ("红利", "低波", "价值", "质量", "自由现金流", "ESG", "央企", "国企", "高股息", "增强")
 BROAD_TOKENS = (
     "中证A500", "A500", "中证A50", "沪深300", "中证500", "中证1000", "中证2000",
     "上证50", "上证180", "创业板50", "创业板", "科创50", "科创100", "北证50", "全指",
+)
+SECTOR_TOKENS = (
+    "白酒", "食品", "消费", "医药", "医疗", "创新药", "证券", "券商", "银行", "保险", "地产",
+    "科技", "互联网", "软件", "通信", "半导体", "芯片", "电子", "军工", "航天", "新能源", "光伏",
+    "电池", "汽车", "机械", "农业", "养殖", "煤炭", "有色", "传媒", "游戏", "人工智能", "机器人",
 )
 
 
@@ -161,6 +172,8 @@ def classify_fund_category(item: MarketSecurity) -> FundCategory:
         return FundCategory.EQUITY_STRATEGY
     if any(token.upper() in text for token in BROAD_TOKENS):
         return FundCategory.EQUITY_BROAD
+    if any(token.upper() in text for token in SECTOR_TOKENS):
+        return FundCategory.EQUITY_SECTOR
     if item.security_type is SecurityType.ETF:
         return FundCategory.EQUITY_SECTOR
     return FundCategory.OTHER
@@ -170,7 +183,7 @@ FAMILY_BENCHMARK_TOKENS = (
     "沪深300", "中证500", "中证1000", "中证2000", "中证A500", "A500", "中证A50",
     "上证50", "科创50", "科创100", "创业板50", "创业板", "北证50", "恒生科技",
     "恒生互联网", "恒生指数", "纳斯达克100", "纳指100", "标普500", "日经225",
-    "红利低波", "中证红利", "黄金", "白银", "国债", "政金债",
+    "红利低波", "中证红利", "黄金", "白银", "原油", "国债", "政金债", "白酒", "美元债",
 )
 
 
@@ -388,6 +401,7 @@ def finalize_candidates(store: Mapping[tuple[str, SecurityType], dict]) -> tuple
             research_priority=_research_priority(route_scores, stage), position_stage=stage,
             data_quality=item.data_quality.value, price=item.price, change_pct=item.change_pct,
             change_60d=item.change_60d, amount=item.amount, turnover_rate=item.turnover_rate,
+            valuation_pe=item.pe, valuation_pb=item.pb,
             industry_code=str(industry.get("code") or "") or None,
             industry_name=str(industry.get("name") or "") or None,
             industry_state=str(industry.get("state") or "") or None,
