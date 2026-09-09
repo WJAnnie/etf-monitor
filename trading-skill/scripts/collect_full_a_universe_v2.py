@@ -179,10 +179,18 @@ def main() -> int:
 
     candidates = []
     for leader in leaders:
-        prefilter = evaluate_prefilter(finance_rows.get(leader.code, []), as_of=now, pe=leader.pe, pb=leader.pb)
+        industry = selected_map.get(leader.industry_code)
+        prospect_theme = industry.prospect_theme if industry else None
+        prefilter = evaluate_prefilter(
+            finance_rows.get(leader.code, []),
+            as_of=now,
+            pe=leader.pe,
+            pb=leader.pb,
+            industry_name=leader.industry_name,
+            prospect_theme=prospect_theme,
+        )
         reasons = list(prefilter.reasons)
         deep_scan_eligible = prefilter.eligible or (prefilter.grade == "D" and not _has_hard_financial_problem(reasons))
-        industry = selected_map.get(leader.industry_code)
         is_cross = leader.industry_code == "CROSS_MARKET"
         candidates.append(
             {
@@ -192,13 +200,17 @@ def main() -> int:
                     if is_cross
                     else industry.selection_reason if industry else ""
                 ),
-                "prospect_theme": industry.prospect_theme if industry else None,
+                "prospect_theme": prospect_theme,
                 "candidate_route": "跨行业结构补充" if is_cross else "前景行业路线",
                 "fundamental_prefilter": {
                     "eligible": prefilter.eligible,
                     "deep_scan_eligible": deep_scan_eligible,
                     "grade": prefilter.grade,
                     "reasons": reasons,
+                    "policy_name": prefilter.policy_name,
+                    "valuation_basis": prefilter.valuation_basis,
+                    "focus_metrics": list(prefilter.focus_metrics),
+                    "external_metrics_required": list(prefilter.external_metrics_required),
                     "annual": asdict(prefilter.annual) if prefilter.annual else None,
                     "interim": asdict(prefilter.interim) if prefilter.interim else None,
                 },
@@ -231,6 +243,8 @@ def main() -> int:
             "prospect_pool_is_primary": True,
             "market_heat_is_secondary": True,
             "industry_is_not_hard_entry_gate": True,
+            "industry_specific_financial_policies": True,
+            "missing_industry_kpis_are_explicit_data_gaps": True,
             "leaders_per_industry": args.leaders_per_industry,
             "duplicate_stocks_removed_before_deep_scan": True,
             "cross_market_not_size_dominated": True,
