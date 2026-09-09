@@ -42,3 +42,16 @@ def test_select_v2_keeps_prospect_pool_primary_and_can_add_dynamic_supplement():
     names = [item.name for item in selected]
     assert names[:2] == ["创新药", "船舶制造"]
     assert len(selected) == 3
+
+
+def test_prospect_selection_diversifies_themes_before_taking_duplicate_subindustries():
+    rows = [
+        row("D1", "创新药", ch60=1),
+        row("D2", "化学制剂", ch60=2),
+        row("D3", "生物制品", ch60=3),
+        row("S1", "船舶制造", ch60=4),
+        row("A1", "其他通信设备", ch60=5),
+    ]
+    selected = select_industries_v2(rows, prospect_limit=3, dynamic_supplement=0)
+    themes = [item.prospect_theme for item in selected]
+    assert themes == ["创新药", "造船与海工", "人工智能基础设施"]
