@@ -164,7 +164,7 @@ HARD_ENTRY_BLOCKERS = {
 
 
 def _enforce_first_buy_permission(candidate: dict) -> None:
-    """一买权限位于硬风控之后；任何周期权限都不能复活被基本面/风险/数据否决的交易。"""
+    """一买权限只能降级风险，绝不能把本来不成熟/低评分/被阻断的交易重新“复活”。"""
     if str(candidate.get("signal") or "") != ChanSignalType.FIRST_BUY.value:
         return
     blockers = set(candidate.get("blockers") or [])
@@ -175,18 +175,43 @@ def _enforce_first_buy_permission(candidate: dict) -> None:
         candidate["action"] = "OBSERVE"
         candidate["recent_signal_note"] = "一买结构存在，但存在基本面/风险/数据/上级结构等硬阻断，仅保留观察"
         return
+
     if timeframe == Timeframe.DAILY.value:
         candidate["action"] = "WAIT_2B"
         candidate["push"] = False
         candidate["recent_signal_note"] = "日线一买已成立，但按策略默认等待标准二买，不直接建立核心仓"
-    elif timeframe == Timeframe.M120.value:
-        candidate["action"] = "PREPARE_BUY"
-        candidate["push"] = True
-        candidate["recent_signal_note"] = "120分钟一买：进入准备/小试仓观察，不等同120分钟标准二买或三买"
-    elif timeframe == Timeframe.M30.value:
+        return
+
+    if timeframe == Timeframe.M30.value:
         candidate["action"] = "OBSERVE"
         candidate["push"] = False
         candidate["recent_signal_note"] = "30分钟一买：反转初期，仅观察；优先等待标准二买/三买和5分钟执行条件"
+        return
+
+    if timeframe == Timeframe.M120.value:
+        # 120分钟一买只允许“准备/小试仓观察”，且必须保留原决策的成熟度与机会等级门槛。
+        grade_ok = str(candidate.get("opportunity") or "") in {"S", "A", "B"}
+        maturity = str(candidate.get("execution_maturity") or "NOT_READY")
+        maturity_ok = maturity in {"TRIGGERED", "PREPARE"}
+        unexpected_blockers = blockers - {"DAILY_FIRST_BUY_WAIT_2B"}
+        if not grade_ok:
+            candidate["action"] = "OBSERVE"
+            candidate["push"] = False
+            candidate["recent_signal_note"] = "120分钟一买结构存在，但机会等级仅C，不允许因一买权限绕过评分门槛"
+            return
+        if not maturity_ok:
+            candidate["action"] = "OBSERVE"
+            candidate["push"] = False
+            candidate["recent_signal_note"] = "120分钟一买结构存在，但当前已离买点过远或执行尚未成熟，仅观察等待新的执行条件"
+            return
+        if unexpected_blockers:
+            candidate["action"] = "OBSERVE"
+            candidate["push"] = False
+            candidate["recent_signal_note"] = "120分钟一买结构存在，但仍有交易阻断项，不能由周期权限重新激活"
+            return
+        candidate["action"] = "PREPARE_BUY"
+        candidate["push"] = True
+        candidate["recent_signal_note"] = "120分钟一买：满足机会等级和距离门槛后仅进入准备/小试仓观察，不等同标准二买或三买"
 
 
 def _major_negative_events(events: list[dict] | tuple[dict, ...]) -> list[dict]:
