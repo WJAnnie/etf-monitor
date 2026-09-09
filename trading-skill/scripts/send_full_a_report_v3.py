@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from trading_skill.a_share_reporting import DeliveryStatus, evaluate_delivery_gate, translate_scan_for_user
+from trading_skill.industry_financial_metrics import summarize_sector_metrics
 from trading_skill.notifications import notify_feishu
 
 
@@ -15,6 +16,11 @@ def _money(value):
         return f"{float(value):,.0f}元"
     except (TypeError, ValueError):
         return str(value)
+
+
+def _signal_cn(value: object) -> str:
+    text = str(value or "暂无")
+    return "标准二买" if text == "二买" else text
 
 
 def _fmt_report(report: dict | None) -> str:
@@ -30,14 +36,22 @@ def _fmt_report(report: dict | None) -> str:
     return "，".join(parts)
 
 
+def _sector_metrics_text(profile: dict, metrics: dict | None) -> str:
+    profile_name = str(profile.get("profile") or "")
+    items = summarize_sector_metrics(profile_name, metrics, limit=4)
+    return "；".join(items) if items else "本期暂未取得足够的行业专属报表变化字段"
+
+
 def _append_industry_intelligence(lines: list[str], universe: dict) -> None:
     selected = list(universe.get("selected_industries") or [])
     reports = universe.get("industry_recent_reports") or {}
     if not selected:
         return
     lines.extend(["", "【重点行业动态与分析口径】"])
-    # 优先刚升温，其次长期前景；控制长度但每天动态替换。
-    selected.sort(key=lambda x: (x.get("rotation_state") == "刚开始升温", bool(x.get("events")), x.get("rank_score", 0)), reverse=True)
+    selected.sort(
+        key=lambda x: (x.get("rotation_state") == "刚开始升温", bool(x.get("events")), x.get("rank_score", 0)),
+        reverse=True,
+    )
     for idx, item in enumerate(selected[:12], 1):
         profile = item.get("analysis_profile") or {}
         events = list(item.get("events") or [])
@@ -52,30 +66,47 @@ def _append_industry_intelligence(lines: list[str], universe: dict) -> None:
         lines.append(f"   经营/报表重点：{'、'.join(ops + bs)}")
         if events:
             for event in events[:2]:
-                lines.append(f"   {event.get('importance','重要')}{event.get('impact','中性')}：{event.get('content','')}")
+                source = event.get("source") or "财经资讯"
+                lines.append(
+                    f"   {event.get('importance','重要')}{event.get('impact','中性')}（{source}）：{event.get('content','')}"
+                )
         else:
             lines.append("   重大利好/利空：最近36小时未匹配到明确重大事件")
         new_reports = reports.get(item.get("name")) or []
         if new_reports:
             for report in new_reports[:2]:
                 lines.append(f"   新财报：{report.get('name')}（{report.get('code')}）｜{_fmt_report(report)}")
+                lines.append(
+                    "   行业专属财报变化：" + _sector_metrics_text(profile, report.get("sector_metrics"))
+                )
 
     paused = list(universe.get("paused_high_industries") or [])
     if paused:
         names = [f"{x.get('name')}（60日{x.get('change_60d','?')}%）" for x in paused[:10]]
-        lines.extend(["", "【高位暂退行业】" + "、".join(names), "说明：暂退不是看空；位置冷却后会自动重新进入重点行业池。"])
+        lines.extend([
+            "",
+            "【高位暂退行业】" + "、".join(names),
+            "说明：暂退不是长期看空；位置和热度冷却后会自动重新进入重点行业池。",
+        ])
 
 
 def _append_watch_candidates(lines: list[str], candidates: list[dict], confirmed_codes: set[str]) -> None:
     watch = [item for item in candidates if item.get("code") not in confirmed_codes and item.get("recent_signal_note")]
     if not watch:
         return
-    watch.sort(key=lambda item: (item.get("signal") == "二买", item.get("timeframe") == "120分钟", -(abs(float(item.get("rise_since_signal_pct") or 999)))), reverse=True)
+    watch.sort(
+        key=lambda item: (
+            item.get("signal") == "二买",
+            item.get("timeframe") == "120分钟",
+            -(abs(float(item.get("rise_since_signal_pct") or 999))),
+        ),
+        reverse=True,
+    )
     lines.extend(["", f"【近期买点观察】共{len(watch)}只，以下列出前10只："])
     for idx, item in enumerate(watch[:10], 1):
         variant = item.get("class2_label") or ""
         lines.append(
-            f"{idx}. {item.get('name')}（{item.get('code')}）｜{item.get('timeframe')} {item.get('signal')}"
+            f"{idx}. {item.get('name')}（{item.get('code')}）｜{item.get('timeframe')} {_signal_cn(item.get('signal'))}"
             f"{('｜'+variant) if variant and '无类二买' not in variant else ''}｜买点后{item.get('rise_since_signal_pct','暂无')}%｜"
             f"{item.get('risk','暂无')}｜{item.get('action','观察')}"
         )
@@ -93,7 +124,7 @@ def build_report(scan: dict, universe: dict, *, stage: str) -> tuple[str, str]:
         "",
         "【统一交易口径】",
         "周线＝战略环境，不单独下单；日线＝中期核心结构；120分钟＝主要中短线买点；30分钟＝战术买点；5分钟＝精细执行确认，不能独立形成选股买入理由。",
-        "正式主买点只从日线、120分钟、30分钟产生；日线一买默认等待二买。标准二买与类二买会分别标注。",
+        "正式主买点只从日线、120分钟、30分钟产生；日线一买默认等待二买。标准二买与类二买分别标注，类二买不替代经典二买定义。",
         "止损跟随产生买入依据的主结构级别；止盈不设固定百分比，按5分钟→30分钟→120分钟→日线→周线卖点逐级处理对应仓位。",
         "",
         "【扫描范围】",
@@ -120,7 +151,7 @@ def build_report(scan: dict, universe: dict, *, stage: str) -> tuple[str, str]:
             f"{idx}. {item.get('name','未知')}（{item.get('code','')}）",
             f"行业：{item.get('industry','暂无')}｜前景主题：{item.get('prospect_theme') or '跨行业结构补充'}｜轮动状态：{item.get('industry_rotation_state','暂无')}",
             f"行业位置：{item.get('leader_rank','暂无')}｜基本面：{item.get('fundamental_grade','暂无')}级",
-            f"缠论主买点：{item.get('timeframe','暂无')} {item.get('signal','暂无')}｜类二买标注：{variant}",
+            f"缠论主买点：{item.get('timeframe','暂无')} {_signal_cn(item.get('signal'))}｜类二买标注：{variant}",
             f"周期职责：{item.get('timeframe_role','暂无')}｜执行权限：{item.get('entry_permission','暂无')}",
             f"买点确认：{item.get('signal_confirmation_time','暂无')}｜买点后涨幅：{item.get('rise_since_signal_pct','暂无')}%",
             f"上级结构：{item.get('parent_structure','暂无')}｜低级别执行：{'通过' if item.get('execution_structure_ok',True) else '暂缓'}",
@@ -134,6 +165,13 @@ def build_report(scan: dict, universe: dict, *, stage: str) -> tuple[str, str]:
             f"行业估值重点：{'、'.join((profile.get('valuation_focus') or [])[:2]) or '按行业画像'}",
             f"新财报：{_fmt_report(item.get('recent_report'))}",
         ])
+        if item.get("recent_report"):
+            lines.append(
+                "行业专属财报变化：" + _sector_metrics_text(profile, item.get("sector_financial_metrics"))
+            )
+        if item.get("execution_latest_states"):
+            states = "；".join(f"{key}:{value}" for key, value in item.get("execution_latest_states", {}).items())
+            lines.append("低级别最新结构：" + states)
         if item.get("execution_conflicts"):
             lines.append("执行冲突：" + "；".join(item.get("execution_conflicts") or []))
     _append_watch_candidates(lines, candidates, confirmed_codes)
