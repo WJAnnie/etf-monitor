@@ -41,37 +41,37 @@ def test_candidate_user_fields_are_chinese():
     assert "30分钟二买" in translated["reason"]
 
 
-def test_1430_gate_requires_current_session_coverage():
+def test_1345_gate_requires_current_session_coverage():
     bars = {
-        "generated_at": datetime(2026, 9, 9, 14, 31, tzinfo=CN_TZ).isoformat(),
-        "symbols": [_symbol("2026-09-09 14:30:00") for _ in range(5)],
+        "generated_at": datetime(2026, 9, 9, 13, 46, tzinfo=CN_TZ).isoformat(),
+        "symbols": [_symbol("2026-09-09 13:45:00") for _ in range(5)],
     }
-    gate = evaluate_delivery_gate(bars, stage="14:30盘中扫描")
+    gate = evaluate_delivery_gate(bars, stage="13:45盘中扫描")
     assert gate.status is DeliveryStatus.READY
     assert gate.current_count == 5
 
 
 def test_old_data_is_treated_as_holiday_and_not_pushed():
     bars = {
-        "generated_at": datetime(2026, 9, 9, 14, 31, tzinfo=CN_TZ).isoformat(),
+        "generated_at": datetime(2026, 9, 9, 13, 46, tzinfo=CN_TZ).isoformat(),
         "symbols": [_symbol("2026-09-08 15:00:00") for _ in range(4)],
     }
-    gate = evaluate_delivery_gate(bars, stage="14:30盘中扫描")
+    gate = evaluate_delivery_gate(bars, stage="13:45盘中扫描")
     assert gate.status is DeliveryStatus.HOLIDAY_SKIP
 
 
 def test_partial_market_data_is_blocked():
     bars = {
-        "generated_at": datetime(2026, 9, 9, 14, 51, tzinfo=CN_TZ).isoformat(),
+        "generated_at": datetime(2026, 9, 9, 14, 46, tzinfo=CN_TZ).isoformat(),
         "symbols": [
-            _symbol("2026-09-09 14:50:00"),
-            _symbol("2026-09-09 14:50:00"),
-            _symbol("2026-09-09 14:50:00"),
+            _symbol("2026-09-09 14:45:00"),
+            _symbol("2026-09-09 14:45:00"),
+            _symbol("2026-09-09 14:45:00"),
             _symbol("2026-09-08 15:00:00"),
             _symbol("2026-09-08 15:00:00"),
         ],
     }
-    gate = evaluate_delivery_gate(bars, stage="14:50收盘前扫描")
+    gate = evaluate_delivery_gate(bars, stage="14:45收盘前扫描")
     assert gate.status is DeliveryStatus.DATA_INCOMPLETE
     assert gate.current_count == 3
 
