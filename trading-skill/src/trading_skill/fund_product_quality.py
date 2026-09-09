@@ -84,19 +84,33 @@ def _num(value: object) -> float | None:
     return number if isfinite(number) else None
 
 
+# 这里既包含长期重点产业的归一名，也包含普通行业的归一名。
+# “普通行业能识别”不等于“自动成为优质行业”；是否当前支持仍由selected_industries决定。
 FUND_THEME_ALIASES: tuple[tuple[tuple[str, ...], str], ...] = (
     (("半导体", "芯片"), "半导体设备与材料"),
-    (("创新药", "生物医药", "生物科技"), "创新药"),
+    (("创新药", "生物医药", "生物科技", "生物制品"), "创新药"),
     (("机器人", "工业母机", "自动化"), "机器人与高端自动化"),
-    (("通信", "算力", "人工智能", "AI", "服务器", "光模块"), "人工智能基础设施"),
-    (("电网", "特高压", "储能"), "电网升级与储能"),
-    (("军工", "航天", "卫星"), "商业航天与军工电子"),
+    (("通信", "算力", "人工智能", "AI", "服务器", "光模块", "印制电路板"), "人工智能基础设施"),
+    (("电网", "特高压", "储能", "综合电力设备"), "电网升级与储能"),
+    (("军工", "航天", "卫星", "航空装备"), "商业航天与军工电子"),
     (("智能驾驶", "汽车电子"), "智能驾驶与汽车电子"),
-    (("医疗器械", "医疗设备"), "医疗器械"),
+    (("医疗器械", "医疗设备", "体外诊断"), "医疗器械"),
     (("核电", "氢能", "风电"), "先进能源装备"),
-    (("新材料", "碳纤维"), "新材料"),
+    (("新材料", "碳纤维", "非金属材料"), "新材料"),
     (("工业软件", "网络安全"), "工业软件与网络安全"),
-    (("船舶", "海工"), "造船与海工"),
+    (("船舶", "海工", "航海装备"), "造船与海工"),
+    (("银行", "国有大型银行", "城商行", "农商行"), "银行"),
+    (("证券", "券商"), "证券"),
+    (("保险"), "保险"),
+    (("煤炭", "焦煤", "动力煤", "焦炭"), "煤炭"),
+    (("有色", "铜", "铝", "稀土"), "有色"),
+    (("农业", "种植", "粮食"), "农业"),
+    (("养殖", "畜牧", "生猪"), "养殖"),
+    (("白酒", "酒类"), "白酒"),
+    (("食品"), "食品"),
+    (("黄金股"), "黄金股"),
+    (("石油", "油气"), "油气"),
+    (("证券保险", "非银金融", "金融"), "金融"),
 )
 
 
@@ -117,9 +131,9 @@ def _selected_theme_names(selected_industries: Iterable[Mapping[str, object]]) -
         name = str(item.get("name") or "").strip()
         if not name:
             continue
-        matched = match_theme(name)
-        if matched:
-            names.add(matched.name)
+        normalized = _fund_theme_name(name)
+        if normalized:
+            names.add(normalized)
     return names
 
 
@@ -145,7 +159,7 @@ def _underlying_state(
             positives.append("底层主题与当前动态重点行业池一致")
             return UnderlyingAssetState.SUPPORTIVE, theme, positives, warnings
         if theme:
-            warnings.append("底层主题当前未进入动态重点行业池，保留观察而非永久排除")
+            warnings.append("底层主题已识别，但当前未进入动态重点行业池；产品可观察，不把行业质量伪装成PASS")
             return UnderlyingAssetState.NEUTRAL, theme, positives, warnings
         warnings.append("行业/主题ETF尚未可靠解析到底层产业主题")
         return UnderlyingAssetState.UNKNOWN, None, positives, warnings
@@ -297,9 +311,16 @@ def assess_fund_product(
     elif special_premium_check:
         warnings.append("跨境/QDII或LOF缺少足够新鲜的折溢价证据，只能WATCH")
 
-    external_asset_context_required = category in {"CROSS_BORDER", "COMMODITY", "BOND"}
+    external_asset_context_required = (
+        category in {"CROSS_BORDER", "COMMODITY", "BOND"}
+        or "CROSS_BORDER_QDII" in risk_tags
+    )
     if external_asset_context_required and not asset_context_complete:
         warnings.append("底层资产专属上下文尚未完成，只能WATCH但可保留技术观察")
+
+    sector_context_not_supportive = category == "EQUITY_SECTOR" and underlying is not UnderlyingAssetState.SUPPORTIVE
+    if sector_context_not_supportive:
+        warnings.append("行业ETF当前没有得到动态重点行业池确认，不能仅凭产品质量直接PASS")
 
     if category == "CASH":
         warnings.append("现金类产品不需要进入多周期缠论深扫，除非任务目标是现金管理")
@@ -327,6 +348,7 @@ def assess_fund_product(
             high_premium
             or missing_premium
             or missing_asset_context
+            or sector_context_not_supportive
             or trading in {TradingQuality.WEAK, TradingQuality.UNKNOWN}
             or product in {ProductQuality.WEAK, ProductQuality.UNKNOWN}
             or underlying in {UnderlyingAssetState.WEAK, UnderlyingAssetState.UNKNOWN}
@@ -336,6 +358,7 @@ def assess_fund_product(
             high_premium
             or missing_premium
             or missing_asset_context
+            or sector_context_not_supportive
             or trading in {TradingQuality.WEAK, TradingQuality.UNKNOWN}
             or product in {ProductQuality.WEAK, ProductQuality.UNKNOWN}
             or underlying is UnderlyingAssetState.UNKNOWN
@@ -355,6 +378,8 @@ def assess_fund_product(
         followups.append("交易前获取新鲜IOPV/估算净值或可靠NAV口径重新计算折溢价")
     if missing_asset_context:
         followups.append("第四步前补充对应宏观/底层资产专属上下文")
+    if sector_context_not_supportive:
+        followups.append("等待该行业进入动态重点行业池或补充更强的行业景气证据")
 
     positives = list(dict.fromkeys(positives))
     warnings = list(dict.fromkeys(warnings))
