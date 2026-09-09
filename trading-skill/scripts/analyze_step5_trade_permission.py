@@ -10,7 +10,6 @@ from typing import Any, Mapping
 from trading_skill.structural_stop import resolve_structural_stop
 from trading_skill.trade_permission import (
     EventEntryState,
-    TradePermissionState,
     evaluate_event_entry_state,
     evaluate_trade_permission,
 )
@@ -87,18 +86,29 @@ def _event_feed_complete(candidate_payload: Mapping[str, Any]) -> bool:
     return rows > 0 and not errors
 
 
+def _selected_industry_names(candidate_payload: Mapping[str, Any]) -> set[str]:
+    return {
+        str(item.get("name") or "").strip()
+        for item in (candidate_payload.get("selected_industries") or [])
+        if str(item.get("name") or "").strip()
+    }
+
+
 def _event_facts(
     quality_row: Mapping[str, Any] | None,
     candidate_payload: Mapping[str, Any],
 ) -> tuple[EventEntryState, list[dict], str]:
     feed_complete = _event_feed_complete(candidate_payload)
     event_map = dict(candidate_payload.get("industry_events") or {})
+    selected_names = _selected_industry_names(candidate_payload)
     security_type = str((quality_row or {}).get("security_type") or "")
 
     if security_type == "STOCK":
         industry = str((quality_row or {}).get("industry_name") or "").strip()
         if not industry:
             return EventEntryState.UNKNOWN, [], "股票真实行业缺失，无法建立行业事件上下文"
+        if industry not in selected_names:
+            return EventEntryState.UNKNOWN, [], f"真实行业{industry}不在本轮已建立事件上下文的行业集合中，不能因event_map无记录而判CLEAR"
         events = list(event_map.get(industry) or [])
         state = evaluate_event_entry_state(events, data_complete=feed_complete)
         return state, events, f"股票行业事件上下文:{industry}"
@@ -106,8 +116,8 @@ def _event_facts(
     category = str((quality_row or {}).get("fund_category") or "")
     family = str((quality_row or {}).get("fund_family") or "").strip()
     if category == "EQUITY_SECTOR":
-        # 只有能够精确对应已解析行业时才使用行业事件；不靠字符串猜测把ETF硬映射到行业。
-        if family and family in event_map:
+        # 只有能够精确对应本轮已建立事件上下文的行业时才使用行业事件；不靠字符串猜测映射ETF。
+        if family and family in selected_names:
             events = list(event_map.get(family) or [])
             state = evaluate_event_entry_state(events, data_complete=feed_complete)
             return state, events, f"行业ETF精确匹配事件上下文:{family}"
@@ -140,14 +150,16 @@ def _load_risk_context(path: Path | None) -> dict:
 
 def _context_for_symbol(context: Mapping[str, Any], item: Mapping[str, Any]) -> dict[str, bool]:
     defaults = {
-        # STEP1已经按本策略配置的证券权限过滤，所以默认只确认“策略证券权限”，不代表券商现金/持仓状态。
-        "account_context_known": True,
-        "account_allows_security": True,
+        # STEP1只证明“本策略允许扫描/研究这个证券”，不等价于真实券商账户权限已核验。
+        "strategy_security_permission_known": True,
+        "strategy_security_allowed": True,
+        "account_context_known": False,
+        "account_allows_security": False,
         # 没有真实持仓/风险账本时绝不假设还有组合风险空间。
         "portfolio_context_known": False,
         "portfolio_allows_new_risk": False,
     }
-    for key in tuple(defaults):
+    for key in ("account_context_known", "account_allows_security", "portfolio_context_known", "portfolio_allows_new_risk"):
         if key in context:
             defaults[key] = bool(context.get(key))
 
@@ -158,7 +170,7 @@ def _context_for_symbol(context: Mapping[str, Any], item: Mapping[str, Any]) -> 
     candidates = (f"{market}:{code}:{security_type}", f"{market}:{code}", code)
     override = next((symbol_map.get(key) for key in candidates if isinstance(symbol_map.get(key), Mapping)), None)
     if isinstance(override, Mapping):
-        for key in tuple(defaults):
+        for key in ("account_context_known", "account_allows_security", "portfolio_context_known", "portfolio_allows_new_risk"):
             if key in override:
                 defaults[key] = bool(override.get(key))
     return defaults
@@ -280,13 +292,16 @@ def main() -> int:
             "facts_are_gates_not_weighted_score": True,
             "step4d_is_not_recomputed": True,
             "step3_pass_is_required_for_automatic_new_entry": True,
-            "step3_watch_requires_review_not_risk_discount": True,
+            "step3_watch_or_unknown_requires_review_not_risk_discount": True,
+            "only_explicit_step3_reject_is_quality_hard_veto": True,
             "major_negative_event_blocks_new_entry": True,
             "missing_event_context_is_not_clear": True,
             "fund_event_scope_must_match_product_exposure_before_clear": True,
+            "unmapped_stock_industry_event_scope_is_unknown": True,
             "structural_stop_must_come_from_matching_step4b_signal": True,
             "fixed_percent_cost_basis_and_atr_are_not_stop_substitutes": True,
-            "step1_strategy_security_permission_is_distinct_from_portfolio_capacity": True,
+            "step1_strategy_security_permission_is_distinct_from_real_account_permission": True,
+            "unknown_account_permission_never_defaults_to_allowed": True,
             "unknown_portfolio_capacity_never_defaults_to_available": True,
             "120m_first_buy_can_only_request_test_entry_permission": True,
             "this_stage_does_not_compute_risk_amount_position_value_or_quantity": True,
@@ -345,7 +360,7 @@ def main() -> int:
         if score_leaks:
             problems.append(f"STEP5A重新引入综合score字段:{len(score_leaks)}")
         if not args.risk_context and allowed:
-            problems.append("未提供真实组合风险上下文时STEP5A错误地产生了自动新开仓许可")
+            problems.append("未提供真实账户/组合风险上下文时STEP5A错误地产生了自动新开仓许可")
         if problems:
             raise SystemExit("；".join(problems))
     return 0
