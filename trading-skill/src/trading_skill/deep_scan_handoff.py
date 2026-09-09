@@ -22,6 +22,7 @@ _QUALITY_RANK = {"STRONG": 3, "ADEQUATE": 2, "WEAK": 1, "UNKNOWN": 0, "": 0}
 class DeepScanCandidate:
     code: str
     name: str
+    market: int | None
     security_type: str
     status: str
     research_priority: str
@@ -38,6 +39,16 @@ class DeepScanCandidate:
         data = asdict(self)
         data["tier"] = self.tier.value
         return data
+
+
+def _market(row: Mapping[str, object]) -> int | None:
+    raw = row.get("market")
+    if raw is None or raw == "":
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def _stock_candidate(row: Mapping[str, object]) -> DeepScanCandidate:
@@ -78,6 +89,7 @@ def _stock_candidate(row: Mapping[str, object]) -> DeepScanCandidate:
     return DeepScanCandidate(
         code=str(row.get("code") or ""),
         name=str(row.get("name") or ""),
+        market=_market(row),
         security_type="STOCK",
         status=status,
         research_priority=priority,
@@ -131,6 +143,7 @@ def _fund_candidate(row: Mapping[str, object]) -> DeepScanCandidate:
     return DeepScanCandidate(
         code=str(row.get("code") or ""),
         name=str(row.get("name") or ""),
+        market=_market(row),
         security_type=str(row.get("security_type") or "FUND"),
         status=status,
         research_priority=priority,
