@@ -178,9 +178,10 @@ def select_industries_v2(
 
 
 # V3：行业池每天轮换，但“长期前景”与“短期热度”职责分离。
-# 位置过高时暂退，不永久删除；当60日涨幅/当日热度冷却后会自动重新具备资格。
+# 高位判断必须体现“当前仍高”，年内涨幅高但近60日已明显冷却时允许重新进入观察。
 def industry_rotation_state(item: IndustryCandidate) -> str:
-    if item.change_60d >= 48 or item.change_ytd >= 75 or (item.change_60d >= 35 and item.change_pct >= 5):
+    ytd_still_extended = item.change_ytd >= 75 and item.change_60d >= 20
+    if item.change_60d >= 48 or ytd_still_extended or (item.change_60d >= 35 and item.change_pct >= 5):
         return "高位暂退"
     if -5 <= item.change_60d <= 22 and item.heat_state in {"升温", "热门"}:
         return "刚开始升温"
@@ -197,7 +198,6 @@ def _early_heat_candidates(material: list[Mapping[str, object]], used: set[str],
         state = industry_rotation_state(item)
         if state != "刚开始升温":
             continue
-        # 刚启动优先：不追60日已经很高的板块，同时要求扩散度/热度已有改善。
         score = item.rank_score + item.low_position_score * 0.08 + min(item.heat_score, 80) * 0.05
         pool.append((score, item))
     pool.sort(key=lambda x: x[0], reverse=True)
@@ -238,7 +238,6 @@ def select_industries_v3(
     early = _early_heat_candidates(material, used, early_heat_limit)
     used.update(item.code for item in early)
 
-    # 最后留少量普通结构补充，防止新行业尚未进入“升温”阈值时完全漏掉。
     dynamic = []
     if dynamic_supplement > 0:
         for item in screen_industries(material, limit=max(40, dynamic_supplement * 8)):
