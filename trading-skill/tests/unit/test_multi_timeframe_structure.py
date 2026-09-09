@@ -57,7 +57,7 @@ def signal(side: str, kind: str, *, hours_ago: float = 1.0):
     }
 
 
-def test_each_timeframe_gets_independent_structure_snapshot():
+def test_each_timeframe_gets_independent_structure_snapshot_without_signal_freshness_logic():
     results = {
         "weekly": result("weekly", trend="UPTREND"),
         "daily": result("daily", trend="CONSOLIDATION", center_state="LEAVING_UP"),
@@ -69,7 +69,9 @@ def test_each_timeframe_gets_independent_structure_snapshot():
     assert book[Timeframe.WEEKLY].phase is StructurePhase.BULL_TREND
     assert book[Timeframe.DAILY].phase is StructurePhase.BREAKOUT_UP
     assert book[Timeframe.M120].phase is StructurePhase.REVERSAL_UP_FORMING
-    assert book[Timeframe.M30].phase is StructurePhase.BULL_PULLBACK
+    # 4B记录最近SELL这个4A事实，但不负责判定它fresh/active，因此不能让它改写当前UPTREND结构分类。
+    assert book[Timeframe.M30].phase is StructurePhase.BULL_TREND
+    assert book[Timeframe.M30].latest_signal.side == "SELL"
     assert book[Timeframe.M5].phase is StructurePhase.CONSOLIDATION
 
 
@@ -104,16 +106,12 @@ def test_downtrend_parent_with_bottom_divergence_is_permissive_not_supportive():
     assert context.allows_immediate_entry is True
 
 
-def test_fresh_parent_sell_blocks_but_stale_sell_does_not_permanently_block():
-    fresh_results = {
+def test_parent_context_does_not_use_signal_age_or_freshness_because_that_belongs_to_step4c():
+    recent_sell = {
         Timeframe.WEEKLY: result("weekly", trend="UPTREND"),
         Timeframe.DAILY: result("daily", trend="UPTREND", signals=[signal("SELL", "FIRST_SELL", hours_ago=2)]),
-        Timeframe.M120: result("120m", trend="UPTREND"),
     }
-    fresh = evaluate_parent_context(fresh_results, primary_timeframe=Timeframe.M120, as_of=NOW)
-    assert fresh.state is ParentContextState.BLOCKED
-
-    stale_results = {
+    old_sell = {
         Timeframe.WEEKLY: result("weekly", trend="UPTREND"),
         Timeframe.DAILY: result(
             "daily",
@@ -127,11 +125,12 @@ def test_fresh_parent_sell_blocks_but_stale_sell_does_not_permanently_block():
                 }
             ],
         ),
-        Timeframe.M120: result("120m", trend="UPTREND"),
     }
-    stale = evaluate_parent_context(stale_results, primary_timeframe=Timeframe.M120, as_of=NOW)
-    assert stale.state is ParentContextState.SUPPORTIVE
-    assert stale.allows_opportunity is True
+    recent = evaluate_parent_context(recent_sell, primary_timeframe=Timeframe.M120, as_of=NOW)
+    old = evaluate_parent_context(old_sell, primary_timeframe=Timeframe.M120, as_of=NOW)
+    assert recent.state is ParentContextState.SUPPORTIVE
+    assert old.state is ParentContextState.SUPPORTIVE
+    # 是否为当前有效SELL、是否过期、是否阻断新交易，由4C生命周期叠加，不在4B按日历时间猜。
 
 
 def test_parent_caution_keeps_opportunity_but_blocks_immediate_entry():
@@ -182,7 +181,7 @@ def test_lower_timeframe_new_buy_can_align_execution_without_becoming_primary_si
     states = dict(lower.child_states)
     assert states[Timeframe.M30] == "ALIGNED:SECOND_BUY"
     assert states[Timeframe.M5] == "ALIGNED:THIRD_BUY"
-    # 这里仅表示执行层与主结构同向，不改变primary_timeframe仍为120m。
+    # 这里只表示执行层与主结构同向，不改变primary_timeframe仍为120m。
 
 
 def test_lower_buy_inside_bearish_or_reversal_structure_is_not_execution_alignment():
