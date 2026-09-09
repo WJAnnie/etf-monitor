@@ -38,12 +38,12 @@ def fake_signal(kind):
 
 def test_recent_second_buy_can_remain_prepare_with_small_extension():
     signal = fake_signal(ChanSignalType.SECOND_BUY)
-    assert execution_maturity_v2(signal, 10.03) == "TRIGGERED"
-    assert execution_maturity_v2(signal, 10.07) == "PREPARE"
-    assert execution_maturity_v2(signal, 10.10) == "WATCH"
+    assert execution_maturity_v2(signal, 10.30) == "TRIGGERED"
+    assert execution_maturity_v2(signal, 10.70) == "PREPARE"
+    assert execution_maturity_v2(signal, 10.90) == "WATCH"
 
 
 def test_first_buy_window_is_tighter_than_second_buy():
     signal = fake_signal(ChanSignalType.FIRST_BUY)
-    assert execution_maturity_v2(signal, 10.05) == "PREPARE"
-    assert execution_maturity_v2(signal, 10.07) == "WATCH"
+    assert execution_maturity_v2(signal, 10.50) == "PREPARE"
+    assert execution_maturity_v2(signal, 10.70) == "WATCH"
