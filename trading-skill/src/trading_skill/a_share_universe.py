@@ -191,7 +191,7 @@ def valid_stock_name(name: str) -> bool:
 def rank_industry_leaders(
     rows: Iterable[Mapping[str, object]], *, industry: IndustryCandidate, limit: int = 3
 ) -> tuple[LeaderCandidate, ...]:
-    clean: list[dict[str, object]] = []
+    provisional: list[dict[str, object]] = []
     for row in rows:
         code = str(row.get("f12") or "").strip()
         name = str(row.get("f14") or "").strip()
@@ -202,10 +202,7 @@ def rank_industry_leaders(
         float_cap = _num(row.get("f21"))
         if not code or not valid_stock_name(name) or price <= 0 or total_cap <= 0:
             continue
-        # 极低流动性股票不进入龙头池，避免“市值大但当天几乎不可交易”的异常值。
-        if amount < 10_000_000:
-            continue
-        clean.append(
+        provisional.append(
             {
                 "code": code,
                 "name": name,
@@ -221,6 +218,17 @@ def rank_industry_leaders(
                 "change_60d": _num(row.get("f24")),
             }
         )
+    if not provisional:
+        return ()
+
+    # 开盘前很多实时列表的成交额/换手率统一为0或“-”。此时不能把整个行业龙头池过滤为空。
+    # 只要板块内已经出现可信实时成交额，就启用1000万元流动性门槛；否则按市值做代理排序，
+    # 等14:30/14:50正式扫描时再自然切回“市值+成交额+换手率”的完整排序。
+    live_liquidity_available = any(float(item["amount"]) >= 10_000_000 for item in provisional)
+    if live_liquidity_available:
+        clean = [item for item in provisional if float(item["amount"]) >= 10_000_000]
+    else:
+        clean = provisional
     if not clean:
         return ()
 
@@ -231,12 +239,15 @@ def rank_industry_leaders(
     scores: list[tuple[float, dict[str, object]]] = []
     for item in clean:
         cap_score = _percentile(caps, float(item["total_cap"]))
-        amount_score = _percentile(amounts, float(item["amount"]))
         float_score = _percentile(floats, float(item["float_cap"]))
-        turnover = float(item["turnover"])
-        liquidity_score = _percentile(turnovers, turnover)
         extension_penalty = max(0.0, float(item["change_60d"]) - 30.0) * 0.35
-        leader_score = 0.45 * cap_score + 0.30 * amount_score + 0.15 * float_score + 0.10 * liquidity_score
+        if live_liquidity_available:
+            amount_score = _percentile(amounts, float(item["amount"]))
+            liquidity_score = _percentile(turnovers, float(item["turnover"]))
+            leader_score = 0.45 * cap_score + 0.30 * amount_score + 0.15 * float_score + 0.10 * liquidity_score
+        else:
+            # 盘前代理排序：不虚构成交活跃度，只使用可验证的市值规模。
+            leader_score = 0.65 * cap_score + 0.35 * float_score
         leader_score -= extension_penalty
         scores.append((leader_score, item))
 
