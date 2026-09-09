@@ -25,7 +25,8 @@ def _breadth(row: Mapping[str, object]) -> float:
 
 
 def _too_high(pct: float, ch60: float, ytd: float) -> bool:
-    return ch60 >= 48 or ytd >= 75 or (ch60 >= 35 and pct >= 5)
+    # 年内涨幅很高并不意味着永远高位；若近60日已经明显冷却，应允许重新进入观察池。
+    return ch60 >= 48 or (ytd >= 75 and ch60 >= 20) or (ch60 >= 35 and pct >= 5)
 
 
 def _heat_state(pct: float, ch60: float, breadth: float) -> str:
