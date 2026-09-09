@@ -82,3 +82,103 @@ def compare_snapshots(current: Mapping[str, object], previous: Mapping[str, obje
         except (TypeError, ValueError, ZeroDivisionError):
             continue
     return out
+
+
+PROFILE_METRIC_PRIORITY: dict[str, tuple[str, ...]] = {
+    "创新药/生物医药": (
+        "monetary_funds_change_pct", "operating_cash_flow_change_pct", "accounts_receivable_change_pct",
+    ),
+    "造船与海工": (
+        "contract_liabilities_change_pct", "construction_in_progress_change_pct", "fixed_asset_change_pct",
+        "inventory_change_pct", "construct_long_asset_cash_change_pct",
+    ),
+    "半导体设备与材料": (
+        "construction_in_progress_change_pct", "construct_long_asset_cash_change_pct", "inventory_change_pct",
+        "contract_liabilities_change_pct", "accounts_receivable_change_pct",
+    ),
+    "AI基础设施/通信硬件": (
+        "contract_liabilities_change_pct", "inventory_change_pct", "construction_in_progress_change_pct",
+        "accounts_receivable_change_pct", "operating_cash_flow_change_pct",
+    ),
+    "机器人与高端自动化": (
+        "contract_liabilities_change_pct", "construction_in_progress_change_pct", "fixed_asset_change_pct",
+        "inventory_change_pct", "accounts_receivable_change_pct",
+    ),
+    "电网设备与储能": (
+        "contract_liabilities_change_pct", "accounts_receivable_change_pct", "operating_cash_flow_change_pct",
+        "construction_in_progress_change_pct",
+    ),
+    "商业航天与军工电子": (
+        "contract_liabilities_change_pct", "inventory_change_pct", "accounts_receivable_change_pct",
+        "construction_in_progress_change_pct",
+    ),
+    "智能驾驶与汽车电子": (
+        "inventory_change_pct", "accounts_receivable_change_pct", "construction_in_progress_change_pct",
+        "operating_cash_flow_change_pct",
+    ),
+    "医疗器械": (
+        "accounts_receivable_change_pct", "inventory_change_pct", "operating_cash_flow_change_pct",
+        "construction_in_progress_change_pct",
+    ),
+    "先进能源装备": (
+        "contract_liabilities_change_pct", "construction_in_progress_change_pct", "fixed_asset_change_pct",
+        "construct_long_asset_cash_change_pct", "operating_cash_flow_change_pct",
+    ),
+    "新材料/周期制造": (
+        "construction_in_progress_change_pct", "fixed_asset_change_pct", "inventory_change_pct",
+        "construct_long_asset_cash_change_pct", "operating_cash_flow_change_pct",
+    ),
+    "工业软件/网络安全": (
+        "contract_liabilities_change_pct", "accounts_receivable_change_pct", "operating_cash_flow_change_pct",
+        "monetary_funds_change_pct",
+    ),
+    "地产/建筑重资产": (
+        "contract_liabilities_change_pct", "accounts_receivable_change_pct", "inventory_change_pct",
+        "operating_cash_flow_change_pct",
+    ),
+}
+
+METRIC_CN = {
+    "fixed_asset_change_pct": "固定资产同比",
+    "construction_in_progress_change_pct": "在建工程同比",
+    "contract_liabilities_change_pct": "合同负债同比",
+    "inventory_change_pct": "存货同比",
+    "accounts_receivable_change_pct": "应收账款同比",
+    "monetary_funds_change_pct": "货币资金同比",
+    "construct_long_asset_cash_change_pct": "资本开支现金同比",
+    "operating_cash_flow_change_pct": "经营现金流同比",
+}
+
+SPECIALIZED_ONLY_PROFILES = {
+    "银行": "银行应重点使用PB、ROE、净息差、不良率、拨备覆盖率和资本充足率；通用制造业资产负债表指标不能替代这些数据。",
+    "券商/资产管理": "券商应重点使用PB、ROE、日均成交额、两融余额、投行业务、资管规模和自营收益；普通制造业订单/在建工程不适合作为核心指标。",
+    "保险": "保险应重点使用P/EV、NBV、保费增速、投资收益率和偿付能力；普通PE和固定资产不能作为主判断。",
+}
+
+
+def summarize_sector_metrics(profile_name: str, metrics: Mapping[str, object] | None, *, limit: int = 4) -> list[str]:
+    """按行业画像挑出真正有意义的财报字段，避免所有行业打印同一套制造业指标。"""
+    if profile_name in SPECIALIZED_ONLY_PROFILES:
+        return [SPECIALIZED_ONLY_PROFILES[profile_name]]
+    if not metrics:
+        return []
+    changes = metrics.get("changes") if isinstance(metrics, Mapping) else None
+    if not isinstance(changes, Mapping):
+        return []
+    priority = PROFILE_METRIC_PRIORITY.get(profile_name, (
+        "operating_cash_flow_change_pct", "accounts_receivable_change_pct", "inventory_change_pct",
+    ))
+    out: list[str] = []
+    for key in priority:
+        value = changes.get(key)
+        if value is None:
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        direction = "增加" if number > 0 else "下降" if number < 0 else "持平"
+        out.append(f"{METRIC_CN.get(key, key)}{number:+.2f}%（{direction}）")
+        if len(out) >= limit:
+            break
+    return out
