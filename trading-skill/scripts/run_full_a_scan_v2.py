@@ -27,6 +27,14 @@ TIMEFRAME_PRIORITY = {
 }
 
 
+def _invalidated_by_later_sell(result, buy_signal, *, as_of) -> bool:
+    """近期买点只有在同级别之后没有更新的正式卖点时才继续有效。"""
+    for sell in base.fresh_signals(result, as_of=as_of, side="SELL"):
+        if sell.confirmation_timestamp > buy_signal.confirmation_timestamp:
+            return True
+    return False
+
+
 def choose_primary_v2(results, *, as_of):
     choices = []
     for timeframe in (Timeframe.DAILY, Timeframe.M120, Timeframe.M30):
@@ -36,6 +44,8 @@ def choose_primary_v2(results, *, as_of):
         for signal in base.fresh_signals(result, as_of=as_of, side="BUY"):
             kind = base.signal_type(signal)
             if kind not in base.BUY_TYPES:
+                continue
+            if _invalidated_by_later_sell(result, signal, as_of=as_of):
                 continue
             choices.append(
                 (
@@ -80,6 +90,7 @@ def analyze_symbol_v2(symbol, industry_map, *, as_of, equity):
     if candidate:
         candidate["prospect_theme"] = symbol.get("prospect_theme")
         candidate["industry_selection_reason"] = symbol.get("industry_selection_reason")
+        candidate["candidate_route"] = symbol.get("candidate_route")
         candidate["fundamental_grade"] = (symbol.get("fundamental_prefilter") or {}).get("grade")
         signal_price_text = str(candidate.get("buy_point") or "").split("～", 1)[0].replace("元", "")
         try:
@@ -88,7 +99,11 @@ def analyze_symbol_v2(symbol, industry_map, *, as_of, equity):
             signal_price = 0.0
         current_price = float(candidate.get("current_price") or 0)
         candidate["rise_since_signal_pct"] = round((current_price / signal_price - 1) * 100, 2) if signal_price > 0 else None
-        candidate["recent_signal_note"] = "近期买点仍在可执行涨幅范围" if candidate.get("execution_maturity") in {"TRIGGERED", "PREPARE"} else "买点已出现，但当前距离买点偏远"
+        candidate["recent_signal_note"] = (
+            "近期买点仍在可执行涨幅范围"
+            if candidate.get("execution_maturity") in {"TRIGGERED", "PREPARE"}
+            else "买点已出现，但当前距离买点偏远"
+        )
         timeframe_key = str(candidate.get("timeframe") or "")
         signal_type = str(candidate.get("signal") or "")
         tf_raw = (analysis.get("timeframes") or {}).get(timeframe_key) or {}
