@@ -10,10 +10,10 @@ from pathlib import Path
 from trading_skill.a_share_bars import CN_TZ
 from trading_skill.domain.enums import Timeframe
 from trading_skill.history_policy import primary_history_gate
-from trading_skill.multi_timeframe_structure import evaluate_lower_context
 from trading_skill.signal_lifecycle import (
     SignalLifecycleStage,
     build_signal_lifecycle_book,
+    evaluate_lower_context,
 )
 from trading_skill.strategy_policy import parent_timeframes, primary_entry_timeframes
 
@@ -65,7 +65,11 @@ def _completed_bar_times(bar_item: dict, *, as_of: datetime) -> dict[Timeframe, 
         for row in list(bar_item.get(key) or []):
             if not bool(row.get("_complete", True)):
                 continue
-            parsed = _parse_time(row.get("time"), as_of=as_of, date_bar_at_close=timeframe in {Timeframe.WEEKLY, Timeframe.DAILY})
+            parsed = _parse_time(
+                row.get("time"),
+                as_of=as_of,
+                date_bar_at_close=timeframe in {Timeframe.WEEKLY, Timeframe.DAILY},
+            )
             if parsed is not None and parsed <= as_of:
                 values.add(parsed)
         out[timeframe] = tuple(sorted(values))
@@ -122,6 +126,7 @@ def analyze_symbol(item: dict, bar_item: dict, *, as_of: datetime) -> dict:
         history_ok, history_reason = primary_history_gate(timeframe.value, history_quality)
         lower = evaluate_lower_context(
             chan,
+            lifecycle_book,
             primary_timeframe=timeframe,
             primary_confirmation=current_buy.confirmation_timestamp,
             as_of=as_of,
@@ -244,6 +249,7 @@ def main() -> int:
             "m5_has_lifecycle_but_never_becomes_primary_trade_cycle": True,
             "history_gate_is_context_not_signal_redefinition": True,
             "parent_current_sell_conflict_is_step4c_context_not_step4b_structure": True,
+            "lower_timeframe_relation_uses_current_lifecycle_signals": True,
             "this_stage_does_not_size_positions_or_emit_final_trade_action": True,
         },
         "input_symbols": len(symbols),
