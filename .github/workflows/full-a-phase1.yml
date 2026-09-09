@@ -111,7 +111,17 @@ jobs:
             --output full-a-results/step4_technical_opportunity_latest.json \
             --strict
 
-      - name: 打印新版STEP1-4D摘要
+      - name: STEP5A 新开仓交易许可验证
+        run: |
+          python -m scripts.analyze_step5_trade_permission \
+            --technical full-a-results/step4_technical_opportunity_latest.json \
+            --quality full-a-results/fundamental_quality_latest.json \
+            --candidates full-a-results/candidate_universe_latest.json \
+            --structure full-a-results/step4_structure_latest.json \
+            --output full-a-results/step5_trade_permission_latest.json \
+            --strict
+
+      - name: 打印新版STEP1-5A摘要
         if: always()
         run: |
           python - <<'PY'
@@ -124,6 +134,7 @@ jobs:
           s4=Path('full-a-results/step4_structure_latest.json')
           l4=Path('full-a-results/step4_signal_lifecycle_latest.json')
           d4=Path('full-a-results/step4_technical_opportunity_latest.json')
+          p5=Path('full-a-results/step5_trade_permission_latest.json')
           if c.exists():
               p=json.loads(c.read_text(encoding='utf-8'))
               s=p.get('summary',{})
@@ -159,6 +170,9 @@ jobs:
           if d4.exists():
               p=json.loads(d4.read_text(encoding='utf-8'))
               print('STEP4D摘要=',p.get('summary'))
+          if p5.exists():
+              p=json.loads(p5.read_text(encoding='utf-8'))
+              print('STEP5A摘要=',p.get('summary'))
           PY
 
       - name: Upload new pipeline validation
