@@ -10,6 +10,7 @@ from typing import Callable
 import requests
 
 from trading_skill.a_share_bars import aggregate_weekly, normalize_complete_m5, parse_cn_time
+from trading_skill.history_policy import classify_history_counts
 
 
 TIMEOUT = 10
@@ -55,6 +56,13 @@ class BarCollection:
     warnings: tuple[str, ...]
 
     def as_dict(self) -> dict:
+        history = classify_history_counts(
+            daily=len(self.daily),
+            weekly=len(self.weekly),
+            m120=len(self.m120),
+            m30=len(self.m30),
+            m5=len(self.m5),
+        ).to_dict()
         return {
             "code": self.identity.code,
             "name": self.identity.name,
@@ -72,6 +80,13 @@ class BarCollection:
                 "m30_history_ok": len(self.m30) >= MIN_M30,
                 "m120_history_ok": len(self.m120) >= MIN_M120,
                 "m5_history_ok": len(self.m5) >= MIN_M5,
+                "history_quality": history,
+                "history_limited": not (
+                    len(self.daily) >= MIN_DAILY
+                    and len(self.m30) >= MIN_M30
+                    and len(self.m120) >= MIN_M120
+                    and len(self.m5) >= MIN_M5
+                ),
                 "price_basis": {
                     "weekly": _basis(self.weekly),
                     "daily": _basis(self.daily),
@@ -333,18 +348,31 @@ def _first_usable(
     normalize: Callable[[list[dict], str], list[dict]],
     minimum: int,
 ) -> tuple[list[dict], str, list[str]]:
+    """Prefer a provider meeting the normal history target, but preserve real short history.
+
+    A new stock/ETF with 3, 27 or 107 daily bars is not a data failure. If no provider reaches
+    the normal minimum, the provider with the largest non-empty real history is returned and
+    downstream history_policy decides which timeframes have enough evidence for a formal signal.
+    """
     warnings: list[str] = []
+    best_short: tuple[list[dict], str] | None = None
     for name, basis, fetcher in providers:
         try:
             raw = fetcher()
             for row in raw:
                 row.setdefault("_adjustment", basis)
             rows = normalize(raw, name)
-            if len(rows) < minimum:
-                raise RuntimeError(f"有效K线仅{len(rows)}条")
-            return rows, name, warnings
+            if len(rows) >= minimum:
+                return rows, name, warnings
+            if rows and (best_short is None or len(rows) > len(best_short[0])):
+                best_short = (rows, name)
+            warnings.append(f"{name}:SHORT_HISTORY:{len(rows)}<{minimum}")
         except Exception as exc:
             warnings.append(f"{name}:{exc}")
+    if best_short is not None:
+        rows, name = best_short
+        warnings.append(f"SHORT_HISTORY_ACCEPTED:{name}:{len(rows)}<{minimum}")
+        return rows, name, warnings
     raise RuntimeError("；".join(warnings))
 
 
@@ -376,8 +404,9 @@ def collect_security_bars(identity: SecurityIdentity, *, now: datetime) -> BarCo
         minimum=MIN_M5,
     )
     m120 = aggregate_m30_to_m120(m30)
+    warnings = list(daily_warnings + m30_warnings + m5_warnings)
     if len(m120) < MIN_M120:
-        raise RuntimeError(f"120分钟历史仅{len(m120)}条")
+        warnings.append(f"120分钟:SHORT_HISTORY:{len(m120)}<{MIN_M120}")
     weekly = aggregate_weekly(daily, now=now)
     return BarCollection(
         identity=identity,
@@ -393,5 +422,5 @@ def collect_security_bars(identity: SecurityIdentity, *, now: datetime) -> BarCo
             "120m": "真实30分钟聚合",
             "5m": m5_source,
         },
-        warnings=tuple(daily_warnings + m30_warnings + m5_warnings),
+        warnings=tuple(warnings),
     )
