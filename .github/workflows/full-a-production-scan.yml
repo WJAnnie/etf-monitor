@@ -72,7 +72,7 @@ jobs:
 
       - name: 前景行业与前五候选预筛
         run: |
-          python scripts/collect_full_a_universe_v2.py \
+          python -m scripts.collect_full_a_universe_v2 \
             --output full-a-results/universe_latest.json \
             --prospect-limit 20 \
             --dynamic-supplement 5 \
@@ -81,14 +81,14 @@ jobs:
 
       - name: 候选长历史五周期行情
         run: |
-          python scripts/collect_candidate_bars_v2.py \
+          python -m scripts.collect_candidate_bars_v2 \
             --universe full-a-results/universe_latest.json \
             --output full-a-results/candidate_bars_latest.json \
             --strict
 
       - name: 近期买点与正式缠论深度扫描
         run: |
-          python scripts/run_full_a_scan_v2.py \
+          python -m scripts.run_full_a_scan_v2 \
             --universe full-a-results/universe_latest.json \
             --bars full-a-results/candidate_bars_latest.json \
             --output full-a-results/scan_latest.json \
@@ -96,7 +96,7 @@ jobs:
 
       - name: 飞书中文报告V2
         run: |
-          python scripts/send_full_a_report_v2.py \
+          python -m scripts.send_full_a_report_v2 \
             --scan full-a-results/scan_latest.json \
             --bars full-a-results/candidate_bars_latest.json \
             --universe full-a-results/universe_latest.json \
