@@ -2,8 +2,7 @@ name: 全A正式买点扫描
 
 on:
   schedule:
-    # 报告口径与启动时点统一为北京时间13:45 / 14:45 / 16:30。
-    # 工作流启动后会先完成全A预筛，候选5分钟行情通常在随后1-2分钟读取，给刚结束K线留出落盘时间。
+    # 报告口径为北京时间13:45 / 14:45 / 16:30。
     - cron: '45 5 * * 1-5'
     - cron: '45 6 * * 1-5'
     - cron: '30 8 * * 1-5'
@@ -34,11 +33,11 @@ jobs:
       run:
         working-directory: trading-skill
     env:
-      FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
-      FEISHU_SECRET: ${{ secrets.FEISHU_SECRET }}
+      FEISHU_WEBHOOK: ''
+      FEISHU_SECRET: ''
       FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
       FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
-      FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
+      FEISHU_CHAT_ID: oc_9df5fff3a390da378fc2714fdb2ea541
       TRADING_EQUITY: ${{ secrets.TRADING_EQUITY }}
 
     steps:
