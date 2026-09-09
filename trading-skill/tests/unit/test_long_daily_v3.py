@@ -83,3 +83,20 @@ def test_tencent_daily_long_short_page_does_not_stop_if_older_history_exists(mon
         "2026-09-07", "2026-09-08", "2026-09-09",
     ]
     assert calls == ["", "2026-09-06", "2026-09-03"]
+
+
+def test_tencent_daily_page_uses_alternate_host_after_primary_501(monkeypatch):
+    calls = []
+
+    def fake_request(url, *, params=None, referer):
+        calls.append(url)
+        if url == mod.TENCENT_DAILY_HOSTS[0]:
+            raise RuntimeError("501 Not Implemented")
+        return _Response({"data": {"sh600000": {"qfqday": [_row("2026-09-09", 10.9)]}}})
+
+    monkeypatch.setattr(mod.v2, "_request", fake_request)
+    rows, errors = mod._fetch_tencent_daily_page("sh600000", end_date="", count=500)
+
+    assert len(rows) == 1
+    assert calls == list(mod.TENCENT_DAILY_HOSTS)
+    assert any("501" in item for item in errors)
