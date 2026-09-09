@@ -14,7 +14,6 @@ from trading_skill.industry_profiles import profile_for
 
 SINA_7X24 = "https://zhibo.sina.com.cn/api/zhibo/feed"
 EASTMONEY_SEARCH = "https://search-api-web.eastmoney.com/search/jsonp"
-# 短语优先于单词计数，避免“订单下降”同时命中“订单”后被误判成中性。
 STRONG_POSITIVE_PHRASES = (
     "政策利好", "大额订单", "订单增长", "新接订单增长", "需求增长", "出口增长", "超预期",
     "纳入医保", "获批上市", "中标重大项目", "提高补贴", "加大支持", "上调指引",
@@ -35,7 +34,6 @@ MAJOR_WORDS = (
     "国务院", "央行", "国家发改委", "工信部", "财政部", "证监会", "医保局", "国资委", "海关总署", "重大", "首次",
     "正式发布", "获批", "中标", "大额订单", "制裁", "禁令", "停产", "召回", "并购", "重组", "回购", "增持", "减持",
 )
-# 这些词是行业分析指标，而不是行业身份词；不得用于把新闻归属到行业。
 GENERIC_NON_IDENTITY_WORDS = {
     "订单", "毛利率", "研发", "研发投入", "资本开支", "固定资产", "在建工程", "存货", "应收账款", "经营现金流",
     "合同负债", "销量", "收入", "利润", "增长", "政策", "价格", "产品", "扩产", "中标", "回购", "增持",
@@ -65,8 +63,7 @@ def _parse_time(value: str, *, as_of: datetime) -> datetime | None:
     raw = str(value or "").strip()
     if not raw:
         return None
-    candidates = [raw, raw.replace("/", "-")]
-    for candidate in candidates:
+    for candidate in (raw, raw.replace("/", "-")):
         try:
             dt = datetime.fromisoformat(candidate)
         except ValueError:
@@ -77,31 +74,52 @@ def _parse_time(value: str, *, as_of: datetime) -> datetime | None:
     return None
 
 
-def fetch_sina_7x24(*, page_size: int = 100, timeout: int = 10) -> list[dict]:
-    response = requests.get(
-        SINA_7X24,
-        params={"page": 1, "page_size": page_size, "zhibo_id": 152},
-        headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152 Safari/537.36",
-            "Referer": "https://finance.sina.com.cn/7x24/",
-            "Accept": "application/json,text/plain,*/*",
-        },
-        timeout=timeout,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    rows = (((payload.get("result") or {}).get("data") or {}).get("feed") or {}).get("list") or []
-    out = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        content = _strip_html(row.get("rich_text"))
-        if not content:
-            continue
-        out.append({
-            "id": row.get("id"), "time": str(row.get("create_time") or ""), "content": content,
-            "source": "新浪财经7x24", "query": None,
-        })
+def fetch_sina_7x24(*, page_size: int = 100, timeout: int = 10, max_pages: int = 8) -> list[dict]:
+    """抓取宽市场快讯并自动翻页。
+
+    新浪接口实际可能忽略较大的 page_size（生产日志曾请求120却只返回10条），所以不能把单页参数
+    当作真实覆盖。这里按页继续抓取、按id/正文去重，直到达到目标数量、遇到空页/重复页或达到页数上限。
+    """
+    target = max(1, int(page_size))
+    out: list[dict] = []
+    seen: set[str] = set()
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152 Safari/537.36",
+        "Referer": "https://finance.sina.com.cn/7x24/",
+        "Accept": "application/json,text/plain,*/*",
+    }
+    for page in range(1, max(1, max_pages) + 1):
+        response = requests.get(
+            SINA_7X24,
+            params={"page": page, "page_size": min(target, 100), "zhibo_id": 152},
+            headers=headers,
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        rows = (((payload.get("result") or {}).get("data") or {}).get("feed") or {}).get("list") or []
+        if not rows:
+            break
+        added = 0
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            content = _strip_html(row.get("rich_text"))
+            if not content:
+                continue
+            fingerprint = str(row.get("id") or "") or re.sub(r"\W+", "", content)[:140]
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            out.append({
+                "id": row.get("id"), "time": str(row.get("create_time") or ""), "content": content,
+                "source": "新浪财经7x24", "query": None,
+            })
+            added += 1
+            if len(out) >= target:
+                return out
+        if added == 0:
+            break
     return out
 
 
@@ -164,7 +182,6 @@ def industry_identity_keywords(industry: Mapping[str, object]) -> tuple[str, ...
 
 
 def _impact(text: str) -> str:
-    # 明确复合短语权重更高；这样“订单下降”“需求下滑”等不会被单个正面词误抵消。
     positive = 3 * sum(1 for phrase in STRONG_POSITIVE_PHRASES if phrase in text)
     negative = 3 * sum(1 for phrase in STRONG_NEGATIVE_PHRASES if phrase in text)
     positive += sum(1 for word in POSITIVE_WORDS if word in text)
