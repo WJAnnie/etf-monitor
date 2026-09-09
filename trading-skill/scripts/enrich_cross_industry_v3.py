@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from scripts.collect_full_a_universe import CN_TZ, _get_json, atomic_json
+from scripts.collect_full_a_universe import CN_TZ, UT, _get_json, atomic_json
 from scripts.collect_full_a_universe_v2 import _has_hard_financial_problem
 from trading_skill.a_share_fundamentals import FinancialPeriod, FundamentalPrefilter
 from trading_skill.industry_intelligence import fetch_sina_7x24, match_industry_events
@@ -14,20 +15,35 @@ from trading_skill.industry_prospects import match_theme
 from trading_skill.sector_fundamental_gate import sector_observation_override
 
 
-STOCK_QUOTE = "https://push2.eastmoney.com/api/qt/stock/get"
+STOCK_QUOTE_HOSTS = (
+    "https://push2.eastmoney.com/api/qt/stock/get",
+    "https://82.push2.eastmoney.com/api/qt/stock/get",
+    "https://73.push2.eastmoney.com/api/qt/stock/get",
+)
 
 
 def fetch_actual_industry(code: str, market: int) -> str | None:
-    payload = _get_json(
-        STOCK_QUOTE,
-        {
-            "secid": f"{int(market)}.{code}",
-            "fields": "f57,f58,f127",
-        },
-    )
-    data = payload.get("data") or {}
-    name = str(data.get("f127") or "").strip()
-    return name or None
+    errors: list[str] = []
+    params = {
+        "secid": f"{int(market)}.{code}",
+        "fields": "f57,f58,f127",
+        "ut": UT,
+        "invt": 2,
+        "fltt": 2,
+    }
+    for host in STOCK_QUOTE_HOSTS:
+        try:
+            payload = _get_json(host, params)
+            data = payload.get("data") or {}
+            name = str(data.get("f127") or "").strip()
+            if name:
+                return name
+            errors.append(f"{host}:未返回细分行业")
+        except Exception as exc:
+            errors.append(f"{host}:{exc}")
+    if errors:
+        raise RuntimeError("；".join(errors))
+    return None
 
 
 def _period(value: dict | None) -> FinancialPeriod | None:
@@ -85,22 +101,13 @@ def apply_cross_industry_context(item: dict, *, actual_industry: str | None, eve
     return out
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--universe", type=Path, default=Path("full-a-results/universe_latest.json"))
-    args = parser.parse_args()
+def resolve_cross_industries(cross: list[dict]) -> tuple[dict[str, str], list[dict], int]:
+    """低并发解析真实行业，并对首轮失败项再串行重试一次。"""
+    resolved: dict[str, str] = {}
+    first_errors: dict[str, str] = {}
+    item_by_code = {str(item.get("code")): item for item in cross}
 
-    payload = json.loads(args.universe.read_text(encoding="utf-8"))
-    candidates = list(payload.get("leader_candidates") or [])
-    cross = [item for item in candidates if item.get("candidate_route") == "跨行业结构补充" or item.get("industry_code") == "CROSS_MARKET"]
-    if not cross:
-        payload["cross_market_industry_enrichment"] = {"requested": 0, "resolved": 0, "unresolved": 0, "errors": []}
-        atomic_json(args.universe, payload)
-        return 0
-
-    resolved_by_code: dict[str, str] = {}
-    errors: list[dict] = []
-    with ThreadPoolExecutor(max_workers=min(5, len(cross))) as pool:
+    with ThreadPoolExecutor(max_workers=min(3, max(1, len(cross)))) as pool:
         futures = {
             pool.submit(fetch_actual_industry, str(item.get("code")), int(item.get("market") or 0)): item
             for item in cross
@@ -111,11 +118,50 @@ def main() -> int:
             try:
                 name = future.result()
                 if name:
-                    resolved_by_code[code] = name
+                    resolved[code] = name
                 else:
-                    errors.append({"code": code, "name": item.get("name"), "error": "未返回细分行业"})
+                    first_errors[code] = "未返回细分行业"
             except Exception as exc:
-                errors.append({"code": code, "name": item.get("name"), "error": str(exc)})
+                first_errors[code] = str(exc)
+
+    retry_codes = [code for code in first_errors if code not in resolved]
+    final_errors: list[dict] = []
+    for index, code in enumerate(retry_codes):
+        if index:
+            time.sleep(0.2)
+        item = item_by_code[code]
+        try:
+            name = fetch_actual_industry(code, int(item.get("market") or 0))
+            if name:
+                resolved[code] = name
+                continue
+            second_error = "未返回细分行业"
+        except Exception as exc:
+            second_error = str(exc)
+        final_errors.append(
+            {
+                "code": code,
+                "name": item.get("name"),
+                "error": f"首轮:{first_errors.get(code)}；重试:{second_error}",
+            }
+        )
+    return resolved, final_errors, len(retry_codes)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--universe", type=Path, default=Path("full-a-results/universe_latest.json"))
+    args = parser.parse_args()
+
+    payload = json.loads(args.universe.read_text(encoding="utf-8"))
+    candidates = list(payload.get("leader_candidates") or [])
+    cross = [item for item in candidates if item.get("candidate_route") == "跨行业结构补充" or item.get("industry_code") == "CROSS_MARKET"]
+    if not cross:
+        payload["cross_market_industry_enrichment"] = {"requested": 0, "resolved": 0, "unresolved": 0, "retried": 0, "errors": []}
+        atomic_json(args.universe, payload)
+        return 0
+
+    resolved_by_code, errors, retried = resolve_cross_industries(cross)
 
     # 跨行业候选数量很小，只拉一次全局7x24流，再按解析后的真实行业做归属；网络故障不阻断结构扫描。
     news_rows = []
@@ -155,14 +201,19 @@ def main() -> int:
         "requested": len(cross),
         "resolved": resolved_count,
         "unresolved": len(cross) - resolved_count,
+        "retried": retried,
         "news_rows": len(news_rows),
         "news_error": news_error,
         "errors": errors,
     }
     payload.setdefault("guardrails", {})["cross_market_real_industry_required_for_new_entry"] = True
     payload["guardrails"]["cross_market_industry_specific_profile"] = True
+    payload["guardrails"]["cross_market_industry_resolution_has_host_fallback_and_retry"] = True
     atomic_json(args.universe, payload)
-    print(f"跨行业候选真实行业补全: {resolved_count}/{len(cross)}，未解析={len(cross)-resolved_count}，资讯={len(news_rows)}")
+    print(
+        f"跨行业候选真实行业补全: {resolved_count}/{len(cross)}，未解析={len(cross)-resolved_count}，"
+        f"重试={retried}，资讯={len(news_rows)}"
+    )
     return 0
 
 
