@@ -212,6 +212,7 @@ def main() -> int:
         assessed.append({
             "code": code,
             "name": item.get("name"),
+            "market": item.get("market"),
             "security_type": "STOCK",
             "source_routes": item.get("source_routes") or [],
             "research_priority": item.get("research_priority"),
@@ -237,6 +238,7 @@ def main() -> int:
         fund_assessed.append({
             "code": item.get("code"),
             "name": item.get("name"),
+            "market": item.get("market"),
             "security_type": item.get("security_type"),
             "source_routes": item.get("source_routes") or [],
             "research_priority": item.get("research_priority"),
@@ -286,6 +288,7 @@ def main() -> int:
             "stale_nav_is_never_used_as_current_premium": True,
             "cross_border_and_lof_require_fresh_premium_evidence_for_pass": True,
             "cash_funds_skip_chan_deep_scan_by_default": True,
+            "market_identity_must_survive_into_step4": True,
             "this_stage_emits_trade_signal": False,
         },
         "summary": {
@@ -347,6 +350,9 @@ def main() -> int:
             problems.append("ETF/LOF产品质量评估数量与候选数量不一致")
         if funds and fund_status_counts.get("PASS", 0) + fund_status_counts.get("WATCH", 0) < max(1, int(len(funds) * 0.8)):
             problems.append("ETF/LOF产品质量模型异常地淘汰了过多候选")
+        identity_missing = [row for row in assessed + fund_assessed if row.get("market") is None]
+        if identity_missing:
+            problems.append(f"STEP3证券市场身份丢失:{len(identity_missing)}")
         if problems:
             raise SystemExit("；".join(problems))
     return 0
