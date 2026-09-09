@@ -17,6 +17,8 @@ V3_METADATA_KEYS = (
     "prospect_theme",
     "industry_name",
     "industry_selection_reason",
+    "industry_context_complete",
+    "industry_context_note",
 )
 
 
@@ -26,7 +28,8 @@ _collect_one_v2 = v2.collect_one
 def merge_v3_metadata(result: dict, source: dict) -> dict:
     """把V3预筛阶段的行业/财报/估值上下文完整带到多周期行情结果。
 
-    K线采集只负责行情，不得把上游已经确定的行业画像、轮动状态、近期财报或事件上下文丢失。
+    K线采集只负责行情，不得把上游已经确定的行业画像、轮动状态、近期财报、事件上下文，
+    以及跨行业真实行业解析状态丢失。后者直接参与“未解析真实行业时禁止新开仓”的安全门。
     """
     merged = dict(result)
     for key in V3_METADATA_KEYS:
