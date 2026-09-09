@@ -11,7 +11,7 @@ class TradeState(StrEnum):
     PLANNED="PLANNED"; OPENING="OPENING"; ACTIVE="ACTIVE"; PYRAMIDING="PYRAMIDING"; PROFIT_PROTECTED="PROFIT_PROTECTED"; REDUCING="REDUCING"; CLOSED="CLOSED"
 class ThesisState(StrEnum): ACTIVE="ACTIVE"; INVALIDATED="INVALIDATED"; PROMOTED="PROMOTED"; CLOSED="CLOSED"
 class ProfitLockState(StrEnum): NONE="NONE"; INITIAL="INITIAL"; PROTECTED="PROTECTED"; LOCKED="LOCKED"; STRUCTURAL_EXIT_PENDING="STRUCTURAL_EXIT_PENDING"
-class BreakState(StrEnum): WICK_BREAK="WICK_BREAK"; CLOSE_BREAK="CLOSE_BREAK"; BREAK_AND_FAILED_RECLAIM="BREAK_AND_FAILED_RECLAIM"
+class BreakState(StrEnum): LOWER_LEVEL_WARNING="LOWER_LEVEL_WARNING"; WICK_BREAK="WICK_BREAK"; CLOSE_BREAK="CLOSE_BREAK"; BREAK_AND_FAILED_RECLAIM="BREAK_AND_FAILED_RECLAIM"
 class ReentryState(StrEnum): INACTIVE="INACTIVE"; WATCH_NEW_STRUCTURE="WATCH_NEW_STRUCTURE"; ELIGIBLE="ELIGIBLE"; READY="READY"; EXECUTED="EXECUTED"; LOCKED="LOCKED"
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +25,12 @@ class Tranche: id:str; value:float; entry_price:float; thesis:EntryThesis
 class Trade: id:str; symbol:str; state:TradeState; tranches:tuple[Tranche,...]; created_at:datetime; revision:int=1
 @dataclass(frozen=True, slots=True)
 class Protection: tranche_id:str; level:StopLevel; price_ticks:int; source_structure_id:str; revision:int=1
+@dataclass(frozen=True, slots=True)
+class ProtectionEvaluation:
+    state:BreakState|None
+    confirmed_failure:bool
+    exit_managed_tranche:bool
+    reason:str
 @dataclass(frozen=True, slots=True)
 class SellScope:
     affected_tranche_ids:tuple[str,...]
@@ -60,6 +66,34 @@ def raise_protection(current:Protection|None, *, tranche_id:str, level:StopLevel
     if not new_structure_confirmed: raise ValueError("PROTECTION_REQUIRES_NEW_STRUCTURE")
     if current and price_ticks < current.price_ticks: return current
     return Protection(tranche_id,level,price_ticks,source_structure_id,1 if current is None else current.revision+1)
+
+
+def evaluate_protection_break(
+    protection:Protection,
+    *,
+    observed_level:StopLevel,
+    low_ticks:int,
+    close_ticks:int,
+    bar_complete:bool,
+    reclaim_attempt_completed:bool=False,
+    reclaim_close_ticks:int|None=None,
+) -> ProtectionEvaluation:
+    """结构止损必须由该笔仓位自己的管理周期确认，低周期噪声只能预警。
+
+    例如L120保护位：5分钟/30分钟跌破只能提前预警；完成的120分钟K线收在保护位下方才构成
+    CLOSE_BREAK。若之后完成的同级别反抽仍无法收回保护位，则升级为BREAK_AND_FAILED_RECLAIM。
+    """
+    threshold=protection.price_ticks
+    breached=low_ticks<threshold or close_ticks<threshold
+    if not breached:
+        return ProtectionEvaluation(None,False,False,"保护位未被触及")
+    if observed_level is not protection.level or not bar_complete:
+        return ProtectionEvaluation(BreakState.LOWER_LEVEL_WARNING,False,False,"低于管理周期的跌破或未完成K线只做预警，不直接否定主结构")
+    if reclaim_attempt_completed and reclaim_close_ticks is not None and reclaim_close_ticks<threshold:
+        return ProtectionEvaluation(BreakState.BREAK_AND_FAILED_RECLAIM,True,True,"同管理周期跌破后反抽仍无法收回保护位，确认该笔交易逻辑失效")
+    if close_ticks<threshold:
+        return ProtectionEvaluation(BreakState.CLOSE_BREAK,True,True,"同管理周期完成K线收盘跌破结构保护位，确认该笔仓位需要退出")
+    return ProtectionEvaluation(BreakState.WICK_BREAK,False,False,"同管理周期仅影线跌破、收盘收回，先预警并等待后续确认")
 
 
 def map_sell_scope(trade:Trade, *, timeframe:str, sell_class:int) -> SellScope:
