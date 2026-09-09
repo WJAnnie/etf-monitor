@@ -10,7 +10,7 @@ from trading_skill.candidate_discovery import (
 from trading_skill.market_universe import DataQuality, MarketSecurity, SecurityType, StockBoard
 
 
-def sec(code, *, name=None, security_type=SecurityType.STOCK, market=0, amount=100_000_000, turnover=3.0, ch60=10.0, day=1.0):
+def sec(code, *, name=None, security_type=SecurityType.STOCK, market=0, amount=100_000_000, turnover=3.0, ch60=10.0, day=1.0, pe=None, pb=None):
     return MarketSecurity(
         code=code,
         name=name or code,
@@ -30,6 +30,8 @@ def sec(code, *, name=None, security_type=SecurityType.STOCK, market=0, amount=1
         data_quality=DataQuality.COMPLETE if ch60 is not None else DataQuality.PARTIAL,
         missing_fields=() if ch60 is not None else ("change_60d",),
         source="test",
+        pe=pe,
+        pb=pb,
     )
 
 
@@ -46,6 +48,17 @@ def test_high_position_is_tagged_not_hard_excluded():
     assert "000001" in out
     assert out["000001"].position_stage is PositionStage.OVERHEATED
     assert CandidateRoute.MARKET_STRENGTH.value in out["000001"].source_routes
+
+
+def test_candidate_reuses_stock_valuation_from_universe():
+    items = [
+        sec("000001", amount=500_000_000, turnover=5, ch60=15, day=2, pe=32.0, pb=4.1),
+        sec("000002", amount=200_000_000, turnover=3, ch60=8, day=1),
+    ]
+    store = discover_stock_candidates(items, score_floor=0, market_strength_cap=10, early_turn_cap=10)
+    out = {x.code: x for x in finalize_candidates(store)}
+    assert out["000001"].valuation_pe == 32.0
+    assert out["000001"].valuation_pb == 4.1
 
 
 def test_missing_60d_history_cannot_fake_market_strength():
@@ -88,3 +101,16 @@ def test_funds_are_compared_inside_asset_categories_not_one_mixed_ranking():
     add_fund_candidates(store, funds, cap=10, score_floor=0)
     categories = {x.fund_category for x in finalize_candidates(store)}
     assert {c.value for c in (FundCategory.EQUITY_BROAD, FundCategory.BOND, FundCategory.COMMODITY, FundCategory.CROSS_BORDER)} <= categories
+
+
+def test_lofs_are_classified_by_underlying_asset_instead_of_all_other():
+    samples = [
+        (sec("160216", name="国泰商品LOF", security_type=SecurityType.LOF), FundCategory.OTHER),
+        (sec("160723", name="嘉实原油LOF", security_type=SecurityType.LOF), FundCategory.COMMODITY),
+        (sec("161125", name="标普油气LOF", security_type=SecurityType.LOF), FundCategory.CROSS_BORDER),
+        (sec("161716", name="招商双债LOF", security_type=SecurityType.LOF), FundCategory.BOND),
+        (sec("161725", name="招商白酒LOF", security_type=SecurityType.LOF), FundCategory.EQUITY_SECTOR),
+        (sec("164906", name="海外科技LOF", security_type=SecurityType.LOF), FundCategory.CROSS_BORDER),
+    ]
+    for item, expected in samples:
+        assert classify_fund_category(item) is expected
