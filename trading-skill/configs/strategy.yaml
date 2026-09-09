@@ -1,4 +1,4 @@
-version: 1.2.0
+version: 1.3.0
 
 timeframes:
   strategic_context: [weekly]
@@ -39,6 +39,23 @@ primary_signal_priority:
   30m_first_buy: 40
   class2_only_tiebreak_bonus: true
 
+history_evidence:
+  target_bars:
+    daily: 1200
+    30m: 1600
+    120m: 400
+    5m: 1200
+  long_term_tiers:
+    complete: 日线至少1000根且周线至少200根
+    sufficient: 日线至少500根且周线至少100根
+    limited: 日线至少250根且周线至少60根
+  primary_minimums:
+    daily: 日线至少250根且周线至少60根
+    120m: 120分钟至少200根、日线至少120根、周线至少40根
+    30m: 30分钟至少500根、120分钟至少200根、日线至少120根
+  short_history_policy: 历史不足时保留结构观察，但不得把有限历史包装成满足该主买点周期的完整证据
+  five_minute_never_primary: true
+
 execution_policy:
   lower_timeframe_sell_may_pause_new_entry: true
   lower_timeframe_latest_signal_wins: true
@@ -64,6 +81,36 @@ position_policy:
   add_requires_new_confirmed_structure: true
   fixed_percent_take_profit: false
   staged_sell_by_timeframe_and_sell_class: true
+
+initial_tranche:
+  basis: 风险模型先计算该股票允许仓位，首笔只占允许仓位的一部分
+  S: 0.35
+  A: 0.30
+  B: 0.20
+  C: 0.00
+
+scale_in_policy:
+  trigger_signals: [SECOND_BUY, THIRD_BUY]
+  first_buy_can_add_existing_position: false
+  class2_label_alone_can_add: false
+  require_new_confirmed_structure: true
+  require_opportunity_at_least_B: true
+  require_risk_below_L2: true
+  require_context_complete: true
+  require_protection_not_loosened: true
+  mechanical_average_down_allowed: false
+  roles:
+    30m: TACTICAL
+    120m: CONFIRMATION
+    daily: CORE
+    later_confirmed_structure: TREND_ADD
+  remaining_capacity_fraction:
+    TACTICAL: 0.30
+    CONFIRMATION: 0.40
+    CORE: 0.50
+    TREND_ADD: 0.25
+  max_trend_add_layers: 1
+  note: 加仓比例针对风险模型算出的剩余允许仓位，不针对账户总资产；始终受单股、行业、主题和组合风险上限约束
 
 sell_hierarchy:
   5m: 仅处理试仓/战术仓
