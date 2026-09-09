@@ -28,6 +28,19 @@ class CenterMotion:
     completed: bool = True
     source_object_id: str | None = None
 
+    @property
+    def structural_end_ticks(self) -> int:
+        """运动结构终点。
+
+        当前基础 motion 由已完成线段归一化而来；向上线段的结构终点取上端，向下取下端。
+        后续若底层线段暴露显式 endpoint，可在这里无缝替换而不改中枢生命周期。
+        """
+        if self.direction is Direction.UP:
+            return self.high_ticks
+        if self.direction is Direction.DOWN:
+            return self.low_ticks
+        return self.high_ticks
+
     @classmethod
     def from_segment(
         cls, segment: NormalizedSegment, *, source_timeframe: Timeframe, level_rank: int = 0
@@ -223,7 +236,18 @@ def _unresolved_center(motions: tuple[CenterMotion, ...], *, symbol: str, target
     )
 
 
+def _motion_ends_outside_core(center: Center, motion: CenterMotion) -> bool:
+    if motion.direction is Direction.UP:
+        return motion.structural_end_ticks > center.zg_ticks
+    if motion.direction is Direction.DOWN:
+        return motion.structural_end_ticks < center.zd_ticks
+    return False
+
+
 def motion_overlaps_core(center: Center, motion: CenterMotion) -> bool:
+    # 一个完成运动即使从中枢内部启动，只要结构终点已经有效离开核心区，就不能继续当作中枢延伸。
+    if _motion_ends_outside_core(center, motion):
+        return False
     return motion.low_ticks <= center.zg_ticks and motion.high_ticks >= center.zd_ticks
 
 
@@ -258,9 +282,13 @@ def extend_center(center: Center, motion: CenterMotion) -> CenterUpdate:
 def register_leave(center: Center, motion: CenterMotion) -> CenterUpdate:
     if not motion.completed:
         return CenterUpdate(center, result=ValidationResult(False, ("LEAVE_NOT_CONFIRMED",)))
-    if motion.low_ticks > center.zg_ticks:
+    if motion.source_timeframe is not center.source_timeframe:
+        return CenterUpdate(center, result=ValidationResult(False, ("CENTER_TIMEFRAME_MISMATCH",)))
+    if motion.level_rank + 1 != center.level_rank:
+        return CenterUpdate(center, result=ValidationResult(False, ("CENTER_LEVEL_MISMATCH",)))
+    if motion.direction is Direction.UP and motion.structural_end_ticks > center.zg_ticks:
         state = CenterState.LEAVING_UP
-    elif motion.high_ticks < center.zd_ticks:
+    elif motion.direction is Direction.DOWN and motion.structural_end_ticks < center.zd_ticks:
         state = CenterState.LEAVING_DOWN
     else:
         return CenterUpdate(center, result=ValidationResult(False, ("MOTION_NOT_OUTSIDE_CENTER",)))
