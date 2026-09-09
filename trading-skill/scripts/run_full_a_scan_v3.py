@@ -10,7 +10,6 @@ from trading_skill.production_chan_v3 import analyze_production_chan_v3
 from trading_skill.strategy_policy import (
     TIMEFRAME_POLICY,
     entry_permission,
-    entry_priority,
     parent_timeframes,
     primary_entry_timeframes,
 )
@@ -19,10 +18,48 @@ from trading_skill.strategy_policy import (
 base = v2.base
 _original_v2_analyze_symbol = base.analyze_symbol
 
-base.FRESHNESS = {
-    timeframe: timedelta(days=policy.freshness_days)
-    for timeframe, policy in TIMEFRAME_POLICY.items()
+# 仅为旧V3回归兼容保留。正式STEP4C已改用完成K线根数管理生命周期，
+# 这些自然时间窗口不得再反向进入strategy_policy或新版主链。
+LEGACY_FRESHNESS_DAYS: dict[Timeframe, float] = {
+    Timeframe.WEEKLY: 60.0,
+    Timeframe.DAILY: 30.0,
+    Timeframe.M120: 15.0,
+    Timeframe.M30: 5.0,
+    Timeframe.M5: 4.0 / 24.0,
 }
+base.FRESHNESS = {
+    timeframe: timedelta(days=days)
+    for timeframe, days in LEGACY_FRESHNESS_DAYS.items()
+}
+
+# 旧V3选择主买点时维持原有回归顺序，但用显式类别顺序表达，
+# 不再把100/95/90等伪精确综合分污染正式策略层。
+LEGACY_PRIMARY_ORDER: tuple[tuple[Timeframe, ChanSignalType], ...] = (
+    (Timeframe.DAILY, ChanSignalType.SECOND_BUY),
+    (Timeframe.DAILY, ChanSignalType.THIRD_BUY),
+    (Timeframe.M120, ChanSignalType.SECOND_BUY),
+    (Timeframe.M120, ChanSignalType.THIRD_BUY),
+    (Timeframe.M30, ChanSignalType.SECOND_BUY),
+    (Timeframe.M30, ChanSignalType.THIRD_BUY),
+    (Timeframe.M120, ChanSignalType.FIRST_BUY),
+    (Timeframe.DAILY, ChanSignalType.FIRST_BUY),
+    (Timeframe.M30, ChanSignalType.FIRST_BUY),
+)
+
+
+def _legacy_order_index(timeframe: Timeframe, kind: ChanSignalType) -> int | None:
+    try:
+        return LEGACY_PRIMARY_ORDER.index((timeframe, kind))
+    except ValueError:
+        return None
+
+
+def _legacy_class2_tie_break(signal) -> tuple[bool, bool]:
+    extended = set(getattr(signal, "extended_types", ()) or ())
+    return (
+        ChanSignalType.STRONG_CLASS2_BUY in extended,
+        ChanSignalType.CENTER_CLASS2_BUY in extended,
+    )
 
 
 def _analyze_with_extensions(raw_bars, *, tick_size, as_of):
@@ -33,7 +70,7 @@ base.analyze_production_chan = _analyze_with_extensions
 
 
 def choose_primary_v3(results, *, as_of):
-    """从日线/120分钟/30分钟正式买点中选一个主逻辑；周期和买点类别使用同一优先矩阵。"""
+    """旧V3兼容选择器：按显式类别顺序选主逻辑，不使用综合分。"""
     choices = []
     for timeframe in primary_entry_timeframes():
         result = results.get(timeframe)
@@ -45,14 +82,19 @@ def choose_primary_v3(results, *, as_of):
                 continue
             if v2._invalidated_by_later_sell(result, signal, as_of=as_of):
                 continue
-            priority = entry_priority(timeframe, kind, signal.extended_types)
-            if priority <= 0:
+            order_index = _legacy_order_index(timeframe, kind)
+            if order_index is None:
                 continue
-            choices.append((priority, signal.confirmation_timestamp, timeframe, signal))
+            choices.append((order_index, timeframe, signal))
     if not choices:
         return None
-    choices.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    _, _, timeframe, signal = choices[0]
+
+    best_order = min(item[0] for item in choices)
+    same_class = [item for item in choices if item[0] == best_order]
+    _, timeframe, signal = max(
+        same_class,
+        key=lambda item: (_legacy_class2_tie_break(item[2]), item[2].confirmation_timestamp),
+    )
     return timeframe, signal
 
 
