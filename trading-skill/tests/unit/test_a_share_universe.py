@@ -28,3 +28,17 @@ def test_leader_ranking_excludes_st_and_uses_market_cap_and_liquidity():
     leaders = rank_industry_leaders(rows, industry=industry, limit=3)
     assert [x.name for x in leaders] == ["龙头甲", "龙头乙"]
     assert leaders[0].leader_rank == 1
+
+
+def test_leader_ranking_uses_market_cap_fallback_when_premarket_liquidity_is_blank():
+    industry = screen_industries(
+        [{"f12": "BK1", "f14": "细分行业", "f3": 0, "f184": 0, "f24": -5, "f25": 0, "f104": 0, "f105": 0}],
+        limit=1,
+    )[0]
+    rows = [
+        {"f12": "600010", "f13": 1, "f14": "盘前龙头甲", "f2": 12, "f3": "-", "f6": "-", "f8": "-", "f20": 900e8, "f21": 700e8, "f24": 5},
+        {"f12": "600011", "f13": 1, "f14": "盘前龙头乙", "f2": 8, "f3": "-", "f6": 0, "f8": 0, "f20": 500e8, "f21": 400e8, "f24": 4},
+    ]
+    leaders = rank_industry_leaders(rows, industry=industry, limit=3)
+    assert [x.name for x in leaders] == ["盘前龙头甲", "盘前龙头乙"]
+    assert leaders[0].amount == 0
