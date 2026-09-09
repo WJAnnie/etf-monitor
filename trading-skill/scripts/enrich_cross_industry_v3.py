@@ -6,7 +6,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from scripts.collect_full_a_universe import CN_TZ, UT, _get_json, atomic_json
+import requests
+
+from scripts.collect_full_a_universe import CN_TZ, UT, atomic_json
 from scripts.collect_full_a_universe_v2 import _has_hard_financial_problem
 from trading_skill.a_share_fundamentals import FinancialPeriod, FundamentalPrefilter
 from trading_skill.industry_intelligence import fetch_sina_7x24, match_industry_events
@@ -20,6 +22,30 @@ STOCK_QUOTE_HOSTS = (
     "https://82.push2.eastmoney.com/api/qt/stock/get",
     "https://73.push2.eastmoney.com/api/qt/stock/get",
 )
+INDUSTRY_LOOKUP_TIMEOUT = 3.5
+
+
+def _fetch_industry_payload(host: str, params: dict) -> dict:
+    """行业补全使用独立的快速请求策略，不继承行情采集器的三次长重试。
+
+    这里是风险上下文增强而不是主行情链：网络故障应快速失败并安全降级，不能拖住13:45/14:45报告。
+    """
+    response = requests.get(
+        host,
+        params=params,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152 Safari/537.36",
+            "Accept": "application/json,text/plain,*/*",
+            "Referer": "https://quote.eastmoney.com/",
+            "Connection": "close",
+        },
+        timeout=INDUSTRY_LOOKUP_TIMEOUT,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise RuntimeError("返回内容不是JSON对象")
+    return payload
 
 
 def fetch_actual_industry(code: str, market: int) -> str | None:
@@ -33,7 +59,7 @@ def fetch_actual_industry(code: str, market: int) -> str | None:
     }
     for host in STOCK_QUOTE_HOSTS:
         try:
-            payload = _get_json(host, params)
+            payload = _fetch_industry_payload(host, params)
             data = payload.get("data") or {}
             name = str(data.get("f127") or "").strip()
             if name:
@@ -102,12 +128,12 @@ def apply_cross_industry_context(item: dict, *, actual_industry: str | None, eve
 
 
 def resolve_cross_industries(cross: list[dict]) -> tuple[dict[str, str], list[dict], int]:
-    """低并发解析真实行业，并对首轮失败项再串行重试一次。"""
+    """低并发快速解析真实行业，并对首轮失败项再串行重试一次。"""
     resolved: dict[str, str] = {}
     first_errors: dict[str, str] = {}
     item_by_code = {str(item.get("code")): item for item in cross}
 
-    with ThreadPoolExecutor(max_workers=min(3, max(1, len(cross)))) as pool:
+    with ThreadPoolExecutor(max_workers=min(4, max(1, len(cross)))) as pool:
         futures = {
             pool.submit(fetch_actual_industry, str(item.get("code")), int(item.get("market") or 0)): item
             for item in cross
@@ -128,7 +154,7 @@ def resolve_cross_industries(cross: list[dict]) -> tuple[dict[str, str], list[di
     final_errors: list[dict] = []
     for index, code in enumerate(retry_codes):
         if index:
-            time.sleep(0.2)
+            time.sleep(0.08)
         item = item_by_code[code]
         try:
             name = fetch_actual_industry(code, int(item.get("market") or 0))
@@ -208,7 +234,7 @@ def main() -> int:
     }
     payload.setdefault("guardrails", {})["cross_market_real_industry_required_for_new_entry"] = True
     payload["guardrails"]["cross_market_industry_specific_profile"] = True
-    payload["guardrails"]["cross_market_industry_resolution_has_host_fallback_and_retry"] = True
+    payload["guardrails"]["cross_market_industry_resolution_has_fast_host_fallback_and_retry"] = True
     atomic_json(args.universe, payload)
     print(
         f"跨行业候选真实行业补全: {resolved_count}/{len(cross)}，未解析={len(cross)-resolved_count}，"
