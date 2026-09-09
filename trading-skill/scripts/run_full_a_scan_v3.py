@@ -69,6 +69,7 @@ def _parse_iso(value: str | None):
     if not value:
         return None
     from datetime import datetime
+
     try:
         return datetime.fromisoformat(str(value))
     except ValueError:
@@ -85,23 +86,40 @@ def _child_execution_timeframes(primary: str) -> tuple[str, ...]:
     return ()
 
 
-def _execution_structure_ok(analysis: dict, candidate: dict) -> tuple[bool, list[str]]:
+def _latest_child_signal_after(raw: dict, confirmation) -> dict | None:
+    candidates = []
+    for signal in raw.get("signals") or []:
+        when = _parse_iso(signal.get("confirmation_timestamp"))
+        if when is None or when <= confirmation:
+            continue
+        candidates.append((when, signal))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda pair: pair[0])
+    return candidates[-1][1]
+
+
+def _execution_structure_ok(analysis: dict, candidate: dict) -> tuple[bool, list[str], dict[str, str]]:
+    """低级别只看“当前最新正式结构”，不能让历史上一笔卖点永久阻断高周期买点。"""
     confirmation = _parse_iso(candidate.get("signal_confirmation_time"))
     if confirmation is None:
-        return True, []
-    conflicts = []
+        return True, [], {}
+
+    conflicts: list[str] = []
+    latest_states: dict[str, str] = {}
     for child in _child_execution_timeframes(str(candidate.get("timeframe") or "")):
         raw = (analysis.get("timeframes") or {}).get(child) or {}
-        later_sells = []
-        for signal in raw.get("signals") or []:
-            if signal.get("side") != "SELL":
-                continue
-            when = _parse_iso(signal.get("confirmation_timestamp"))
-            if when is not None and when > confirmation:
-                later_sells.append(signal)
-        if later_sells:
-            conflicts.append(f"{TIMEFRAME_POLICY[Timeframe(child)].chinese_name}出现更新的正式卖点")
-    return not conflicts, conflicts
+        latest = _latest_child_signal_after(raw, confirmation)
+        if latest is None:
+            latest_states[child] = "无更新正式买卖点"
+            continue
+        side = str(latest.get("side") or "")
+        labels = list(latest.get("types") or []) + list(latest.get("extended_types") or [])
+        latest_states[child] = f"{side}:{'/'.join(labels) or '结构信号'}"
+        if side == "SELL":
+            conflicts.append(f"{TIMEFRAME_POLICY[Timeframe(child)].chinese_name}最新正式结构仍为卖点")
+        # 如果卖点之后已经出现更新买点，则最新状态为BUY，不再沿用旧卖点冲突。
+    return not conflicts, conflicts, latest_states
 
 
 def _find_primary_signal_raw(analysis: dict, candidate: dict) -> dict | None:
@@ -132,13 +150,12 @@ def analyze_symbol_v3(symbol, industry_map, *, as_of, equity):
 
     raw_signal = _find_primary_signal_raw(analysis, candidate)
     if raw_signal:
-        # 构造一个轻量展示对象，避免报告层猜测类二买。
         extended = list(raw_signal.get("extended_types") or [])
         candidate["extended_signal_types"] = extended
         if "STRONG_CLASS2_BUY" in extended:
             candidate["class2_label"] = "强势类二买（二买/三买合一结构）"
         elif "CENTER_CLASS2_BUY" in extended:
-            candidate["class2_label"] = "中枢类二买（标准二买的中枢环境变体）"
+            candidate["class2_label"] = "中枢类二买（二买回抽仍站在中枢上沿ZG及以上）"
         else:
             candidate["class2_label"] = "无类二买扩展标签"
 
@@ -151,14 +168,15 @@ def analyze_symbol_v3(symbol, industry_map, *, as_of, equity):
     except (ValueError, KeyError):
         pass
 
-    execution_ok, conflicts = _execution_structure_ok(analysis, candidate)
+    execution_ok, conflicts, latest_states = _execution_structure_ok(analysis, candidate)
     candidate["execution_structure_ok"] = execution_ok
     candidate["execution_conflicts"] = conflicts
+    candidate["execution_latest_states"] = latest_states
     if not execution_ok:
-        # 高周期买点仍保留为观察，不因5/30分钟反向噪声删除；但禁止当场开新仓。
+        # 高周期买点仍保留为观察；低级别最新正式卖点只暂停执行，不自动否定健康的父级结构。
         candidate["push"] = False
         candidate["action"] = "OBSERVE"
-        candidate["recent_signal_note"] = "高周期买点仍有效，但低级别出现更新卖点，等待新的执行确认"
+        candidate["recent_signal_note"] = "高周期买点仍有效，但低级别最新正式结构为卖点，等待新的执行买点/确认"
         blockers = list(candidate.get("blockers") or [])
         if "EXECUTION_STRUCTURE_CONFLICT" not in blockers:
             blockers.append("EXECUTION_STRUCTURE_CONFLICT")
@@ -177,8 +195,9 @@ def analyze_symbol_v3(symbol, industry_map, *, as_of, equity):
     candidate["industry_rotation_state"] = symbol.get("industry_rotation_state")
     candidate["industry_analysis_profile"] = symbol.get("industry_analysis_profile")
     candidate["recent_report"] = symbol.get("recent_report")
+    candidate["sector_financial_metrics"] = symbol.get("sector_financial_metrics")
     candidate["stop_logic"] = (
-        f"止损跟随{candidate.get('timeframe','主结构')}买点/中枢失效；5分钟只负责暂停执行，不能把高周期止损下移。"
+        f"止损跟随{candidate.get('timeframe','主结构')}买点/中枢失效；单根5分钟影线或短线卖点不能直接否定更高周期核心结构。"
     )
     candidate["add_plan"] = (
         "首笔后只有出现新的同级或更高级确认买点/结构升级，且保护位能够抬高或保持，才允许第二笔/趋势加仓；"
@@ -186,7 +205,7 @@ def analyze_symbol_v3(symbol, industry_map, *, as_of, equity):
     )
     candidate["take_profit_plan"] = (
         "不设固定盈利百分比止盈；5分钟/30分钟卖点先处理试仓和战术仓，120分钟卖点逐级降低确认仓，"
-        "日线二卖开始分批减核心仓，日线三卖或战略结构失效退出。"
+        "日线二卖开始分批减核心仓，日线三卖或周线战略结构失效退出。"
     )
     return analysis, candidate
 
