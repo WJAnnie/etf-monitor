@@ -60,6 +60,9 @@ class NormalizedSegment:
     structural_end_timestamp: datetime
     confirmation_timestamp: datetime
     state: StructureState = StructureState.FINALIZED
+    # 结构端点与整段实际包络必须分开保存。三买/三卖离开判断看 endpoint；中枢重叠看 low/high。
+    structural_start_ticks: int | None = None
+    structural_end_ticks: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,8 +271,13 @@ def _make_finalized_segment(strokes: tuple[Stroke, ...], *, start: int, endpoint
 
 
 def to_normalized_segment(segment: Segment) -> NormalizedSegment:
-    if segment.state is not SegmentState.FINALIZED or segment.structural_end_timestamp is None or segment.confirmation_timestamp is None:
-        raise ValueError("only finalized segments can be normalized")
+    if (
+        segment.state is not SegmentState.FINALIZED
+        or segment.structural_end_timestamp is None
+        or segment.confirmation_timestamp is None
+        or segment.structural_end_ticks is None
+    ):
+        raise ValueError("only finalized segments with structural endpoint can be normalized")
     return NormalizedSegment(
         id=stable_id("nseg", segment.id),
         source_segment_id=segment.id,
@@ -279,6 +287,8 @@ def to_normalized_segment(segment: Segment) -> NormalizedSegment:
         structural_start_timestamp=segment.structural_start_timestamp,
         structural_end_timestamp=segment.structural_end_timestamp,
         confirmation_timestamp=segment.confirmation_timestamp,
+        structural_start_ticks=segment.structural_start_ticks,
+        structural_end_ticks=segment.structural_end_ticks,
     )
 
 
