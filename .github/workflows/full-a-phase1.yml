@@ -19,9 +19,9 @@ permissions:
   contents: read
 
 jobs:
-  production-validation:
+  new-pipeline-validation:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: trading-skill
@@ -42,7 +42,7 @@ jobs:
       - name: 全量回归测试
         run: python -m pytest
 
-      - name: 新版可交易证券池与候选发现验证
+      - name: STEP1-2 可交易证券池与候选发现验证
         run: |
           python -m scripts.collect_candidate_universe \
             --output full-a-results/candidate_universe_latest.json \
@@ -52,20 +52,21 @@ jobs:
             --fund-cap 100 \
             --strict
 
-      - name: 新版全市场候选真实行业补全
+      - name: STEP2-3 全市场候选真实行业补全
         run: |
           python -m scripts.enrich_candidate_industries \
             --input full-a-results/candidate_universe_latest.json \
             --strict
 
-      - name: 新版第三步股票基本面质量验证
+      - name: STEP3 股票与ETF-LOF质量验证
         run: |
           python -m scripts.collect_fundamental_quality \
             --input full-a-results/candidate_universe_latest.json \
             --output full-a-results/fundamental_quality_latest.json \
             --strict
 
-      - name: 立即打印新版第三步摘要
+      - name: 打印新版STEP1-3摘要
+        if: always()
         run: |
           python - <<'PY'
           import json
@@ -74,17 +75,58 @@ jobs:
           f=Path('full-a-results/fundamental_quality_latest.json')
           if c.exists():
               p=json.loads(c.read_text(encoding='utf-8'))
+              s=p.get('summary',{})
+              print('可交易池=',s.get('tradeable_by_security_type'))
+              print('权限/状态剔除=',s.get('exclusions'))
+              print('数据质量=',s.get('data_quality'))
+              print('行业分层=',s.get('selected_industry_pools'))
+              print('候选类型=',s.get('candidate_by_security_type'))
+              print('候选路线=',s.get('candidate_by_route'))
+              print('基金资产类别=',s.get('candidate_by_fund_category'))
               print('候选行业补全=',p.get('candidate_industry_enrichment'))
+              print('重点行业=',[(x.get('name'),x.get('pool'),x.get('state'),x.get('quality_score'),x.get('timing_score')) for x in p.get('selected_industries',[])[:20]])
           if f.exists():
               p=json.loads(f.read_text(encoding='utf-8'))
-              print('第三步AB摘要=',p.get('summary'))
-              rows=p.get('stock_assessments',[])
-              print('WATCH->PASS样本=',[(x.get('code'),x.get('name'),(x.get('phase_a_assessment') or {}).get('profile'),(x.get('specialized_evidence') or {}).get('family')) for x in rows if (x.get('phase_a_assessment') or {}).get('status')=='WATCH' and (x.get('final_decision') or {}).get('status')=='PASS'][:12])
-              print('PASS->WATCH样本=',[(x.get('code'),x.get('name'),(x.get('phase_a_assessment') or {}).get('profile'),(x.get('specialized_evidence') or {}).get('family')) for x in rows if (x.get('phase_a_assessment') or {}).get('status')=='PASS' and (x.get('final_decision') or {}).get('status')=='WATCH'][:12])
-              print('最终REJECT样本=',[(x.get('code'),x.get('name'),(x.get('final_decision') or {}).get('reasons')) for x in rows if (x.get('final_decision') or {}).get('status')=='REJECT'][:8])
+              print('STEP3摘要=',p.get('summary'))
+              stocks=p.get('stock_assessments',[])
+              funds=p.get('fund_product_assessments',[])
+              print('WATCH->PASS股票=',[(x.get('code'),x.get('name'),(x.get('phase_a_assessment') or {}).get('profile'),(x.get('specialized_evidence') or {}).get('family')) for x in stocks if (x.get('phase_a_assessment') or {}).get('status')=='WATCH' and (x.get('final_decision') or {}).get('status')=='PASS'][:12])
+              print('PASS->WATCH股票=',[(x.get('code'),x.get('name'),(x.get('phase_a_assessment') or {}).get('profile'),(x.get('specialized_evidence') or {}).get('family')) for x in stocks if (x.get('phase_a_assessment') or {}).get('status')=='PASS' and (x.get('final_decision') or {}).get('status')=='WATCH'][:12])
+              print('REJECT股票=',[(x.get('code'),x.get('name'),(x.get('final_decision') or {}).get('reasons')) for x in stocks if (x.get('final_decision') or {}).get('status')=='REJECT'][:8])
+              print('PASS基金=',[(x.get('code'),x.get('name'),x.get('fund_category'),(x.get('assessment') or {}).get('underlying_theme')) for x in funds if (x.get('assessment') or {}).get('status')=='PASS'][:20])
+              print('WATCH基金=',[(x.get('code'),x.get('name'),x.get('fund_category'),(x.get('assessment') or {}).get('warnings')) for x in funds if (x.get('assessment') or {}).get('status')=='WATCH'][:20])
+              print('REJECT基金=',[(x.get('code'),x.get('name'),(x.get('assessment') or {}).get('hard_risks')) for x in funds if (x.get('assessment') or {}).get('status')=='REJECT'][:10])
           PY
 
-      # 旧V3生产链作为后续基本面/缠论重构的回归保护；K线入口已有账户权限桥。
+      - name: Upload STEP1-3 validation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: step1-3-production-validation
+          path: trading-skill/full-a-results/*.json
+          if-no-files-found: warn
+
+  # 旧V3仅作为迁移期回归保护。它与新版STEP1-3并行运行，失败时不会掩盖新版是哪一层出问题。
+  legacy-v3-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    defaults:
+      run:
+        working-directory: trading-skill
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install
+        run: |
+          python -m pip install -e '.[dev]'
+          python -m pip install -r ../requirements.txt
+
       - name: 旧V3候选预筛回归
         run: |
           python -m scripts.collect_full_a_universe_v3 \
@@ -116,51 +158,34 @@ jobs:
             --output full-a-results/scan_latest.json \
             --stage 'CI真实验证'
 
-      - name: 打印验收摘要
+      - name: 打印旧V3回归摘要
         if: always()
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
-          candidate_path=Path('full-a-results/candidate_universe_latest.json')
-          fundamental_path=Path('full-a-results/fundamental_quality_latest.json')
-          universe_path=Path('full-a-results/universe_latest.json')
-          bars_path=Path('full-a-results/candidate_bars_latest.json')
-          scan_path=Path('full-a-results/scan_latest.json')
-          if candidate_path.exists():
-              p=json.loads(candidate_path.read_text(encoding='utf-8'))
-              s=p.get('summary',{})
-              print('新版可交易池=',s.get('tradeable_by_security_type'))
-              print('新版权限/状态剔除=',s.get('exclusions'))
-              print('新版数据质量=',s.get('data_quality'))
-              print('新版行业分层=',s.get('selected_industry_pools'))
-              print('新版候选类型=',s.get('candidate_by_security_type'))
-              print('新版候选路线=',s.get('candidate_by_route'))
-              print('新版基金类别=',s.get('candidate_by_fund_category'))
-              print('新版候选行业覆盖=',p.get('candidate_industry_enrichment'))
-              print('新版重点行业=',[(x.get('name'),x.get('pool'),x.get('state'),x.get('quality_score'),x.get('timing_score')) for x in p.get('selected_industries',[])[:20]])
-          if fundamental_path.exists():
-              p=json.loads(fundamental_path.read_text(encoding='utf-8'))
-              print('新版第三步=',p.get('summary'))
-          if universe_path.exists():
-              p=json.loads(universe_path.read_text(encoding='utf-8'))
+          universe=Path('full-a-results/universe_latest.json')
+          bars=Path('full-a-results/candidate_bars_latest.json')
+          scan=Path('full-a-results/scan_latest.json')
+          if universe.exists():
+              p=json.loads(universe.read_text(encoding='utf-8'))
               print('旧V3候选=',p.get('deduped_leader_candidates'),'允许深扫=',p.get('deep_scan_eligible_candidates'))
-          if bars_path.exists():
-              p=json.loads(bars_path.read_text(encoding='utf-8'))
+          if bars.exists():
+              p=json.loads(bars.read_text(encoding='utf-8'))
               print('旧链上游候选=',p.get('upstream_candidate_count'),'权限剔除=',p.get('permission_excluded_count'))
               print('旧链允许下载=',p.get('candidate_count'),'成功=',p.get('loaded_count'),'异常=',len(p.get('errors',[])))
-              print('旧链权限剔除样本=',p.get('permission_excluded',[])[:10])
-          if scan_path.exists():
-              p=json.loads(scan_path.read_text(encoding='utf-8'))
+              print('权限剔除样本=',p.get('permission_excluded',[])[:10])
+          if scan.exists():
+              p=json.loads(scan.read_text(encoding='utf-8'))
               c=p.get('candidates',[])
               print('旧V3深扫=',p.get('deep_scanned'),'近期买点=',len(c),'推送=',sum(1 for x in c if x.get('push')))
-              print('旧V3一买=',sum(1 for x in c if x.get('signal')=='FIRST_BUY'),'二买=',sum(1 for x in c if x.get('signal')=='SECOND_BUY'),'三买=',sum(1 for x in c if x.get('signal')=='THIRD_BUY'))
+              print('一买=',sum(1 for x in c if x.get('signal')=='FIRST_BUY'),'二买=',sum(1 for x in c if x.get('signal')=='SECOND_BUY'),'三买=',sum(1 for x in c if x.get('signal')=='THIRD_BUY'))
           PY
 
-      - name: Upload production validation
+      - name: Upload legacy V3 regression
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: full-a-production-validation-v3
+          name: legacy-v3-regression
           path: trading-skill/full-a-results/*.json
           if-no-files-found: warn
