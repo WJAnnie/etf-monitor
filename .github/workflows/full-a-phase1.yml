@@ -4,12 +4,15 @@ on:
   pull_request:
     paths:
       - 'trading-skill/src/trading_skill/a_share_*.py'
+      - 'trading-skill/src/trading_skill/industry_prospects.py'
       - 'trading-skill/src/trading_skill/production_chan.py'
-      - 'trading-skill/scripts/collect_full_a_universe.py'
-      - 'trading-skill/scripts/collect_candidate_bars.py'
-      - 'trading-skill/scripts/run_full_a_scan.py'
-      - 'trading-skill/scripts/send_full_a_report.py'
+      - 'trading-skill/scripts/collect_full_a_universe*.py'
+      - 'trading-skill/scripts/collect_candidate_bars*.py'
+      - 'trading-skill/scripts/run_full_a_scan*.py'
+      - 'trading-skill/scripts/send_full_a_report*.py'
       - 'trading-skill/tests/unit/test_a_share_*.py'
+      - 'trading-skill/tests/unit/test_full_a_v2.py'
+      - 'trading-skill/tests/unit/test_industry_prospects.py'
       - 'trading-skill/tests/unit/test_production_chan.py'
       - '.github/workflows/full-a-phase1.yml'
       - '.github/workflows/full-a-production-scan.yml'
@@ -21,7 +24,7 @@ permissions:
 jobs:
   production-validation:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: trading-skill
@@ -42,61 +45,65 @@ jobs:
       - name: 全量回归测试
         run: python -m pytest
 
-      - name: 真实全A行业与龙头预筛
+      - name: 真实全A前景行业与前五候选预筛
         run: |
-          python scripts/collect_full_a_universe.py \
+          python scripts/collect_full_a_universe_v2.py \
             --output full-a-results/universe_latest.json \
-            --industry-limit 8 \
-            --leaders-per-industry 3 \
+            --prospect-limit 20 \
+            --dynamic-supplement 5 \
+            --leaders-per-industry 5 \
             --strict
 
-      - name: 真实候选五周期行情
+      - name: 真实候选长历史五周期行情
         run: |
-          python scripts/collect_candidate_bars.py \
+          python scripts/collect_candidate_bars_v2.py \
             --universe full-a-results/universe_latest.json \
             --output full-a-results/candidate_bars_latest.json \
             --strict
 
-      - name: 正式缠论深度扫描
+      - name: 近期买点与正式缠论深度扫描
         run: |
-          python scripts/run_full_a_scan.py \
+          python scripts/run_full_a_scan_v2.py \
             --universe full-a-results/universe_latest.json \
             --bars full-a-results/candidate_bars_latest.json \
             --output full-a-results/scan_latest.json \
             --stage 'CI真实验证'
 
-      - name: 打印验收摘要
+      - name: 打印V2验收摘要
         if: always()
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
-          for name in ('universe_latest.json','candidate_bars_latest.json','scan_latest.json'):
-              path=Path('full-a-results')/name
-              if not path.exists():
-                  print(name, '未生成')
-                  continue
-              p=json.loads(path.read_text(encoding='utf-8'))
-              if name=='universe_latest.json':
-                  print('全A加载=', p.get('all_a_stocks_loaded'), '来源=', p.get('all_a_source'))
-                  print('行业加载=', p.get('industry_rows_loaded'))
-                  print('入选行业=', [(x['name'],x['rank_score'],x['heat_state']) for x in p.get('selected_industries',[])])
-                  print('龙头候选=',len(p.get('leader_candidates',[])),'财务通过=',p.get('fundamental_eligible_candidates'))
-                  print('行业成员异常=',p.get('member_errors'))
-                  print('财报异常=',p.get('finance_errors'))
-              elif name=='candidate_bars_latest.json':
-                  print('五周期候选=',p.get('candidate_count'),'成功=',p.get('loaded_count'),'异常=',p.get('errors'))
-              else:
-                  candidates=p.get('candidates',[])
-                  pushed=[x for x in candidates if x.get('push')]
-                  print('深度缠论=',p.get('deep_scanned'),'正式买点=',len(candidates),'达到推送条件=',len(pushed))
-                  print('推送候选=',[(x.get('code'),x.get('name'),x.get('signal'),x.get('timeframe'),x.get('opportunity'),x.get('risk'),x.get('action')) for x in pushed])
+          universe_path=Path('full-a-results/universe_latest.json')
+          bars_path=Path('full-a-results/candidate_bars_latest.json')
+          scan_path=Path('full-a-results/scan_latest.json')
+          if universe_path.exists():
+              p=json.loads(universe_path.read_text(encoding='utf-8'))
+              selected=p.get('selected_industries',[])
+              print('全A加载=',p.get('all_a_stocks_loaded'),'行业=',p.get('industry_rows_loaded'))
+              print('长期前景行业=',sum(1 for x in selected if x.get('prospect_theme')),'补充行业=',sum(1 for x in selected if not x.get('prospect_theme')))
+              print('前五原始候选=',p.get('raw_leader_rows_before_dedup'),'去重=',p.get('deduped_leader_candidates'))
+              print('严格基本面=',p.get('fundamental_eligible_candidates'),'允许深扫=',p.get('deep_scan_eligible_candidates'))
+              print('入选行业=',[(x.get('name'),x.get('prospect_theme'),x.get('heat_state')) for x in selected])
+          if bars_path.exists():
+              p=json.loads(bars_path.read_text(encoding='utf-8'))
+              print('长历史候选=',p.get('candidate_count'),'成功=',p.get('loaded_count'),'异常数=',len(p.get('errors',[])))
+              if p.get('symbols'):
+                  s=p['symbols'][0]
+                  print('样本历史长度: daily=',len(s.get('daily',[])),'weekly=',len(s.get('weekly',[])),'120m=',len(s.get('120m',[])),'30m=',len(s.get('30m',[])),'5m=',len(s.get('5m',[])))
+          if scan_path.exists():
+              p=json.loads(scan_path.read_text(encoding='utf-8'))
+              candidates=p.get('candidates',[])
+              pushed=[x for x in candidates if x.get('push')]
+              print('深扫=',p.get('deep_scanned'),'近期正式买点=',len(candidates),'达到推送=',len(pushed))
+              print('近期买点样本=',[(x.get('code'),x.get('name'),x.get('signal'),x.get('timeframe'),x.get('rise_since_signal_pct'),x.get('action')) for x in candidates[:20]])
           PY
 
       - name: Upload production validation
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: full-a-production-validation
+          name: full-a-production-validation-v2
           path: trading-skill/full-a-results/*.json
           if-no-files-found: warn
