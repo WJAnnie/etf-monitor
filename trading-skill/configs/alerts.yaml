@@ -4,8 +4,8 @@ scan:
   "10:30": true
   "11:30": true
   "13:30": true
-  "14:30": true
-  "14:50": true
+  "13:45": true
+  "14:45": true
   after_close: true
 full_a_buy_scan:
   timezone: Asia/Shanghai
