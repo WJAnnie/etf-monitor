@@ -28,7 +28,7 @@ class FundCategory(StrEnum):
     EQUITY_BROAD = "EQUITY_BROAD"
     EQUITY_SECTOR = "EQUITY_SECTOR"
     EQUITY_STRATEGY = "EQUITY_STRATEGY"
-    CROSS_BORDER = "CROSS_BORDER"  # 仅作无法继续识别底层资产时的兼容兜底；跨境风险主要由risk tag表达
+    ACTIVE_MIXED = "ACTIVE_MIXED"
     COMMODITY = "COMMODITY"
     BOND = "BOND"
     CASH = "CASH"
@@ -146,7 +146,7 @@ BOND_TOKENS = (
 )
 CASH_TOKENS = ("货币", "同业存单", "日利", "添益", "保证金", "现金管理")
 COMMODITY_TOKENS = (
-    "黄金", "白银", "豆粕", "原油", "石油", "油气", "商品ETF", "能源化工ETF", "有色期货",
+    "黄金", "白银", "豆粕", "原油", "石油", "油气", "商品", "能源化工ETF", "有色期货",
 )
 STRATEGY_TOKENS = (
     "红利", "低波", "价值", "质量", "自由现金流", "现金流", "ESG", "央企", "国企", "高股息", "增强",
@@ -155,7 +155,7 @@ BROAD_TOKENS = (
     "中证A500", "A500", "中证A50", "沪深300", "中证500", "中证1000", "中证2000",
     "上证50", "上证180", "上证指数", "深证成指", "创业板50", "创业板", "科创50", "科创100", "北证50", "全指",
     "纳指", "纳斯达克", "标普", "道琼斯", "日经", "德国", "法国", "英国", "越南", "印度", "沙特", "巴西",
-    "韩国", "日本", "美国", "亚太", "亚洲", "恒生指数",
+    "韩国", "日本", "美国", "亚太", "亚洲", "恒生指数", "恒生ETF", "恒指", "港股通50", "港股通ETF",
 )
 SECTOR_TOKENS = (
     "白酒", "食品", "消费", "医药", "医疗", "创新药", "证券", "券商", "银行", "保险", "金融", "地产",
@@ -176,7 +176,7 @@ def _is_cash_fund(text: str) -> bool:
 
 
 def classify_fund_category(item: MarketSecurity) -> FundCategory:
-    """描述底层资产类别；跨境/QDII等交易风险由 ``fund_risk_tags`` 单独表达。"""
+    """只描述底层资产/产品类型；跨境/QDII风险完全由 ``fund_risk_tags`` 表达。"""
     text = "".join(str(item.name or "").upper().split())
     if _has_token(text, BOND_TOKENS):
         return FundCategory.BOND
@@ -190,11 +190,17 @@ def classify_fund_category(item: MarketSecurity) -> FundCategory:
         return FundCategory.EQUITY_SECTOR
     if _has_token(text, BROAD_TOKENS):
         return FundCategory.EQUITY_BROAD
-    # 无法继续识别底层资产时才保留CROSS_BORDER兼容类别；不是跨境风险的主表达方式。
+    # 名称只能确认“跨境”而无法进一步识别时，不再创造一个CROSS_BORDER资产类。
+    # ETF通常是指数型产品，先落到宽基观察；LOF/FUND保守落到主动/混合观察。
     if _has_token(text, CROSS_BORDER_TOKENS):
-        return FundCategory.CROSS_BORDER
-    if item.security_type is SecurityType.ETF:
-        return FundCategory.EQUITY_SECTOR
+        if item.security_type is SecurityType.ETF:
+            return FundCategory.EQUITY_BROAD
+        return FundCategory.ACTIVE_MIXED
+    # 场内LOF若没有债券/商品/指数等明确线索，最常见的是主动权益或混合型产品。
+    # 该分类只决定同类比较，不会直接让产品PASS；第三步仍要求产品规模等证据。
+    if item.security_type in {SecurityType.LOF, SecurityType.FUND}:
+        return FundCategory.ACTIVE_MIXED
+    # 未能识别的ETF不要再默认伪装成行业ETF。
     return FundCategory.OTHER
 
 
