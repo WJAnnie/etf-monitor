@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import random
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from math import isfinite
 from pathlib import Path
@@ -18,14 +16,10 @@ from trading_skill.industry_prospects import match_theme
 HOSTS = (
     "https://push2.eastmoney.com/api/qt/stock/get",
     "https://82.push2.eastmoney.com/api/qt/stock/get",
-    "https://73.push2.eastmoney.com/api/qt/stock/get",
 )
-UT_TOKENS = (
-    "fa5fd1943c7b386f172d6893dbfba10b",
-    "bd1d9ddb04089700cf9c27f6f7426281",
-)
-TIMEOUT = 5.0
-MAX_WORKERS = 8
+UT = "fa5fd1943c7b386f172d6893dbfba10b"
+TIMEOUT = 3.0
+MAX_WORKERS = 16
 
 
 def _num(value: object) -> float | None:
@@ -45,57 +39,41 @@ def _market_from_candidate(item: dict) -> int:
     return 0
 
 
-def _request_context(code: str, market: int) -> dict:
-    last_error: Exception | None = None
-    for token in UT_TOKENS:
-        params = {
-            "secid": f"{market}.{code}",
-            "fields": "f57,f58,f127,f162,f167",
-            "ut": token,
-            "fltt": 2,
-            "invt": 2,
-        }
-        for host in HOSTS:
-            try:
-                response = requests.get(
-                    host,
-                    params=params,
-                    headers={
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152 Safari/537.36",
-                        "Accept": "application/json,text/plain,*/*",
-                        "Referer": "https://quote.eastmoney.com/",
-                        "Connection": "close",
-                    },
-                    timeout=TIMEOUT,
-                )
-                response.raise_for_status()
-                payload = response.json()
-                data = payload.get("data") if isinstance(payload, dict) else None
-                if isinstance(data, dict) and str(data.get("f57") or "").strip():
-                    return {
-                        "industry": str(data.get("f127") or "").strip() or None,
-                        "pe": _num(data.get("f162")),
-                        "pb": _num(data.get("f167")),
-                    }
-            except Exception as exc:
-                last_error = exc
-    if last_error:
-        raise RuntimeError(str(last_error))
-    return {"industry": None, "pe": None, "pb": None}
-
-
-def resolve_context(code: str, market: int, *, retries: int = 1) -> dict:
-    for attempt in range(retries + 1):
+def resolve_context(code: str, market: int) -> dict:
+    params = {
+        "secid": f"{market}.{code}",
+        "fields": "f57,f58,f127,f162,f167",
+        "ut": UT,
+        "fltt": 2,
+        "invt": 2,
+    }
+    errors: list[str] = []
+    for host in HOSTS:
         try:
-            result = _request_context(code, market)
-            if result.get("industry") or result.get("pe") is not None or result.get("pb") is not None:
-                return result
-        except Exception:
-            if attempt >= retries:
-                raise
-        if attempt < retries:
-            time.sleep(0.12 + random.uniform(0.02, 0.10))
-    return {"industry": None, "pe": None, "pb": None}
+            response = requests.get(
+                host,
+                params=params,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152 Safari/537.36",
+                    "Accept": "application/json,text/plain,*/*",
+                    "Referer": "https://quote.eastmoney.com/",
+                    "Connection": "close",
+                },
+                timeout=TIMEOUT,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            data = payload.get("data") if isinstance(payload, dict) else None
+            if isinstance(data, dict) and str(data.get("f57") or "").strip():
+                return {
+                    "industry": str(data.get("f127") or "").strip() or None,
+                    "pe": _num(data.get("f162")),
+                    "pb": _num(data.get("f167")),
+                }
+            errors.append(f"{host}:empty")
+        except Exception as exc:
+            errors.append(f"{host}:{exc}")
+    raise RuntimeError("；".join(errors))
 
 
 def _apply_context(item: dict, context: dict | None, *, error: str | None = None) -> dict:
@@ -193,6 +171,7 @@ def main() -> int:
     payload.setdefault("design_contract", {})["market_wide_candidates_get_real_industry_before_step3"] = True
     payload["design_contract"]["industry_resolution_failure_means_watch_not_generic_pass"] = True
     payload["design_contract"]["valuation_is_context_not_standalone_veto"] = True
+    payload["design_contract"]["candidate_context_lookup_is_fail_fast"] = True
     output = args.output or args.input
     atomic_json(output, payload)
 
