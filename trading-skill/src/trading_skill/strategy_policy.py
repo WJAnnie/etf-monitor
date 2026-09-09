@@ -18,6 +18,14 @@ class TimeframePolicy:
     parent_timeframes: tuple[Timeframe, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class ScaleInDecision:
+    allowed: bool
+    role: TrancheRole | None
+    remaining_capacity_fraction: float
+    reason: str
+
+
 TIMEFRAME_POLICY: dict[Timeframe, TimeframePolicy] = {
     Timeframe.WEEKLY: TimeframePolicy(
         Timeframe.WEEKLY, "周线", "战略环境/长期仓位边界", False, False, StopLevel.LW, 60.0, ()
@@ -39,12 +47,9 @@ TIMEFRAME_POLICY: dict[Timeframe, TimeframePolicy] = {
     ),
 }
 
-# 正式选股主信号：5分钟不能独立创造选股理由；周线只做战略环境。
 PRIMARY_ENTRY_TIMEFRAMES = (Timeframe.DAILY, Timeframe.M120, Timeframe.M30)
 EXECUTION_TIMEFRAME = Timeframe.M5
 
-# 跨周期主信号优先矩阵：先体现交易级别，再体现买点性质。
-# 目的：避免“30分钟二买”无条件压过更重要的“日线/120分钟三买”。
 ENTRY_PRIORITY_MATRIX: dict[tuple[Timeframe, ChanSignalType], int] = {
     (Timeframe.DAILY, ChanSignalType.SECOND_BUY): 100,
     (Timeframe.DAILY, ChanSignalType.THIRD_BUY): 95,
@@ -57,7 +62,6 @@ ENTRY_PRIORITY_MATRIX: dict[tuple[Timeframe, ChanSignalType], int] = {
     (Timeframe.M30, ChanSignalType.FIRST_BUY): 40,
 }
 
-# 向后兼容旧调用；正式V3主信号选择应优先使用 entry_priority()。
 STANDARD_BUY_PRIORITY = {
     ChanSignalType.SECOND_BUY: 50,
     ChanSignalType.THIRD_BUY: 40,
@@ -79,6 +83,15 @@ SIGNAL_CN = {
     ChanSignalType.STRONG_CLASS2_BUY: "强势类二买",
     ChanSignalType.CENTER_CLASS2_BUY: "中枢类二买",
     ChanSignalType.HIGH_LEVEL_CLASS2_SELL: "高一级类二卖",
+}
+
+# 加仓不是固定金额，而是使用“风险模型算出的剩余允许仓位”的一部分。
+# 这样不会因为多次结构确认突破股票/行业/主题/总组合风险上限。
+SCALE_IN_REMAINING_FRACTION = {
+    TrancheRole.TACTICAL: 0.30,
+    TrancheRole.CONFIRMATION: 0.40,
+    TrancheRole.CORE: 0.50,
+    TrancheRole.TREND_ADD: 0.25,
 }
 
 
@@ -133,6 +146,63 @@ def entry_permission(timeframe: Timeframe, signal_type: ChanSignalType) -> str:
             return "30分钟一买属于反转初期，只观察，不直接新开仓；优先等待标准二买/三买"
         return "战术买点，必须有日线/120分钟上级结构支持并满足5分钟执行条件"
     return "观察"
+
+
+def scale_in_decision(
+    *,
+    timeframe: Timeframe,
+    signal_type: ChanSignalType,
+    existing_roles: tuple[TrancheRole, ...] = (),
+    new_structure_confirmed: bool,
+    opportunity_grade: str,
+    risk_level: int,
+    context_valid: bool,
+    protection_not_loosened: bool,
+    price_not_below_position_cost: bool,
+) -> ScaleInDecision:
+    """统一决定已有仓位后是否允许增加下一笔。
+
+    关键约束：
+    - 一买与5分钟信号都不能作为已有仓位的加仓触发；只接受新的标准二买/三买。
+    - 类二买只是标准二买的扩展标签，不独立增加一笔。
+    - 必须有新结构、机会至少B、风险低于L2、上下文完整、保护位不下移。
+    - 明确禁止机械摊低成本：新加仓价格不得低于当前持仓成本参考线。
+    - 每类确认仓只建立一次；之后最多允许一层TREND_ADD，避免无限金字塔。
+    """
+    if signal_type not in {ChanSignalType.SECOND_BUY, ChanSignalType.THIRD_BUY}:
+        return ScaleInDecision(False, None, 0.0, "只有新的标准二买/三买才能触发已有仓位加仓；一买和类二买标签本身不触发加仓")
+    if timeframe not in {Timeframe.DAILY, Timeframe.M120, Timeframe.M30}:
+        return ScaleInDecision(False, None, 0.0, "周线只做战略环境，5分钟只做执行确认，均不能独立触发加仓")
+    if not new_structure_confirmed:
+        return ScaleInDecision(False, None, 0.0, "没有新的确认结构，不加仓")
+    if str(opportunity_grade) not in {"S", "A", "B"}:
+        return ScaleInDecision(False, None, 0.0, "机会等级为C，不加仓")
+    if int(risk_level) >= 2:
+        return ScaleInDecision(False, None, 0.0, "风险达到L2及以上，暂停新增仓位")
+    if not context_valid:
+        return ScaleInDecision(False, None, 0.0, "行业/基本面/历史/上级结构上下文不完整，不加仓")
+    if not protection_not_loosened:
+        return ScaleInDecision(False, None, 0.0, "新增仓位需要下移保护位，违反保护位只能上移或保持的规则")
+    if not price_not_below_position_cost:
+        return ScaleInDecision(False, None, 0.0, "当前价格低于持仓成本参考线，禁止以加仓方式机械摊低成本")
+
+    roles = set(existing_roles)
+    if timeframe is Timeframe.M30 and TrancheRole.TACTICAL not in roles:
+        role = TrancheRole.TACTICAL
+        reason = "新的30分钟标准二买/三买确认，可增加一层战术仓"
+    elif timeframe is Timeframe.M120 and TrancheRole.CONFIRMATION not in roles:
+        role = TrancheRole.CONFIRMATION
+        reason = "新的120分钟标准二买/三买确认，可增加一层确认仓"
+    elif timeframe is Timeframe.DAILY and TrancheRole.CORE not in roles:
+        role = TrancheRole.CORE
+        reason = "新的日线标准二买/三买确认，可增加一层核心仓"
+    elif TrancheRole.TREND_ADD not in roles:
+        role = TrancheRole.TREND_ADD
+        reason = "对应层级仓位已建立，新结构再次确认且保护位未放宽，最多增加一层趋势仓"
+    else:
+        return ScaleInDecision(False, None, 0.0, "对应确认仓和趋势加仓都已存在，不继续无限金字塔加仓")
+
+    return ScaleInDecision(True, role, SCALE_IN_REMAINING_FRACTION[role], reason)
 
 
 def sell_fraction(timeframe: str, sell_class: int, role: TrancheRole) -> float:
@@ -221,7 +291,11 @@ def stop_break_policy() -> dict[str, str]:
 
 
 def add_position_policy() -> str:
-    return "只有新的同级或更高级确认结构才能加仓；下跌本身不是加仓理由。"
+    return (
+        "已有仓位后只接受新的标准二买/三买或同级以上结构升级；30分钟对应战术仓、120分钟对应确认仓、"
+        "日线对应核心仓，之后最多再加一层趋势仓。加仓金额按剩余允许仓位计算；L2及以上、机会C、"
+        "上下文不完整、保护位需下移或会形成机械摊低成本时一律不加。类二买只作为标准二买加分标签。"
+    )
 
 
 def take_profit_policy() -> str:
