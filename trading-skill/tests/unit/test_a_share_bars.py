@@ -31,6 +31,7 @@ def test_six_real_5m_bars_make_one_30m_bar():
     assert len(aggregated) == 1
     assert aggregated[0]["time"].endswith("10:00:00")
     assert aggregated[0]["_source"] == "aggregate_real_5m"
+    assert aggregated[0]["_adjustment"] == "raw"
 
 
 def test_24_real_5m_bars_make_one_120m_bar():
@@ -59,3 +60,21 @@ def test_current_week_is_provisional_before_friday_close():
     weekly = aggregate_weekly(daily, now=datetime(2026, 9, 8, 16, 30, tzinfo=TZ))
     assert len(weekly) == 1
     assert weekly[0]["_complete"] is False
+
+
+def test_friday_intraday_weekly_bar_is_still_provisional():
+    daily = [
+        {"time": "2026-09-07", "open": 10, "close": 10.1, "high": 10.2, "low": 9.9, "volume": 100, "_complete": True},
+        {"time": "2026-09-11", "open": 10.1, "close": 10.3, "high": 10.4, "low": 10.0, "volume": 130, "_complete": False},
+    ]
+    weekly = aggregate_weekly(daily, now=datetime(2026, 9, 11, 14, 30, tzinfo=TZ))
+    assert weekly[-1]["_complete"] is False
+
+
+def test_friday_after_close_weekly_bar_can_confirm_when_daily_complete():
+    daily = [
+        {"time": "2026-09-07", "open": 10, "close": 10.1, "high": 10.2, "low": 9.9, "volume": 100, "_complete": True},
+        {"time": "2026-09-11", "open": 10.1, "close": 10.3, "high": 10.4, "low": 10.0, "volume": 130, "_complete": True},
+    ]
+    weekly = aggregate_weekly(daily, now=datetime(2026, 9, 11, 15, 1, tzinfo=TZ))
+    assert weekly[-1]["_complete"] is True
