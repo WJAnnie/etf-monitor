@@ -14,7 +14,8 @@ class DeepScanTier(StrEnum):
 
 _PRIORITY_RANK = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
 _STATUS_RANK = {"PASS": 3, "WATCH": 2, "REJECT": 0}
-_EVIDENCE_RANK = {"FULL": 3, "PARTIAL": 2, "ADEQUATE": 2, "LIMITED": 1}
+_EVIDENCE_RANK = {"FULL": 3, "PARTIAL": 2, "ADEQUATE": 2, "LIMITED": 1, "": 0}
+_QUALITY_RANK = {"STRONG": 3, "ADEQUATE": 2, "WEAK": 1, "UNKNOWN": 0, "": 0}
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,10 +26,13 @@ class DeepScanCandidate:
     status: str
     research_priority: str
     tier: DeepScanTier
-    score: float
+    evidence_level: str
+    confirmation_count: int
     reasons: tuple[str, ...]
     source_routes: tuple[str, ...]
     category: str | None = None
+    product_quality: str | None = None
+    trading_quality: str | None = None
 
     def as_dict(self) -> dict:
         data = asdict(self)
@@ -43,32 +47,25 @@ def _stock_candidate(row: Mapping[str, object]) -> DeepScanCandidate:
     status = str(final.get("status") or "WATCH")
     priority = str(row.get("research_priority") or "LOW")
     risk = str(phase_a.get("risk_level") or "MEDIUM")
-    evidence = str(phase_a.get("evidence_coverage") or "LIMITED")
+    base_evidence = str(phase_a.get("evidence_coverage") or "LIMITED")
     specialized_coverage = str(specialized.get("coverage") or "")
+    evidence = specialized_coverage or base_evidence
     routes = tuple(str(x) for x in (row.get("source_routes") or ()))
     reasons: list[str] = []
 
     if status == "REJECT":
-        return DeepScanCandidate(str(row.get("code") or ""), str(row.get("name") or ""), "STOCK", status, priority, DeepScanTier.EXCLUDE, 0.0, ("基本面REJECT，不进入重技术分析",), routes, str(row.get("industry_name") or "") or None)
-    if risk == "HIGH":
-        return DeepScanCandidate(str(row.get("code") or ""), str(row.get("name") or ""), "STOCK", status, priority, DeepScanTier.EXCLUDE, 0.0, ("基本面风险等级HIGH，先解决风险证据再深扫",), routes, str(row.get("industry_name") or "") or None)
-
-    score = 35.0 * _STATUS_RANK.get(status, 1) / 3.0
-    score += 25.0 * _PRIORITY_RANK.get(priority, 1) / 3.0
-    score += 15.0 * _EVIDENCE_RANK.get(evidence, 1) / 3.0
-    score += min(10.0, max(0, len(routes) - 1) * 4.0)
-    if specialized_coverage in {"FULL", "ADEQUATE", "PARTIAL"}:
-        score += 8.0
-    if str(row.get("industry_context_complete")).lower() == "true" or row.get("industry_context_complete") is True:
-        score += 5.0
-
-    if status == "PASS" and priority in {"HIGH", "MEDIUM"}:
+        tier = DeepScanTier.EXCLUDE
+        reasons.append("基本面REJECT，不进入重技术分析")
+    elif risk == "HIGH":
+        tier = DeepScanTier.EXCLUDE
+        reasons.append("基本面风险等级HIGH，先解决风险证据再深扫")
+    elif status == "PASS" and priority in {"HIGH", "MEDIUM"}:
         tier = DeepScanTier.PRIMARY
         reasons.append("质量PASS且研究优先级足够高")
     elif status == "PASS":
         tier = DeepScanTier.SECONDARY
         reasons.append("质量PASS，但第二步优先级较低")
-    elif status == "WATCH" and priority == "HIGH" and evidence != "LIMITED":
+    elif status == "WATCH" and priority == "HIGH" and base_evidence != "LIMITED":
         tier = DeepScanTier.SECONDARY
         reasons.append("WATCH但优先级HIGH，且不是严重证据缺失")
     elif status == "WATCH" and priority in {"HIGH", "MEDIUM"}:
@@ -79,16 +76,17 @@ def _stock_candidate(row: Mapping[str, object]) -> DeepScanCandidate:
         reasons.append("低优先级WATCH不消耗五周期重扫资源")
 
     return DeepScanCandidate(
-        str(row.get("code") or ""),
-        str(row.get("name") or ""),
-        "STOCK",
-        status,
-        priority,
-        tier,
-        round(score, 2),
-        tuple(reasons),
-        routes,
-        str(row.get("industry_name") or "") or None,
+        code=str(row.get("code") or ""),
+        name=str(row.get("name") or ""),
+        security_type="STOCK",
+        status=status,
+        research_priority=priority,
+        tier=tier,
+        evidence_level=evidence,
+        confirmation_count=len(routes),
+        reasons=tuple(reasons),
+        source_routes=routes,
+        category=str(row.get("industry_name") or "") or None,
     )
 
 
@@ -106,24 +104,12 @@ def _fund_candidate(row: Mapping[str, object]) -> DeepScanCandidate:
     reasons: list[str] = []
 
     if status == "REJECT" or not deep_eligible:
-        why = "产品质量REJECT" if status == "REJECT" else "该产品默认不进入多周期重扫"
-        return DeepScanCandidate(str(row.get("code") or ""), str(row.get("name") or ""), str(row.get("security_type") or "FUND"), status, priority, DeepScanTier.EXCLUDE, 0.0, (why,), routes, category)
-    if risk == "HIGH" or product in {"WEAK", "UNKNOWN"} or trading in {"WEAK", "UNKNOWN"}:
-        return DeepScanCandidate(str(row.get("code") or ""), str(row.get("name") or ""), str(row.get("security_type") or "FUND"), status, priority, DeepScanTier.EXCLUDE, 0.0, ("产品或交易质量风险偏高，先不消耗重扫资源",), routes, category)
-
-    score = 35.0 * _STATUS_RANK.get(status, 1) / 3.0
-    score += 25.0 * _PRIORITY_RANK.get(priority, 1) / 3.0
-    score += 15.0 * _EVIDENCE_RANK.get(evidence, 1) / 3.0
-    if product == "STRONG":
-        score += 10.0
-    elif product == "ADEQUATE":
-        score += 6.0
-    if trading == "STRONG":
-        score += 10.0
-    elif trading == "ADEQUATE":
-        score += 6.0
-
-    if status == "PASS" and priority in {"HIGH", "MEDIUM"}:
+        tier = DeepScanTier.EXCLUDE
+        reasons.append("产品质量REJECT" if status == "REJECT" else "该产品默认不进入多周期重扫")
+    elif risk == "HIGH" or product in {"WEAK", "UNKNOWN"} or trading in {"WEAK", "UNKNOWN"}:
+        tier = DeepScanTier.EXCLUDE
+        reasons.append("产品或交易质量风险偏高，先不消耗重扫资源")
+    elif status == "PASS" and priority in {"HIGH", "MEDIUM"}:
         tier = DeepScanTier.PRIMARY
         reasons.append("基金产品PASS且研究优先级足够高")
     elif status == "PASS":
@@ -140,16 +126,39 @@ def _fund_candidate(row: Mapping[str, object]) -> DeepScanCandidate:
         reasons.append("低优先级WATCH暂不进入五周期重扫")
 
     return DeepScanCandidate(
-        str(row.get("code") or ""),
-        str(row.get("name") or ""),
-        str(row.get("security_type") or "FUND"),
-        status,
-        priority,
-        tier,
-        round(score, 2),
-        tuple(reasons),
-        routes,
-        category,
+        code=str(row.get("code") or ""),
+        name=str(row.get("name") or ""),
+        security_type=str(row.get("security_type") or "FUND"),
+        status=status,
+        research_priority=priority,
+        tier=tier,
+        evidence_level=evidence,
+        confirmation_count=len(routes),
+        reasons=tuple(reasons),
+        source_routes=routes,
+        category=category,
+        product_quality=product,
+        trading_quality=trading,
+    )
+
+
+def _rank_key(item: DeepScanCandidate) -> tuple:
+    """Explainable lexicographic ranking; no synthetic weighted score."""
+    tier_rank = {
+        DeepScanTier.PRIMARY: 0,
+        DeepScanTier.SECONDARY: 1,
+        DeepScanTier.OBSERVE: 2,
+        DeepScanTier.EXCLUDE: 3,
+    }
+    return (
+        tier_rank[item.tier],
+        -_STATUS_RANK.get(item.status, 0),
+        -_PRIORITY_RANK.get(item.research_priority, 0),
+        -_EVIDENCE_RANK.get(item.evidence_level, 0),
+        -_QUALITY_RANK.get(item.product_quality or "", 0),
+        -_QUALITY_RANK.get(item.trading_quality or "", 0),
+        -item.confirmation_count,
+        item.code,
     )
 
 
@@ -169,8 +178,7 @@ def build_deep_scan_queue(
     """
     material = [_stock_candidate(x) for x in stock_rows] + [_fund_candidate(x) for x in fund_rows]
     eligible = [x for x in material if x.tier is not DeepScanTier.EXCLUDE]
-    tier_rank = {DeepScanTier.PRIMARY: 0, DeepScanTier.SECONDARY: 1, DeepScanTier.OBSERVE: 2}
-    eligible.sort(key=lambda x: (tier_rank[x.tier], -x.score, x.code))
+    eligible.sort(key=_rank_key)
 
     selected: list[DeepScanCandidate] = []
     for item in eligible:
