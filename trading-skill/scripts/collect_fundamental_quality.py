@@ -9,6 +9,7 @@ from pathlib import Path
 
 from scripts.collect_full_a_universe import CN_TZ, MAX_WORKERS, atomic_json, fetch_financial_reports
 from scripts.financial_data_adapter import fetch_detailed_statement_metrics, fetch_main_financial_data
+from trading_skill.fund_product_quality import assess_fund_product
 from trading_skill.fundamental_decision import combine_fundamental_decision
 from trading_skill.fundamental_quality import (
     CompanyQuality,
@@ -176,6 +177,7 @@ def main() -> int:
     now = datetime.now(CN_TZ)
     payload = json.loads(args.input.read_text(encoding="utf-8"))
     candidates = list(payload.get("candidates") or [])
+    selected_industries = list(payload.get("selected_industries") or [])
     stocks = [item for item in candidates if item.get("security_type") == "STOCK"]
     funds = [item for item in candidates if item.get("security_type") in {"ETF", "LOF", "FUND"}]
 
@@ -223,18 +225,26 @@ def main() -> int:
             "final_decision": final.as_dict(),
         })
 
-    fund_pending = [
-        {
+    # ETF/LOF不套股票财务报表。当前产品质量层使用Step2已经可靠取得的类别、同家族去重、成交额和动态行业上下文。
+    # 规模/费率/跟踪误差可作为增强证据；跨境/QDII和LOF如果没有足够新鲜的折溢价证据，一律WATCH。
+    fund_assessed: list[dict] = []
+    for item in funds:
+        assessment = assess_fund_product(
+            item,
+            selected_industries=selected_industries,
+            reference=None,
+        )
+        fund_assessed.append({
             "code": item.get("code"),
             "name": item.get("name"),
             "security_type": item.get("security_type"),
+            "source_routes": item.get("source_routes") or [],
+            "research_priority": item.get("research_priority"),
             "fund_category": item.get("fund_category"),
             "fund_family": item.get("fund_family"),
-            "status": "PENDING_PRODUCT_QUALITY",
-            "note": "ETF/LOF走底层资产+产品质量模型，不套用股票财务报表。",
-        }
-        for item in funds
-    ]
+            "position_stage": item.get("position_stage"),
+            "assessment": assessment.as_dict(),
+        })
 
     phase_a_counts = Counter(row["phase_a_assessment"]["status"] for row in assessed)
     final_counts = Counter(row["final_decision"]["status"] for row in assessed)
@@ -246,12 +256,17 @@ def main() -> int:
     specialized_coverage_counts = Counter(
         row["specialized_evidence"]["coverage"] for row in assessed if row["specialized_evidence"]
     )
+    fund_status_counts = Counter(row["assessment"]["status"] for row in fund_assessed)
+    fund_category_counts = Counter(row.get("fund_category") or "UNKNOWN" for row in fund_assessed)
+    fund_coverage_counts = Counter(row["assessment"]["evidence_coverage"] for row in fund_assessed)
+    fund_deep_eligible = sum(1 for row in fund_assessed if row["assessment"].get("deep_analysis_eligible"))
     report_covered = sum(1 for item in stocks if reports_by_code.get(str(item.get("code") or "")))
     industry_covered = sum(1 for row in assessed if row["industry_context_complete"])
     specialized_fetch_success_pct = round(specialized_completed / specialized_requested * 100.0, 2) if specialized_requested else 100.0
+    stock_deep_eligible = sum(1 for row in assessed if row["final_decision"].get("deep_analysis_eligible"))
 
     result = {
-        "mode": "STEP3_FUNDAMENTAL_QUALITY_PHASE_AB",
+        "mode": "STEP3_SECURITY_QUALITY",
         "generated_at": now.isoformat(),
         "source_candidate_file": str(args.input),
         "design_contract": {
@@ -261,18 +276,26 @@ def main() -> int:
             "rnd_loss_is_not_mechanical_reject": True,
             "cyclical_low_pe_is_not_mechanical_value": True,
             "missing_industry_means_watch": True,
-            "limited_evidence_cannot_pass": True,
+            "limited_evidence_cannot_pass_stock": True,
             "phase_a_reject_cannot_be_overridden": True,
             "specialized_hard_risk_can_reject": True,
             "rnd_and_cyclical_require_external_core_evidence_before_pass": True,
             "funds_do_not_use_stock_financial_model": True,
+            "funds_use_underlying_asset_plus_product_plus_trading_quality": True,
+            "fund_family_dedup_is_product_evidence_not_underlying_quality": True,
+            "stale_nav_is_never_used_as_current_premium": True,
+            "cross_border_and_lof_require_fresh_premium_evidence_for_pass": True,
+            "cash_funds_skip_chan_deep_scan_by_default": True,
             "this_stage_emits_trade_signal": False,
         },
         "summary": {
             "stock_candidates": len(stocks),
-            "fund_candidates_pending_product_model": len(funds),
+            "fund_candidates": len(funds),
             "phase_a_status": dict(phase_a_counts),
             "final_stock_status": dict(final_counts),
+            "fund_product_status": dict(fund_status_counts),
+            "fund_category_counts": dict(fund_category_counts),
+            "fund_product_evidence_coverage": dict(fund_coverage_counts),
             "profile_counts": dict(profile_counts),
             "phase_a_evidence_coverage": dict(phase_a_coverage),
             "specialized_family_counts": dict(specialized_family_counts),
@@ -287,11 +310,14 @@ def main() -> int:
             "watch_upgraded_to_pass": upgraded,
             "pass_downgraded_to_watch": downgraded,
             "specialized_hard_risk_rejects": hard_rejects,
+            "stock_deep_analysis_eligible": stock_deep_eligible,
+            "fund_deep_analysis_eligible": fund_deep_eligible,
+            "total_deep_analysis_eligible": stock_deep_eligible + fund_deep_eligible,
             "phase_a_errors": len(phase_a_errors),
             "phase_b_errors": len(phase_b_errors),
         },
         "stock_assessments": assessed,
-        "fund_product_quality_pending": fund_pending,
+        "fund_product_assessments": fund_assessed,
         "data_errors": phase_a_errors + phase_b_errors,
     }
     atomic_json(args.output, result)
@@ -304,7 +330,8 @@ def main() -> int:
     print("行业覆盖:", result["summary"]["industry_context_coverage_pct"], "%")
     print("3B充分证据:", specialized_completed, "/", specialized_requested, f"({specialized_fetch_success_pct}%)")
     print("WATCH升级PASS:", upgraded, "PASS降WATCH:", downgraded, "3B硬风险REJECT:", hard_rejects)
-    print("ETF/LOF待产品模型:", len(funds))
+    print("ETF/LOF产品质量:", dict(fund_status_counts), "按类别:", dict(fund_category_counts))
+    print("进入第四步深扫:", stock_deep_eligible, "只股票 +", fund_deep_eligible, "只ETF/LOF =", stock_deep_eligible + fund_deep_eligible)
 
     if args.strict:
         problems: list[str] = []
@@ -315,7 +342,11 @@ def main() -> int:
         if specialized_requested >= 10 and specialized_fetch_success_pct < 70:
             problems.append(f"3B专属证据充分覆盖不足:{specialized_fetch_success_pct}%")
         if final_counts.get("PASS", 0) + final_counts.get("WATCH", 0) < max(1, int(len(stocks) * 0.5)):
-            problems.append("基本面模型异常地淘汰了过多候选")
+            problems.append("股票基本面模型异常地淘汰了过多候选")
+        if len(fund_assessed) != len(funds):
+            problems.append("ETF/LOF产品质量评估数量与候选数量不一致")
+        if funds and fund_status_counts.get("PASS", 0) + fund_status_counts.get("WATCH", 0) < max(1, int(len(funds) * 0.8)):
+            problems.append("ETF/LOF产品质量模型异常地淘汰了过多候选")
         if problems:
             raise SystemExit("；".join(problems))
     return 0
