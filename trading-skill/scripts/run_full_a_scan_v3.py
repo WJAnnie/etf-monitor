@@ -5,6 +5,7 @@ from datetime import timedelta
 import scripts.run_full_a_scan_v2 as v2
 from trading_skill.chan_extensions import annotate_second_buy_variants
 from trading_skill.domain.enums import ChanSignalType, Timeframe
+from trading_skill.history_policy import classify_history_counts, primary_history_gate
 from trading_skill.production_chan_v3 import analyze_production_chan_v3
 from trading_skill.strategy_policy import (
     TIMEFRAME_POLICY,
@@ -160,7 +161,42 @@ HARD_ENTRY_BLOCKERS = {
     "DATA_INCOMPLETE",
     "PORTFOLIO_RISK_FULL",
     "REENTRY_LOCKED",
+    "HISTORY_CONTEXT_INCOMPLETE",
 }
+
+
+def _history_for_symbol(symbol: dict) -> dict | None:
+    explicit = symbol.get("history_quality")
+    if isinstance(explicit, dict) and explicit:
+        return dict(explicit)
+    if not any(key in symbol for key in ("daily", "weekly", "120m", "30m", "5m")):
+        return None
+    return classify_history_counts(
+        daily=len(symbol.get("daily") or []),
+        weekly=len(symbol.get("weekly") or []),
+        m120=len(symbol.get("120m") or []),
+        m30=len(symbol.get("30m") or []),
+        m5=len(symbol.get("5m") or []),
+    ).to_dict()
+
+
+def _enforce_history_policy(candidate: dict, symbol: dict) -> None:
+    quality = _history_for_symbol(symbol)
+    if quality is None:
+        return
+    timeframe = str(candidate.get("timeframe") or "")
+    ok, reason = primary_history_gate(timeframe, quality)
+    candidate["history_quality"] = quality
+    candidate["history_note"] = reason + "；" + str(quality.get("note") or "")
+    if ok:
+        return
+    candidate["push"] = False
+    candidate["action"] = "OBSERVE"
+    candidate["recent_signal_note"] = f"缠论买点保留观察，但{reason}，不把有限历史当成完整结构证据"
+    blockers = list(candidate.get("blockers") or [])
+    if "HISTORY_CONTEXT_INCOMPLETE" not in blockers:
+        blockers.append("HISTORY_CONTEXT_INCOMPLETE")
+    candidate["blockers"] = blockers
 
 
 def _enforce_first_buy_permission(candidate: dict) -> None:
@@ -173,7 +209,7 @@ def _enforce_first_buy_permission(candidate: dict) -> None:
     if hard_blocked:
         candidate["push"] = False
         candidate["action"] = "OBSERVE"
-        candidate["recent_signal_note"] = "一买结构存在，但存在基本面/风险/数据/上级结构等硬阻断，仅保留观察"
+        candidate["recent_signal_note"] = "一买结构存在，但存在基本面/风险/数据/上级结构/历史证据等硬阻断，仅保留观察"
         return
 
     if timeframe == Timeframe.DAILY.value:
@@ -189,7 +225,6 @@ def _enforce_first_buy_permission(candidate: dict) -> None:
         return
 
     if timeframe == Timeframe.M120.value:
-        # 120分钟一买只允许“准备/小试仓观察”，且必须保留原决策的成熟度与机会等级门槛。
         grade_ok = str(candidate.get("opportunity") or "") in {"S", "A", "B"}
         maturity = str(candidate.get("execution_maturity") or "NOT_READY")
         maturity_ok = maturity in {"TRIGGERED", "PREPARE"}
@@ -211,7 +246,7 @@ def _enforce_first_buy_permission(candidate: dict) -> None:
             return
         candidate["action"] = "PREPARE_BUY"
         candidate["push"] = True
-        candidate["recent_signal_note"] = "120分钟一买：满足机会等级和距离门槛后仅进入准备/小试仓观察，不等同标准二买或三买"
+        candidate["recent_signal_note"] = "120分钟一买：满足机会等级、历史证据和距离门槛后仅进入准备/小试仓观察，不等同标准二买或三买"
 
 
 def _major_negative_events(events: list[dict] | tuple[dict, ...]) -> list[dict]:
@@ -222,12 +257,10 @@ def _major_negative_events(events: list[dict] | tuple[dict, ...]) -> list[dict]:
 
 
 def _major_negative_industry_events(industry: dict) -> list[dict]:
-    """向后兼容测试和旧调用。"""
     return _major_negative_events(list(industry.get("events") or []))
 
 
 def _events_for_symbol(symbol: dict, industry_map: dict) -> list[dict]:
-    # 跨行业补充路线必须优先使用已解析的真实行业事件，不能因industry_code=CROSS_MARKET绕过行业风险。
     if "industry_events" in symbol:
         return list(symbol.get("industry_events") or [])
     industry = industry_map.get(str(symbol.get("industry_code"))) or {}
@@ -259,6 +292,7 @@ def analyze_symbol_v3(symbol, industry_map, *, as_of, equity):
     except (ValueError, KeyError):
         pass
 
+    _enforce_history_policy(candidate, symbol)
     _enforce_first_buy_permission(candidate)
 
     execution_ok, conflicts, latest_states = _execution_structure_ok(analysis, candidate)
