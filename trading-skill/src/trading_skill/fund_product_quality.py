@@ -84,8 +84,7 @@ def _num(value: object) -> float | None:
     return number if isfinite(number) else None
 
 
-# 这里既包含长期重点产业的归一名，也包含普通行业的归一名。
-# “普通行业能识别”不等于“自动成为优质行业”；是否当前支持仍由selected_industries决定。
+# 识别底层产业，不决定它是不是当前“优质行业”。当前支持状态仍由selected_industries决定。
 FUND_THEME_ALIASES: tuple[tuple[tuple[str, ...], str], ...] = (
     (("半导体", "芯片"), "半导体设备与材料"),
     (("创新药", "生物医药", "生物科技", "生物制品"), "创新药"),
@@ -101,14 +100,14 @@ FUND_THEME_ALIASES: tuple[tuple[tuple[str, ...], str], ...] = (
     (("船舶", "海工", "航海装备"), "造船与海工"),
     (("银行", "国有大型银行", "城商行", "农商行"), "银行"),
     (("证券", "券商"), "证券"),
-    (("保险"), "保险"),
+    (("保险",), "保险"),
     (("煤炭", "焦煤", "动力煤", "焦炭"), "煤炭"),
     (("有色", "铜", "铝", "稀土"), "有色"),
     (("农业", "种植", "粮食"), "农业"),
     (("养殖", "畜牧", "生猪"), "养殖"),
     (("白酒", "酒类"), "白酒"),
-    (("食品"), "食品"),
-    (("黄金股"), "黄金股"),
+    (("食品",), "食品"),
+    (("黄金股",), "黄金股"),
     (("石油", "油气"), "油气"),
     (("证券保险", "非银金融", "金融"), "金融"),
 )
@@ -179,7 +178,6 @@ def _trading_quality(item: Mapping[str, object]) -> tuple[TradingQuality, list[s
     percentile = _num(item.get("fund_liquidity_percentile"))
     amount = _num(item.get("amount"))
 
-    # 生产优先使用同资产类别分位；固定成交额只作为历史/单元测试兼容兜底。
     if percentile is not None:
         if percentile >= 70:
             positives.append("同类成交活跃度处于前30%，交易承载能力较好")
@@ -283,6 +281,7 @@ def assess_fund_product(
     premium = _num(reference.get("premium_discount_pct"))
     premium_fresh = bool(reference.get("premium_is_fresh"))
     asset_context_complete = bool(reference.get("asset_context_complete"))
+    fund_size_known = _num(reference.get("fund_size_cny")) is not None
 
     underlying, theme, positives, warnings = _underlying_state(item, selected_industries)
     trading, trade_pos, trade_warn = _trading_quality(item)
@@ -292,6 +291,8 @@ def assess_fund_product(
     positives.extend(product_pos)
     warnings.extend(product_warn)
 
+    if not fund_size_known:
+        warnings.append("缺少基金当前规模证据，无法排除小规模/清盘风险，只能WATCH")
     if position_stage == "OVERHEATED":
         warnings.append("底层资产/产品近期位置过热，属于时点风险而非产品质量永久否决")
 
@@ -311,10 +312,7 @@ def assess_fund_product(
     elif special_premium_check:
         warnings.append("跨境/QDII或LOF缺少足够新鲜的折溢价证据，只能WATCH")
 
-    external_asset_context_required = (
-        category in {"CROSS_BORDER", "COMMODITY", "BOND"}
-        or "CROSS_BORDER_QDII" in risk_tags
-    )
+    external_asset_context_required = category in {"CROSS_BORDER", "COMMODITY", "BOND"} or "CROSS_BORDER_QDII" in risk_tags
     if external_asset_context_required and not asset_context_complete:
         warnings.append("底层资产专属上下文尚未完成，只能WATCH但可保留技术观察")
 
@@ -331,7 +329,7 @@ def assess_fund_product(
     )
     if reference_fields >= 3 and (not special_premium_check or (premium is not None and premium_fresh)):
         coverage = ProductEvidenceCoverage.FULL
-    elif str(item.get("fund_family") or "").strip():
+    elif fund_size_known and str(item.get("fund_family") or "").strip():
         coverage = ProductEvidenceCoverage.PARTIAL
     else:
         coverage = ProductEvidenceCoverage.LIMITED
@@ -345,7 +343,8 @@ def assess_fund_product(
         status = FundProductStatus.REJECT
     else:
         medium_risk = (
-            high_premium
+            not fund_size_known
+            or high_premium
             or missing_premium
             or missing_asset_context
             or sector_context_not_supportive
@@ -355,7 +354,8 @@ def assess_fund_product(
         )
         risk = FundRiskLevel.HIGH if high_premium else FundRiskLevel.MEDIUM if medium_risk or warnings else FundRiskLevel.LOW
         if (
-            high_premium
+            not fund_size_known
+            or high_premium
             or missing_premium
             or missing_asset_context
             or sector_context_not_supportive
@@ -368,7 +368,7 @@ def assess_fund_product(
             status = FundProductStatus.PASS
 
     followups: list[str] = []
-    if reference.get("fund_size_cny") is None:
+    if not fund_size_known:
         followups.append("补充基金规模用于清盘/承载能力复核")
     if reference.get("management_fee_pct") is None or reference.get("custody_fee_pct") is None:
         followups.append("补充管理费和托管费用于同类长期成本比较")
