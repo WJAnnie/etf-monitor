@@ -65,6 +65,15 @@ jobs:
             --output full-a-results/fundamental_quality_latest.json \
             --strict
 
+      - name: STEP3-4 深扫资格队列验证
+        run: |
+          python -m scripts.build_deep_scan_queue \
+            --input full-a-results/fundamental_quality_latest.json \
+            --output full-a-results/deep_scan_queue_latest.json \
+            --soft-target-min 80 \
+            --capacity-max 150 \
+            --strict
+
       - name: 打印新版STEP1-3摘要
         if: always()
         run: |
@@ -73,6 +82,7 @@ jobs:
           from pathlib import Path
           c=Path('full-a-results/candidate_universe_latest.json')
           f=Path('full-a-results/fundamental_quality_latest.json')
+          q=Path('full-a-results/deep_scan_queue_latest.json')
           if c.exists():
               p=json.loads(c.read_text(encoding='utf-8'))
               s=p.get('summary',{})
@@ -96,6 +106,10 @@ jobs:
               print('PASS基金=',[(x.get('code'),x.get('name'),x.get('fund_category'),(x.get('assessment') or {}).get('underlying_theme')) for x in funds if (x.get('assessment') or {}).get('status')=='PASS'][:20])
               print('WATCH基金=',[(x.get('code'),x.get('name'),x.get('fund_category'),(x.get('assessment') or {}).get('warnings')) for x in funds if (x.get('assessment') or {}).get('status')=='WATCH'][:20])
               print('REJECT基金=',[(x.get('code'),x.get('name'),(x.get('assessment') or {}).get('hard_risks')) for x in funds if (x.get('assessment') or {}).get('status')=='REJECT'][:10])
+          if q.exists():
+              p=json.loads(q.read_text(encoding='utf-8'))
+              print('STEP3->4深扫资格=',p.get('summary'))
+              print('深扫前20=',[(x.get('code'),x.get('name'),x.get('security_type'),x.get('status'),x.get('tier'),x.get('score')) for x in p.get('candidates',[])[:20]])
           PY
 
       - name: Upload STEP1-3 validation
