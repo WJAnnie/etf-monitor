@@ -28,7 +28,8 @@ MAX_WORKERS = 6
 DAILY_LIMIT = 1200
 M5_LIMIT = 1200
 M30_LIMIT = 1600
-MIN_DAILY = 500
+MIN_DAILY = 120
+LONG_DAILY = 500
 MIN_M5 = 500
 MIN_M30 = 480
 MIN_M120 = 100
@@ -158,9 +159,10 @@ def aggregate_m30_to_m120(rows: list[dict]) -> list[dict]:
 
 def fetch_daily_v2(code: str, market: int) -> tuple[list[dict], str, list[str]]:
     warnings = []
+    # 优先前复权长历史，避免除权除息在长期缠论结构中制造假跳空。
     for name, fn in (
+        ("东方财富前复权", lambda: eastmoney_daily(code, market, DAILY_LIMIT)),
         ("腾讯", lambda: tencent_daily(code, DAILY_LIMIT)),
-        ("东方财富", lambda: eastmoney_daily(code, market, DAILY_LIMIT)),
     ):
         try:
             rows = fn()
@@ -192,10 +194,11 @@ def fetch_m5_v2(code: str, market: int, now: datetime) -> tuple[list[dict], str,
 
 def fetch_m30_v2(code: str, market: int, now: datetime) -> tuple[list[dict], str, list[str]]:
     warnings = []
+    # 30分钟同样优先前复权长历史；新浪/腾讯只做网络与数据源兜底。
     providers = (
-        ("腾讯", lambda: tencent_m30(code)),
+        ("东方财富前复权", lambda: eastmoney_m30(code, market)),
         ("新浪", lambda: sina_m30(code)),
-        ("东方财富", lambda: eastmoney_m30(code, market)),
+        ("腾讯", lambda: tencent_m30(code)),
     )
     for name, fn in providers:
         try:
@@ -246,6 +249,7 @@ def collect_one(item: dict, now: datetime) -> dict:
         "5m": m5,
         "quality": {
             "daily_history_ok": len(daily) >= MIN_DAILY,
+            "daily_long_history_ok": len(daily) >= LONG_DAILY,
             "m5_history_ok": len(m5) >= MIN_M5,
             "m30_history_ok": len(m30) >= MIN_M30,
             "m120_history_ok": len(m120) >= MIN_M120,
@@ -299,6 +303,8 @@ def main() -> int:
             "real_5m_only": True,
             "30m_direct_real_history": True,
             "120m_from_real_30m": True,
+            "prefer_adjusted_long_history": True,
+            "newer_stocks_can_use_shorter_daily_history": True,
             "no_15m_to_5m": True,
             "daily_target": DAILY_LIMIT,
             "m5_target": M5_LIMIT,
