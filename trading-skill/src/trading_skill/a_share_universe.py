@@ -27,6 +27,8 @@ class IndustryCandidate:
     change_ytd: float
     main_flow_ratio: float
     breadth: float
+    selection_reason: str = "市场结构筛选"
+    prospect_theme: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,7 +138,6 @@ def screen_industries(
         low_position = 0.70 * _percentile([-x for x in changes_60d], -ch60) + 0.30 * _percentile(
             [-x for x in changes_ytd], -ytd
         )
-        # 前景分只做市场侧代理：中期相对强度 + 当日资金与扩散度。真正的产业/财务前景由后续基本面层确认。
         prospects = (
             0.45 * _percentile(changes_60d, ch60)
             + 0.30 * _percentile(flows, flow)
@@ -157,7 +158,6 @@ def screen_industries(
         else:
             state = "偏冷"
 
-        # 不把纯粹暴跌且没有资金/扩散改善的行业当作“低位机会”。
         if heat < 38 and prospects < 38:
             continue
         result.append(
@@ -189,7 +189,7 @@ def valid_stock_name(name: str) -> bool:
 
 
 def rank_industry_leaders(
-    rows: Iterable[Mapping[str, object]], *, industry: IndustryCandidate, limit: int = 3
+    rows: Iterable[Mapping[str, object]], *, industry: IndustryCandidate, limit: int = 5
 ) -> tuple[LeaderCandidate, ...]:
     provisional: list[dict[str, object]] = []
     for row in rows:
@@ -221,9 +221,6 @@ def rank_industry_leaders(
     if not provisional:
         return ()
 
-    # 开盘前很多实时列表的成交额/换手率统一为0或“-”。此时不能把整个行业龙头池过滤为空。
-    # 只要板块内已经出现可信实时成交额，就启用1000万元流动性门槛；否则按市值做代理排序，
-    # 等14:30/14:50正式扫描时再自然切回“市值+成交额+换手率”的完整排序。
     live_liquidity_available = any(float(item["amount"]) >= 10_000_000 for item in provisional)
     if live_liquidity_available:
         clean = [item for item in provisional if float(item["amount"]) >= 10_000_000]
@@ -236,18 +233,27 @@ def rank_industry_leaders(
     amounts = [float(x["amount"]) for x in clean]
     floats = [float(x["float_cap"]) for x in clean]
     turnovers = [float(x["turnover"]) for x in clean]
+    strengths = [float(x["change_60d"]) for x in clean]
     scores: list[tuple[float, dict[str, object]]] = []
     for item in clean:
         cap_score = _percentile(caps, float(item["total_cap"]))
         float_score = _percentile(floats, float(item["float_cap"]))
-        extension_penalty = max(0.0, float(item["change_60d"]) - 30.0) * 0.35
+        strength_score = _percentile(strengths, float(item["change_60d"]))
+        # 超过45%的60日涨幅才明显惩罚，避免把刚成为新龙头的股票过早排除。
+        extension_penalty = max(0.0, float(item["change_60d"]) - 45.0) * 0.45
         if live_liquidity_available:
             amount_score = _percentile(amounts, float(item["amount"]))
             liquidity_score = _percentile(turnovers, float(item["turnover"]))
-            leader_score = 0.45 * cap_score + 0.30 * amount_score + 0.15 * float_score + 0.10 * liquidity_score
+            # 不再只偏向“老牌大市值龙头”：市值、成交活跃、相对强度共同识别产业龙头和市场新龙头。
+            leader_score = (
+                0.25 * cap_score
+                + 0.25 * amount_score
+                + 0.15 * float_score
+                + 0.15 * liquidity_score
+                + 0.20 * strength_score
+            )
         else:
-            # 盘前代理排序：不虚构成交活跃度，只使用可验证的市值规模。
-            leader_score = 0.65 * cap_score + 0.35 * float_score
+            leader_score = 0.55 * cap_score + 0.30 * float_score + 0.15 * strength_score
         leader_score -= extension_penalty
         scores.append((leader_score, item))
 
