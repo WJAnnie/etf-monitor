@@ -131,6 +131,12 @@ def test_fund_name_edge_cases_do_not_confuse_asset_class_with_keywords():
         (sec("164906", name="海外科技LOF", security_type=SecurityType.LOF), FundCategory.EQUITY_SECTOR),
         (sec("159920", name="恒生ETF华夏", security_type=SecurityType.ETF), FundCategory.EQUITY_BROAD),
         (sec("159711", name="港股通50ETF华夏", security_type=SecurityType.ETF), FundCategory.EQUITY_BROAD),
+        (sec("560710", name="船舶ETF富国", security_type=SecurityType.ETF), FundCategory.EQUITY_SECTOR),
+        (sec("159698", name="粮食ETF鹏华", security_type=SecurityType.ETF), FundCategory.EQUITY_SECTOR),
+        (sec("159930", name="能源ETF汇添富", security_type=SecurityType.ETF), FundCategory.EQUITY_SECTOR),
+        (sec("518600", name="金ETF广发", security_type=SecurityType.ETF), FundCategory.COMMODITY),
+        (sec("159870", name="化工ETF鹏华", security_type=SecurityType.ETF), FundCategory.EQUITY_SECTOR),
+        (sec("159611", name="电力ETF广发", security_type=SecurityType.ETF), FundCategory.EQUITY_SECTOR),
     ]
     for item, expected in samples:
         assert classify_fund_category(item) is expected
