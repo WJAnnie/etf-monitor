@@ -31,8 +31,9 @@ _collect_one_v2 = v2.collect_one
 def tencent_daily_long(code: str, *, limit: int = v2.DAILY_LIMIT, page_size: int = 500) -> tuple[list[dict], list[str]]:
     """按结束日期向前分段抓取腾讯前复权日线，突破单次返回条数限制。
 
-    腾讯日线单次请求通常只能稳定返回约500根。V3按最早日期继续向前回溯，按交易日去重，
-    直到达到目标长度或确认已经没有更早历史。新股自然只返回其全部上市历史，不补造K线。
+    腾讯日线单次请求经常只返回略少于请求数量的历史K线，因此“短页”不能视为上市初期。
+    V3只在空页、没有新增交易日、达到目标长度或达到最大翻页次数时停止；新股翻到上市日前会
+    自然得到空页/重复页，不补造K线。
     """
     symbol = v2.tx_symbol(code)
     collected: dict[str, dict] = {}
@@ -69,17 +70,17 @@ def tencent_daily_long(code: str, *, limit: int = v2.DAILY_LIMIT, page_size: int
         if len(collected) >= limit:
             break
 
-        earliest_text = min(str(row.get("time") or "")[:10] for row in page_rows if row.get("time"))
+        dated_rows = [str(row.get("time") or "")[:10] for row in page_rows if row.get("time")]
+        if not dated_rows:
+            warnings.append(f"腾讯前复权分段第{page_no}页缺少日期")
+            break
+        earliest_text = min(dated_rows)
         try:
             earliest = datetime.fromisoformat(earliest_text)
         except ValueError:
             warnings.append(f"腾讯前复权分段日期异常:{earliest_text}")
             break
         end_date = (earliest - timedelta(days=1)).strftime("%Y-%m-%d")
-
-        # 本页不足请求条数通常表示已到上市初期；继续请求只会返回空或重复数据。
-        if len(page_rows) < count:
-            break
 
     rows = [collected[key] for key in sorted(collected)]
     return rows[-limit:], warnings
