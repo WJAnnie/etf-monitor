@@ -136,11 +136,9 @@ def _underlying_state(
     if category == "EQUITY_BROAD":
         positives.append("宽基底层资产具备分散化基础，不以单一行业景气作为准入门槛")
         return UnderlyingAssetState.SUPPORTIVE, theme, positives, warnings
-
     if category == "EQUITY_STRATEGY":
         positives.append("策略指数按自身规则评估，不与行业ETF直接混排")
         return UnderlyingAssetState.SUPPORTIVE, theme, positives, warnings
-
     if category == "EQUITY_SECTOR":
         selected_themes = _selected_theme_names(selected_industries)
         if theme and theme in selected_themes:
@@ -151,15 +149,12 @@ def _underlying_state(
             return UnderlyingAssetState.NEUTRAL, theme, positives, warnings
         warnings.append("行业/主题ETF尚未可靠解析到底层产业主题")
         return UnderlyingAssetState.UNKNOWN, None, positives, warnings
-
     if category in {"CROSS_BORDER", "COMMODITY", "BOND"}:
-        warnings.append("该资产类别需要后续宏观/底层资产专属上下文，不使用A股行业质量替代")
+        warnings.append("该资产类别需要宏观/底层资产专属上下文，不使用A股行业质量替代")
         return UnderlyingAssetState.NEUTRAL, theme, positives, warnings
-
     if category == "CASH":
         positives.append("现金类产品主要承担流动性管理功能")
         return UnderlyingAssetState.NEUTRAL, theme, positives, warnings
-
     warnings.append("底层资产类别信息有限")
     return UnderlyingAssetState.UNKNOWN, theme, positives, warnings
 
@@ -170,7 +165,7 @@ def _trading_quality(item: Mapping[str, object]) -> tuple[TradingQuality, list[s
     percentile = _num(item.get("fund_liquidity_percentile"))
     amount = _num(item.get("amount"))
 
-    # 优先用第二步同资产类别内的成交额分位，避免14:00和收盘时点的累计成交额绝对值不可比。
+    # 生产优先使用同资产类别分位；固定成交额只作为历史/单元测试兼容兜底。
     if percentile is not None:
         if percentile >= 70:
             positives.append("同类成交活跃度处于前30%，交易承载能力较好")
@@ -180,8 +175,6 @@ def _trading_quality(item: Mapping[str, object]) -> tuple[TradingQuality, list[s
             return TradingQuality.ADEQUATE, positives, warnings
         warnings.append("同类成交活跃度偏低，滑点和冲击成本风险较高")
         return TradingQuality.WEAK, positives, warnings
-
-    # 兼容缺少Step2分位信息的历史/单元测试输入；真实生产优先不走这里。
     if amount is None:
         warnings.append("缺少成交额和同类流动性分位，无法确认场内交易质量")
         return TradingQuality.UNKNOWN, positives, warnings
@@ -200,6 +193,7 @@ def _product_quality(
     reference: Mapping[str, object],
     trading: TradingQuality,
 ) -> tuple[ProductQuality, list[str], list[str], list[str]]:
+    """Explicit product rules; no synthetic weighted product score."""
     positives: list[str] = []
     warnings: list[str] = []
     hard: list[str] = []
@@ -209,64 +203,56 @@ def _product_quality(
     custody_fee = _num(reference.get("custody_fee_pct"))
     tracking_error = _num(reference.get("tracking_error_pct"))
 
-    score = 0
-    evidence = 0
     if fund_family:
         positives.append("第二步已按同指数/同主题家族去重，并优先保留更高流动性的代表产品")
-        score += 1
-        evidence += 1
-    if trading is TradingQuality.STRONG:
-        score += 2
-        evidence += 1
-    elif trading is TradingQuality.ADEQUATE:
-        score += 1
-        evidence += 1
-    elif trading is TradingQuality.WEAK:
-        score -= 2
-        evidence += 1
 
+    adverse = False
+    favorable_reference_count = 0
+    reference_seen = 0
+
+    if trading is TradingQuality.WEAK:
+        adverse = True
     if size is not None:
-        evidence += 1
+        reference_seen += 1
         if size < 10_000_000:
             hard.append("基金规模极小，清盘/流动性风险不可忽略")
-            score -= 3
         elif size < 50_000_000:
             warnings.append("基金规模偏小，需关注持续规模与清盘风险")
-            score -= 1
+            adverse = True
         elif size >= 1_000_000_000:
             positives.append("基金规模较大")
-            score += 2
-        else:
-            score += 1
+            favorable_reference_count += 1
 
     if management_fee is not None or custody_fee is not None:
+        reference_seen += 1
         total_fee = (management_fee or 0.0) + (custody_fee or 0.0)
-        evidence += 1
         if total_fee <= 0.35:
             positives.append("管理费+托管费较低")
-            score += 1
+            favorable_reference_count += 1
         elif total_fee >= 1.2:
             warnings.append("管理费+托管费偏高，长期持有成本需要比较")
-            score -= 1
+            adverse = True
 
     if tracking_error is not None:
-        evidence += 1
+        reference_seen += 1
         if tracking_error <= 1.0:
             positives.append("跟踪误差较低")
-            score += 1
+            favorable_reference_count += 1
         elif tracking_error >= 3.0:
             warnings.append("跟踪误差偏高")
-            score -= 1
+            adverse = True
 
     if hard:
         return ProductQuality.WEAK, positives, warnings, hard
-    if evidence == 0:
-        return ProductQuality.UNKNOWN, positives, warnings, hard
-    if score >= 4:
+    if adverse:
+        return ProductQuality.WEAK, positives, warnings, hard
+    if trading is TradingQuality.STRONG and favorable_reference_count >= 2:
         return ProductQuality.STRONG, positives, warnings, hard
-    if score >= 1:
+    if fund_family and trading in {TradingQuality.STRONG, TradingQuality.ADEQUATE}:
         return ProductQuality.ADEQUATE, positives, warnings, hard
-    return ProductQuality.WEAK, positives, warnings, hard
+    if reference_seen >= 2 and trading in {TradingQuality.STRONG, TradingQuality.ADEQUATE}:
+        return ProductQuality.ADEQUATE, positives, warnings, hard
+    return ProductQuality.UNKNOWN, positives, warnings, hard
 
 
 def assess_fund_product(
@@ -282,6 +268,7 @@ def assess_fund_product(
     risk_tags = {str(tag) for tag in (item.get("fund_risk_tags") or ())}
     premium = _num(reference.get("premium_discount_pct"))
     premium_fresh = bool(reference.get("premium_is_fresh"))
+    asset_context_complete = bool(reference.get("asset_context_complete"))
 
     underlying, theme, positives, warnings = _underlying_state(item, selected_industries)
     trading, trade_pos, trade_warn = _trading_quality(item)
@@ -310,6 +297,10 @@ def assess_fund_product(
     elif special_premium_check:
         warnings.append("跨境/QDII或LOF缺少足够新鲜的折溢价证据，只能WATCH")
 
+    external_asset_context_required = category in {"CROSS_BORDER", "COMMODITY", "BOND"}
+    if external_asset_context_required and not asset_context_complete:
+        warnings.append("底层资产专属上下文尚未完成，只能WATCH但可保留技术观察")
+
     if category == "CASH":
         warnings.append("现金类产品不需要进入多周期缠论深扫，除非任务目标是现金管理")
 
@@ -319,35 +310,36 @@ def assess_fund_product(
     )
     if reference_fields >= 3 and (not special_premium_check or (premium is not None and premium_fresh)):
         coverage = ProductEvidenceCoverage.FULL
-    elif str(item.get("fund_family") or "").strip() and item.get("fund_liquidity_percentile") is not None:
-        coverage = ProductEvidenceCoverage.PARTIAL
     elif str(item.get("fund_family") or "").strip():
         coverage = ProductEvidenceCoverage.PARTIAL
     else:
         coverage = ProductEvidenceCoverage.LIMITED
 
+    high_premium = premium is not None and premium_fresh and abs(premium) >= 10
+    missing_premium = special_premium_check and not (premium is not None and premium_fresh)
+    missing_asset_context = external_asset_context_required and not asset_context_complete
+
     if hard:
         risk = FundRiskLevel.HIGH
         status = FundProductStatus.REJECT
     else:
-        high_premium = premium is not None and premium_fresh and abs(premium) >= 10
         medium_risk = (
             high_premium
+            or missing_premium
+            or missing_asset_context
             or trading in {TradingQuality.WEAK, TradingQuality.UNKNOWN}
             or product in {ProductQuality.WEAK, ProductQuality.UNKNOWN}
             or underlying in {UnderlyingAssetState.WEAK, UnderlyingAssetState.UNKNOWN}
-            or (special_premium_check and not (premium is not None and premium_fresh))
         )
         risk = FundRiskLevel.HIGH if high_premium else FundRiskLevel.MEDIUM if medium_risk or warnings else FundRiskLevel.LOW
-        if high_premium:
-            status = FundProductStatus.WATCH
-        elif special_premium_check and not (premium is not None and premium_fresh):
-            status = FundProductStatus.WATCH
-        elif trading in {TradingQuality.WEAK, TradingQuality.UNKNOWN}:
-            status = FundProductStatus.WATCH
-        elif product in {ProductQuality.WEAK, ProductQuality.UNKNOWN}:
-            status = FundProductStatus.WATCH
-        elif underlying is UnderlyingAssetState.UNKNOWN:
+        if (
+            high_premium
+            or missing_premium
+            or missing_asset_context
+            or trading in {TradingQuality.WEAK, TradingQuality.UNKNOWN}
+            or product in {ProductQuality.WEAK, ProductQuality.UNKNOWN}
+            or underlying is UnderlyingAssetState.UNKNOWN
+        ):
             status = FundProductStatus.WATCH
         else:
             status = FundProductStatus.PASS
@@ -361,7 +353,7 @@ def assess_fund_product(
         followups.append("补充跟踪误差/跟踪偏离度用于指数产品质量比较")
     if special_premium_check and not (premium is not None and premium_fresh):
         followups.append("交易前获取新鲜IOPV/估算净值或可靠NAV口径重新计算折溢价")
-    if category in {"CROSS_BORDER", "COMMODITY", "BOND"}:
+    if missing_asset_context:
         followups.append("第四步前补充对应宏观/底层资产专属上下文")
 
     positives = list(dict.fromkeys(positives))
