@@ -48,6 +48,12 @@ jobs:
             --fund-cap 100 \
             --strict
 
+      - name: 新版全市场候选真实行业补全
+        run: |
+          python -m scripts.enrich_candidate_industries \
+            --input full-a-results/candidate_universe_latest.json \
+            --strict
+
       # 旧V3生产链作为后续基本面/缠论重构的回归保护；K线入口已有账户权限桥。
       - name: 旧V3候选预筛回归
         run: |
@@ -100,6 +106,7 @@ jobs:
               print('新版候选类型=',s.get('candidate_by_security_type'))
               print('新版候选路线=',s.get('candidate_by_route'))
               print('新版基金类别=',s.get('candidate_by_fund_category'))
+              print('新版候选行业覆盖=',p.get('candidate_industry_enrichment'))
               print('新版重点行业=',[(x.get('name'),x.get('pool'),x.get('state'),x.get('quality_score'),x.get('timing_score')) for x in p.get('selected_industries',[])[:20]])
           if universe_path.exists():
               p=json.loads(universe_path.read_text(encoding='utf-8'))
