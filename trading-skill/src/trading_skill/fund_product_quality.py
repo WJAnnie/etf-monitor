@@ -164,19 +164,34 @@ def _underlying_state(
     return UnderlyingAssetState.UNKNOWN, theme, positives, warnings
 
 
-def _trading_quality(amount: float | None) -> tuple[TradingQuality, list[str], list[str]]:
+def _trading_quality(item: Mapping[str, object]) -> tuple[TradingQuality, list[str], list[str]]:
     positives: list[str] = []
     warnings: list[str] = []
+    percentile = _num(item.get("fund_liquidity_percentile"))
+    amount = _num(item.get("amount"))
+
+    # 优先用第二步同资产类别内的成交额分位，避免14:00和收盘时点的累计成交额绝对值不可比。
+    if percentile is not None:
+        if percentile >= 70:
+            positives.append("同类成交活跃度处于前30%，交易承载能力较好")
+            return TradingQuality.STRONG, positives, warnings
+        if percentile >= 35:
+            positives.append("同类成交活跃度处于可接受区间")
+            return TradingQuality.ADEQUATE, positives, warnings
+        warnings.append("同类成交活跃度偏低，滑点和冲击成本风险较高")
+        return TradingQuality.WEAK, positives, warnings
+
+    # 兼容缺少Step2分位信息的历史/单元测试输入；真实生产优先不走这里。
     if amount is None:
-        warnings.append("缺少成交额，无法确认场内交易质量")
+        warnings.append("缺少成交额和同类流动性分位，无法确认场内交易质量")
         return TradingQuality.UNKNOWN, positives, warnings
     if amount >= 100_000_000:
-        positives.append("当日成交额较高，交易承载能力较好")
+        positives.append("成交额较高，交易承载能力较好")
         return TradingQuality.STRONG, positives, warnings
     if amount >= 10_000_000:
-        positives.append("当日成交额达到可接受水平")
+        positives.append("成交额达到可接受水平")
         return TradingQuality.ADEQUATE, positives, warnings
-    warnings.append("场内成交额偏低，滑点和冲击成本风险较高")
+    warnings.append("成交额偏低，滑点和冲击成本风险较高")
     return TradingQuality.WEAK, positives, warnings
 
 
@@ -197,7 +212,7 @@ def _product_quality(
     score = 0
     evidence = 0
     if fund_family:
-        positives.append("第二步已按同指数/同主题家族去重，保留更具代表性的交易品种")
+        positives.append("第二步已按同指数/同主题家族去重，并优先保留更高流动性的代表产品")
         score += 1
         evidence += 1
     if trading is TradingQuality.STRONG:
@@ -263,13 +278,13 @@ def assess_fund_product(
     reference = reference or {}
     category = str(item.get("fund_category") or "OTHER")
     security_type = str(item.get("security_type") or "")
-    amount = _num(item.get("amount"))
     position_stage = str(item.get("position_stage") or "UNKNOWN")
+    risk_tags = {str(tag) for tag in (item.get("fund_risk_tags") or ())}
     premium = _num(reference.get("premium_discount_pct"))
     premium_fresh = bool(reference.get("premium_is_fresh"))
 
     underlying, theme, positives, warnings = _underlying_state(item, selected_industries)
-    trading, trade_pos, trade_warn = _trading_quality(amount)
+    trading, trade_pos, trade_warn = _trading_quality(item)
     positives.extend(trade_pos)
     warnings.extend(trade_warn)
     product, product_pos, product_warn, hard = _product_quality(item, reference, trading)
@@ -279,7 +294,12 @@ def assess_fund_product(
     if position_stage == "OVERHEATED":
         warnings.append("底层资产/产品近期位置过热，属于时点风险而非产品质量永久否决")
 
-    special_premium_check = category == "CROSS_BORDER" or security_type == "LOF"
+    special_premium_check = (
+        category == "CROSS_BORDER"
+        or security_type == "LOF"
+        or "CROSS_BORDER_QDII" in risk_tags
+        or "LOF_PREMIUM" in risk_tags
+    )
     if premium is not None and premium_fresh:
         if abs(premium) >= 10:
             warnings.append("新鲜折溢价证据显示偏离净值超过10%，暂不进入直接交易候选")
@@ -299,6 +319,8 @@ def assess_fund_product(
     )
     if reference_fields >= 3 and (not special_premium_check or (premium is not None and premium_fresh)):
         coverage = ProductEvidenceCoverage.FULL
+    elif str(item.get("fund_family") or "").strip() and item.get("fund_liquidity_percentile") is not None:
+        coverage = ProductEvidenceCoverage.PARTIAL
     elif str(item.get("fund_family") or "").strip():
         coverage = ProductEvidenceCoverage.PARTIAL
     else:
