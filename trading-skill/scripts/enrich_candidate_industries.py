@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from math import isfinite
 from pathlib import Path
 
 import requests
@@ -22,16 +21,6 @@ TIMEOUT = 3.0
 MAX_WORKERS = 16
 
 
-def _num(value: object) -> float | None:
-    if value in (None, "", "-"):
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if isfinite(number) else None
-
-
 def _market_from_candidate(item: dict) -> int:
     board = str(item.get("board") or "")
     if board == "SH_MAIN" or str(item.get("code") or "").startswith(("5", "6")):
@@ -39,10 +28,10 @@ def _market_from_candidate(item: dict) -> int:
     return 0
 
 
-def resolve_context(code: str, market: int) -> dict:
+def resolve_industry(code: str, market: int) -> str | None:
     params = {
         "secid": f"{market}.{code}",
-        "fields": "f57,f58,f127,f162,f167",
+        "fields": "f57,f58,f127",
         "ut": UT,
         "fltt": 2,
         "invt": 2,
@@ -65,27 +54,25 @@ def resolve_context(code: str, market: int) -> dict:
             payload = response.json()
             data = payload.get("data") if isinstance(payload, dict) else None
             if isinstance(data, dict) and str(data.get("f57") or "").strip():
-                return {
-                    "industry": str(data.get("f127") or "").strip() or None,
-                    "pe": _num(data.get("f162")),
-                    "pb": _num(data.get("f167")),
-                }
+                industry = str(data.get("f127") or "").strip()
+                if industry:
+                    return industry
             errors.append(f"{host}:empty")
         except Exception as exc:
             errors.append(f"{host}:{exc}")
-    raise RuntimeError("；".join(errors))
+    if errors:
+        raise RuntimeError("；".join(errors))
+    return None
 
 
-def _apply_context(item: dict, context: dict | None, *, error: str | None = None) -> dict:
+def _apply_context(item: dict, industry: str | None, *, error: str | None = None) -> dict:
     out = dict(item)
-    context = context or {}
-    resolved_industry = str(context.get("industry") or "").strip()
+    resolved_industry = str(industry or "").strip()
     existing_industry = str(item.get("industry_name") or "").strip()
     fundamental_industry = resolved_industry or existing_industry
 
-    out["valuation_pe"] = context.get("pe")
-    out["valuation_pb"] = context.get("pb")
-    out["valuation_source"] = "东方财富个股f162/f167" if context else None
+    # PE/PB来自Step1全市场行情并由Step2透传；这里不重复请求、也不覆盖。
+    out["valuation_source"] = "Step1全市场行情f9/f23"
 
     if fundamental_industry:
         theme_match = match_theme(fundamental_industry)
@@ -108,36 +95,36 @@ def _apply_context(item: dict, context: dict | None, *, error: str | None = None
 
 def enrich_candidates(candidates: list[dict]) -> tuple[list[dict], dict]:
     stocks = [item for item in candidates if item.get("security_type") == "STOCK"]
-    contexts: dict[str, dict] = {}
+    missing = [item for item in stocks if not str(item.get("industry_name") or "").strip()]
+    resolved: dict[str, str] = {}
     errors: dict[str, str] = {}
 
-    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, max(1, len(stocks)))) as pool:
+    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, max(1, len(missing)))) as pool:
         futures = {
-            pool.submit(resolve_context, str(item.get("code")), _market_from_candidate(item)): item
-            for item in stocks
+            pool.submit(resolve_industry, str(item.get("code")), _market_from_candidate(item)): item
+            for item in missing
         }
         for future in as_completed(futures):
             item = futures[future]
             code = str(item.get("code") or "")
             try:
-                contexts[code] = future.result()
+                industry = future.result()
+                if industry:
+                    resolved[code] = industry
+                else:
+                    errors[code] = "未返回行业"
             except Exception as exc:
                 errors[code] = str(exc)
-                contexts[code] = {"industry": None, "pe": None, "pb": None}
 
     enriched: list[dict] = []
     industry_complete = 0
     valuation_complete = 0
-    resolved_by_api = 0
     for item in candidates:
         if item.get("security_type") != "STOCK":
             enriched.append(item)
             continue
         code = str(item.get("code") or "")
-        context = contexts.get(code) or {}
-        if context.get("industry"):
-            resolved_by_api += 1
-        out = _apply_context(item, context, error=errors.get(code))
+        out = _apply_context(item, resolved.get(code), error=errors.get(code))
         if out.get("industry_context_complete"):
             industry_complete += 1
         if out.get("valuation_pe") is not None or out.get("valuation_pb") is not None:
@@ -146,10 +133,12 @@ def enrich_candidates(candidates: list[dict]) -> tuple[list[dict], dict]:
 
     stats = {
         "stock_candidates": len(stocks),
+        "already_had_industry": len(stocks) - len(missing),
+        "industry_lookup_requested": len(missing),
+        "resolved_by_api": len(resolved),
         "industry_complete": industry_complete,
-        "resolved_by_api": resolved_by_api,
         "industry_coverage_pct": round(industry_complete / len(stocks) * 100.0, 2) if stocks else 100.0,
-        "valuation_complete": valuation_complete,
+        "valuation_complete_from_step1": valuation_complete,
         "valuation_coverage_pct": round(valuation_complete / len(stocks) * 100.0, 2) if stocks else 100.0,
         "errors": [{"code": code, "error": error[:500]} for code, error in sorted(errors.items())],
     }
@@ -171,11 +160,12 @@ def main() -> int:
     payload.setdefault("design_contract", {})["market_wide_candidates_get_real_industry_before_step3"] = True
     payload["design_contract"]["industry_resolution_failure_means_watch_not_generic_pass"] = True
     payload["design_contract"]["valuation_is_context_not_standalone_veto"] = True
-    payload["design_contract"]["candidate_context_lookup_is_fail_fast"] = True
+    payload["design_contract"]["valuation_reused_from_step1_no_duplicate_lookup"] = True
+    payload["design_contract"]["candidate_industry_lookup_is_fail_fast"] = True
     output = args.output or args.input
     atomic_json(output, payload)
 
-    print("候选行业/估值补全:", stats)
+    print("候选行业补全:", stats)
     if args.strict and stats["stock_candidates"]:
         if stats["industry_coverage_pct"] < 95:
             raise SystemExit(f"股票候选行业覆盖不足:{stats['industry_coverage_pct']}%")
