@@ -6,10 +6,10 @@ import scripts.run_full_a_scan_v2 as v2
 from trading_skill.chan_extensions import annotate_second_buy_variants
 from trading_skill.domain.enums import ChanSignalType, Timeframe
 from trading_skill.strategy_policy import (
-    STANDARD_BUY_PRIORITY,
-    TIMEFRAME_ENTRY_PRIORITY,
     TIMEFRAME_POLICY,
     entry_permission,
+    entry_priority,
+    parent_timeframes,
     primary_entry_timeframes,
 )
 
@@ -32,6 +32,7 @@ base.analyze_production_chan = _analyze_with_extensions
 
 
 def choose_primary_v3(results, *, as_of):
+    """从日线/120分钟/30分钟正式买点中选一个主逻辑；周期和买点类别使用同一优先矩阵。"""
     choices = []
     for timeframe in primary_entry_timeframes():
         result = results.get(timeframe)
@@ -39,19 +40,41 @@ def choose_primary_v3(results, *, as_of):
             continue
         for signal in base.fresh_signals(result, as_of=as_of, side="BUY"):
             kind = base.signal_type(signal)
-            if kind not in STANDARD_BUY_PRIORITY:
+            if kind not in {ChanSignalType.FIRST_BUY, ChanSignalType.SECOND_BUY, ChanSignalType.THIRD_BUY}:
                 continue
             if v2._invalidated_by_later_sell(result, signal, as_of=as_of):
                 continue
-            choices.append((STANDARD_BUY_PRIORITY[kind], TIMEFRAME_ENTRY_PRIORITY.get(timeframe, 0), signal.confirmation_timestamp, timeframe, signal))
+            priority = entry_priority(timeframe, kind, signal.extended_types)
+            if priority <= 0:
+                continue
+            choices.append((priority, signal.confirmation_timestamp, timeframe, signal))
     if not choices:
         return None
-    choices.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
-    _, _, _, timeframe, signal = choices[0]
+    choices.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    _, _, timeframe, signal = choices[0]
     return timeframe, signal
 
 
 base.choose_primary = choose_primary_v3
+
+
+def parent_valid_v3(results, timeframe, *, as_of):
+    """上级结构只看当前最新正式状态，不让已被新买点覆盖的旧卖点永久阻断下级机会。"""
+    for parent_tf in parent_timeframes(timeframe):
+        parent = results.get(parent_tf)
+        if parent is None or parent.status not in ("OK", "UNRESOLVED"):
+            return False
+        recent = base.fresh_signals(parent, as_of=as_of)
+        if recent:
+            latest = max(recent, key=lambda signal: signal.confirmation_timestamp)
+            if latest.side == "SELL":
+                return False
+        if parent.trend_classification == "DOWNTREND" and parent.divergence_state not in ("FORMING", "CONFIRMED"):
+            return False
+    return True
+
+
+base.parent_valid = parent_valid_v3
 
 
 def _parse_iso(value: str | None):
@@ -163,7 +186,14 @@ def _enforce_first_buy_permission(candidate: dict) -> None:
     elif timeframe == Timeframe.M30.value:
         candidate["action"] = "OBSERVE"
         candidate["push"] = False
-        candidate["recent_signal_note"] = "30分钟一买：反转初期，仅观察；优先等待标准二买/三买和5分钟执行确认"
+        candidate["recent_signal_note"] = "30分钟一买：反转初期，仅观察；优先等待标准二买/三买和5分钟执行条件"
+
+
+def _major_negative_industry_events(industry: dict) -> list[dict]:
+    return [
+        event for event in (industry.get("events") or [])
+        if event.get("importance") == "重大" and event.get("impact") == "利空"
+    ]
 
 
 def analyze_symbol_v3(symbol, industry_map, *, as_of, equity):
@@ -204,6 +234,18 @@ def analyze_symbol_v3(symbol, industry_map, *, as_of, equity):
         blockers = list(candidate.get("blockers") or [])
         if "EXECUTION_STRUCTURE_CONFLICT" not in blockers:
             blockers.append("EXECUTION_STRUCTURE_CONFLICT")
+        candidate["blockers"] = blockers
+
+    industry = industry_map.get(str(symbol.get("industry_code"))) or {}
+    candidate["industry_major_events"] = list(industry.get("events") or [])
+    major_negative = _major_negative_industry_events(industry)
+    if major_negative:
+        candidate["push"] = False
+        candidate["action"] = "OBSERVE"
+        candidate["recent_signal_note"] = "缠论结构仍保留，但行业出现36小时内重大利空，暂停新开仓并等待事件影响重新定价"
+        blockers = list(candidate.get("blockers") or [])
+        if "INDUSTRY_MAJOR_NEGATIVE_EVENT" not in blockers:
+            blockers.append("INDUSTRY_MAJOR_NEGATIVE_EVENT")
         candidate["blockers"] = blockers
 
     signal_price_text = str(candidate.get("buy_point") or "").split("～", 1)[0].replace("元", "")
