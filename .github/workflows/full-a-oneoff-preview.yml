@@ -1,0 +1,54 @@
+name: 临时全A扫描重发
+
+on:
+  push:
+    paths:
+      - '.github/triggers/full-a-oneoff-resend.txt'
+
+permissions:
+  contents: read
+
+jobs:
+  resend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: trading-skill
+    env:
+      FEISHU_WEBHOOK: ''
+      FEISHU_SECRET: ''
+      FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+      FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+      FEISHU_CHAT_ID: oc_9df5fff3a390da378fc2714fdb2ea541
+      TRADING_EQUITY: ${{ secrets.TRADING_EQUITY }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install
+        run: |
+          python -m pip install -e '.[dev]'
+          python -m pip install -r ../requirements.txt
+      - name: 全A行业与龙头预筛
+        run: python scripts/collect_full_a_universe.py --output full-a-results/universe_latest.json --industry-limit 8 --leaders-per-industry 3 --strict
+      - name: 候选五周期真实行情
+        run: python scripts/collect_candidate_bars.py --universe full-a-results/universe_latest.json --output full-a-results/candidate_bars_latest.json --strict
+      - name: 正式缠论深度扫描
+        run: python scripts/run_full_a_scan.py --universe full-a-results/universe_latest.json --bars full-a-results/candidate_bars_latest.json --output full-a-results/scan_latest.json --stage '临时预览（重新发送）'
+      - name: 发送到指定飞书会话
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from trading_skill.a_share_reporting import translate_scan_for_user
+          from trading_skill.notifications import build_stock_scan_report, notify_feishu
+          scan = json.loads(Path('full-a-results/scan_latest.json').read_text(encoding='utf-8'))
+          title, body = build_stock_scan_report(translate_scan_for_user(scan))
+          title += '｜临时预览重发'
+          body = '【说明】本次仅用于确认指定飞书会话和正式报告格式。\n\n' + body
+          channel = notify_feishu(title, body)
+          print(f'[OK] 已通过{channel}发送到指定会话')
+          PY
