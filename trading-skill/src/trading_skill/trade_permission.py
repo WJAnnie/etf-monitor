@@ -111,12 +111,24 @@ def evaluate_event_entry_state(
 def _proposed_entry(technical_row: Mapping[str, Any]) -> tuple[EntryMode, dict[str, Any] | None]:
     executable = technical_row.get("best_executable_candidate")
     if isinstance(executable, Mapping) and executable:
-        return EntryMode.STANDARD, dict(executable)
+        state = str(executable.get("state") or "")
+        if (
+            state in {
+                TechnicalOpportunityState.READY.value,
+                TechnicalOpportunityState.READY_WITH_CAUTION.value,
+            }
+            and bool(executable.get("executable_candidate"))
+        ):
+            return EntryMode.STANDARD, dict(executable)
 
     dominant = technical_row.get("dominant_current_buy")
     if isinstance(dominant, Mapping) and dominant:
         candidate = dict(dominant)
-        if str(candidate.get("state") or "") == TechnicalOpportunityState.PREPARE_FIRST_BUY.value:
+        if (
+            str(candidate.get("state") or "") == TechnicalOpportunityState.PREPARE_FIRST_BUY.value
+            and str(candidate.get("timeframe") or "") == "120m"
+            and str(candidate.get("signal_type") or "") == "FIRST_BUY"
+        ):
             return EntryMode.TEST, candidate
     return EntryMode.NONE, None
 
@@ -163,12 +175,14 @@ def evaluate_trade_permission(
     cautions: list[str] = []
     reasons: list[str] = []
 
-    if quality == "REJECT" or not quality_deep_analysis_eligible:
+    # 只有STEP3明确给出REJECT才是硬否决。WATCH/UNKNOWN或PASS但资格字段矛盾都属于证据/上下文待复核，
+    # 不能把“数据不足”伪装成“基本面已证伪”。
+    if quality == "REJECT":
         blockers.append(TradePermissionBlocker.QUALITY_REJECTED)
-        reasons.append("STEP3质量层存在硬否决，后续技术信号不得覆盖")
-    elif quality != "PASS":
+        reasons.append("STEP3质量层明确REJECT，后续技术信号不得覆盖")
+    elif quality != "PASS" or not quality_deep_analysis_eligible:
         blockers.append(TradePermissionBlocker.QUALITY_REVIEW_REQUIRED)
-        reasons.append("STEP3仍为WATCH/未知；允许继续观察，但不自动获得新开仓许可")
+        reasons.append("STEP3尚未形成一致的PASS自动交易资格；允许继续观察，但必须补齐/复核质量上下文")
 
     if event_state is EventEntryState.UNKNOWN:
         blockers.append(TradePermissionBlocker.EVENT_CONTEXT_UNAVAILABLE)
@@ -185,10 +199,10 @@ def evaluate_trade_permission(
 
     if not account_context_known:
         blockers.append(TradePermissionBlocker.ACCOUNT_CONTEXT_UNAVAILABLE)
-        reasons.append("账户交易权限上下文未知")
+        reasons.append("真实账户交易权限上下文未知")
     elif not account_allows_security:
         blockers.append(TradePermissionBlocker.ACCOUNT_SECURITY_NOT_ALLOWED)
-        reasons.append("当前账户/策略权限不允许该证券新开仓")
+        reasons.append("当前账户权限不允许该证券新开仓")
 
     if not portfolio_context_known:
         blockers.append(TradePermissionBlocker.PORTFOLIO_CONTEXT_UNAVAILABLE)
