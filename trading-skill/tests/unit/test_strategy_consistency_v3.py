@@ -17,7 +17,7 @@ from trading_skill.industry_prospects import industry_rotation_state
 from trading_skill.position import add_tranche, create_trade, map_sell_scope, target_exposure
 from trading_skill.production_chan import ProductionChanResult
 from trading_skill.sizing import StopCandidate, StopLevel, StopType, TrancheRole
-from trading_skill.strategy_policy import entry_permission, entry_priority, primary_entry_timeframes, sell_fraction
+from trading_skill.strategy_policy import entry_permission, primary_entry_timeframes, sell_fraction
 
 
 def _signal(kind: ChanSignalType, *, side="BUY", price=1000, when=None):
@@ -53,7 +53,7 @@ def test_primary_entries_exclude_weekly_and_5m_and_daily_first_buy_waits():
     assert "只观察" in entry_permission(Timeframe.M30, ChanSignalType.FIRST_BUY)
 
 
-def test_cross_timeframe_priority_does_not_let_30m_second_buy_override_daily_third_buy():
+def test_legacy_primary_category_order_does_not_let_30m_second_buy_override_daily_third_buy():
     when = datetime(2026, 9, 9, 10, 0, tzinfo=timezone.utc)
     daily_third = _signal(ChanSignalType.THIRD_BUY, when=when)
     m30_second = _signal(ChanSignalType.SECOND_BUY, when=when + timedelta(minutes=30))
@@ -65,7 +65,6 @@ def test_cross_timeframe_priority_does_not_let_30m_second_buy_override_daily_thi
         as_of=when + timedelta(hours=1),
     )
     assert picked is not None and picked[0] is Timeframe.DAILY
-    assert entry_priority(Timeframe.DAILY, ChanSignalType.THIRD_BUY) > entry_priority(Timeframe.M30, ChanSignalType.SECOND_BUY)
 
 
 def test_parent_context_uses_latest_formal_signal_not_any_old_sell():
