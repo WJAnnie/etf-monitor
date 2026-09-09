@@ -124,13 +124,56 @@ PROFILE_METRIC_PRIORITY: dict[str, tuple[str, ...]] = {
         "contract_liabilities_change_pct", "construction_in_progress_change_pct", "fixed_asset_change_pct",
         "construct_long_asset_cash_change_pct", "operating_cash_flow_change_pct",
     ),
+    "光伏与新能源制造": (
+        "inventory_change_pct", "construction_in_progress_change_pct", "fixed_asset_change_pct",
+        "construct_long_asset_cash_change_pct", "operating_cash_flow_change_pct",
+    ),
     "新材料/周期制造": (
         "construction_in_progress_change_pct", "fixed_asset_change_pct", "inventory_change_pct",
+        "construct_long_asset_cash_change_pct", "operating_cash_flow_change_pct",
+    ),
+    "化工/橡胶": (
+        "inventory_change_pct", "construction_in_progress_change_pct", "fixed_asset_change_pct",
         "construct_long_asset_cash_change_pct", "operating_cash_flow_change_pct",
     ),
     "工业软件/网络安全": (
         "contract_liabilities_change_pct", "accounts_receivable_change_pct", "operating_cash_flow_change_pct",
         "monetary_funds_change_pct",
+    ),
+    "影视院线/传媒": (
+        "operating_cash_flow_change_pct", "accounts_receivable_change_pct", "monetary_funds_change_pct",
+    ),
+    "零售/专业连锁": (
+        "inventory_change_pct", "operating_cash_flow_change_pct", "accounts_receivable_change_pct",
+        "monetary_funds_change_pct",
+    ),
+    "食品饮料/白酒": (
+        "contract_liabilities_change_pct", "inventory_change_pct", "operating_cash_flow_change_pct",
+        "monetary_funds_change_pct",
+    ),
+    "家电/消费电子": (
+        "inventory_change_pct", "accounts_receivable_change_pct", "operating_cash_flow_change_pct",
+        "construct_long_asset_cash_change_pct",
+    ),
+    "机械/工程机械": (
+        "accounts_receivable_change_pct", "inventory_change_pct", "contract_liabilities_change_pct",
+        "operating_cash_flow_change_pct", "construction_in_progress_change_pct",
+    ),
+    "公用事业/电力": (
+        "fixed_asset_change_pct", "construction_in_progress_change_pct", "construct_long_asset_cash_change_pct",
+        "operating_cash_flow_change_pct",
+    ),
+    "港口/航运": (
+        "fixed_asset_change_pct", "construct_long_asset_cash_change_pct", "operating_cash_flow_change_pct",
+        "construction_in_progress_change_pct",
+    ),
+    "农业/养殖": (
+        "inventory_change_pct", "operating_cash_flow_change_pct", "fixed_asset_change_pct",
+        "construct_long_asset_cash_change_pct",
+    ),
+    "煤炭/油气/资源品": (
+        "fixed_asset_change_pct", "construction_in_progress_change_pct", "construct_long_asset_cash_change_pct",
+        "inventory_change_pct", "operating_cash_flow_change_pct",
     ),
     "地产/建筑重资产": (
         "contract_liabilities_change_pct", "accounts_receivable_change_pct", "inventory_change_pct",
