@@ -56,6 +56,9 @@ CONTEXT_BLOCKERS = {
     TradePermissionBlocker.PORTFOLIO_CONTEXT_UNAVAILABLE,
 }
 
+PRIMARY_ENTRY_TIMEFRAMES = {"daily", "120m", "30m"}
+STANDARD_ENTRY_SIGNALS = {"SECOND_BUY", "THIRD_BUY"}
+
 
 @dataclass(frozen=True, slots=True)
 class TradePermission:
@@ -112,12 +115,16 @@ def _proposed_entry(technical_row: Mapping[str, Any]) -> tuple[EntryMode, dict[s
     executable = technical_row.get("best_executable_candidate")
     if isinstance(executable, Mapping) and executable:
         state = str(executable.get("state") or "")
+        timeframe = str(executable.get("timeframe") or "")
+        signal_type = str(executable.get("signal_type") or "")
         if (
             state in {
                 TechnicalOpportunityState.READY.value,
                 TechnicalOpportunityState.READY_WITH_CAUTION.value,
             }
             and bool(executable.get("executable_candidate"))
+            and timeframe in PRIMARY_ENTRY_TIMEFRAMES
+            and signal_type in STANDARD_ENTRY_SIGNALS
         ):
             return EntryMode.STANDARD, dict(executable)
 
