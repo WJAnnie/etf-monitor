@@ -49,9 +49,14 @@ jobs:
             --cross-market-limit 20 \
             --strict
 
-      - name: 真实候选长历史五周期行情
+      - name: 跨行业候选真实行业补全
         run: |
-          python -m scripts.collect_candidate_bars_v2 \
+          python -m scripts.enrich_cross_industry_v3 \
+            --universe full-a-results/universe_latest.json
+
+      - name: 真实候选长历史五周期行情V3
+        run: |
+          python -m scripts.collect_candidate_bars_v3 \
             --universe full-a-results/universe_latest.json \
             --output full-a-results/candidate_bars_latest.json \
             --strict
@@ -81,6 +86,7 @@ jobs:
               print('资讯匹配=',sum(1 for x in selected if x.get('events')),'资讯源=',p.get('industry_intelligence'))
               print('近期财报行业=',len(p.get('industry_recent_reports',{})))
               print('总候选=',p.get('deduped_leader_candidates'),'允许深扫=',p.get('deep_scan_eligible_candidates'))
+              print('跨行业真实行业=',p.get('cross_market_industry_enrichment'))
               print('入选=',[(x.get('name'),x.get('rotation_state'),x.get('prospect_theme')) for x in selected])
           if bars_path.exists():
               p=json.loads(bars_path.read_text(encoding='utf-8'))
@@ -88,11 +94,13 @@ jobs:
               if p.get('symbols'):
                   s=p['symbols'][0]
                   print('历史长度 daily/weekly/120/30/5=',len(s.get('daily',[])),len(s.get('weekly',[])),len(s.get('120m',[])),len(s.get('30m',[])),len(s.get('5m',[])))
+                  print('V3元数据=',{k:s.get(k) for k in ('industry_name','industry_analysis_profile','recent_report','pe','pb','candidate_route')})
           if scan_path.exists():
               p=json.loads(scan_path.read_text(encoding='utf-8'))
               c=p.get('candidates',[])
               print('深扫=',p.get('deep_scanned'),'近期买点=',len(c),'推送=',sum(1 for x in c if x.get('push')))
-              print('二买=',sum(1 for x in c if x.get('signal')=='SECOND_BUY'),'类二买=',sum(1 for x in c if x.get('extended_signal_types')))
+              print('一买=',sum(1 for x in c if x.get('signal')=='FIRST_BUY'),'二买=',sum(1 for x in c if x.get('signal')=='SECOND_BUY'),'三买=',sum(1 for x in c if x.get('signal')=='THIRD_BUY'))
+              print('类二买=',sum(1 for x in c if x.get('extended_signal_types')))
               print('执行冲突=',sum(1 for x in c if not x.get('execution_structure_ok',True)))
               print('样本=',[(x.get('code'),x.get('signal'),x.get('class2_label'),x.get('timeframe'),x.get('action')) for x in c[:20]])
           PY
