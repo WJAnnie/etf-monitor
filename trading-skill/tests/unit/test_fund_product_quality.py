@@ -32,6 +32,12 @@ def test_liquid_broad_etf_can_pass_without_stock_fundamental_model():
     assert result.deep_analysis_eligible is True
 
 
+def test_peer_relative_liquidity_overrides_large_absolute_turnover():
+    result = assess_fund_product(fund(amount=2_000_000_000, fund_liquidity_percentile=20.0))
+    assert result.trading_quality is TradingQuality.WEAK
+    assert result.status is FundProductStatus.WATCH
+
+
 def test_cross_border_without_fresh_premium_must_watch():
     result = assess_fund_product(
         fund(
@@ -42,6 +48,23 @@ def test_cross_border_without_fresh_premium_must_watch():
         )
     )
     assert result.status is FundProductStatus.WATCH
+    assert any("折溢价" in text for text in result.warnings)
+
+
+def test_commodity_qdii_keeps_commodity_asset_class_but_requires_premium_check():
+    result = assess_fund_product(
+        fund(
+            code="161125",
+            name="标普油气LOF",
+            security_type="LOF",
+            fund_category="COMMODITY",
+            fund_family="COMMODITY:油气",
+            fund_risk_tags=("CROSS_BORDER_QDII", "LOF_PREMIUM"),
+            fund_liquidity_percentile=85.0,
+        )
+    )
+    assert result.status is FundProductStatus.WATCH
+    assert result.underlying_state is UnderlyingAssetState.NEUTRAL
     assert any("折溢价" in text for text in result.warnings)
 
 
