@@ -1,4 +1,4 @@
-version: 1.1.0
+version: 1.2.0
 
 timeframes:
   strategic_context: [weekly]
@@ -7,8 +7,8 @@ timeframes:
   roles:
     weekly: 战略环境与长期仓位边界，不单独触发新开仓
     daily: 中期核心结构；日线一买默认等待二买，二买/三买可形成核心机会
-    120m: 主要中短线结构买点，优先二买/三买
-    30m: 战术结构买点，必须有日线/120m上级结构支持
+    120m: 主要中短线结构买点；二买/三买优先，一买只允许准备/小试仓
+    30m: 战术结构买点；二买/三买需日线/120m上级结构支持，一买只观察
     5m: 精细入场与短线风险确认，不能独立形成选股买入理由
 
 core_entry:
@@ -16,10 +16,10 @@ core_entry:
   allow_daily_first_buy: false
   allow_daily_second_buy: true
   allow_daily_third_buy: true
-  allow_120m_first_buy: true
+  allow_120m_first_buy: prepare_or_test_only
   allow_120m_second_buy: true
   allow_120m_third_buy: true
-  allow_30m_first_buy: true
+  allow_30m_first_buy: false
   allow_30m_second_buy: true
   allow_30m_third_buy: true
   allow_5m_standalone_entry: false
@@ -27,10 +27,26 @@ core_entry:
   allow_strong_class2_buy: true
   allow_center_class2_buy: true
 
+primary_signal_priority:
+  daily_second_buy: 100
+  daily_third_buy: 95
+  120m_second_buy: 90
+  120m_third_buy: 85
+  30m_second_buy: 80
+  30m_third_buy: 75
+  120m_first_buy: 60
+  daily_first_buy: 50
+  30m_first_buy: 40
+  class2_only_tiebreak_bonus: true
+
 execution_policy:
   lower_timeframe_sell_may_pause_new_entry: true
+  lower_timeframe_latest_signal_wins: true
+  parent_timeframe_latest_signal_wins: true
   lower_timeframe_sell_does_not_invalidate_healthy_parent_automatically: true
   five_minute_signal_alone_can_push: false
+  five_minute_confirmation_does_not_require_standalone_five_minute_buy: true
+  five_minute_confirmation_requires_no_active_formal_sell_and_no_technical_pause: true
 
 fibonacci:
   may_create_signal: false
@@ -58,6 +74,8 @@ sell_hierarchy:
 
 protection:
   stop_follows_entry_structure_timeframe: true
+  wick_break_is_warning_not_automatic_parent_exit: true
+  close_break_or_failed_reclaim_confirms_structure_failure: true
   can_move_down: false
   require_new_confirmed_structure: true
   use_cost_basis_as_primary_stop: false
