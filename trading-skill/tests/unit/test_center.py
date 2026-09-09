@@ -9,6 +9,7 @@ from trading_skill.chan.center import (
     build_recursive_center,
     classify_center_relation,
     extend_center,
+    motion_leaves_core,
     motion_overlaps_core,
     register_first_return,
     register_leave,
@@ -89,6 +90,7 @@ def test_extension_keeps_fixed_core_when_motion_ends_inside_core():
     c = center_from()
     candidate = motion(3, Direction.DOWN, 8, 12)
     assert motion_overlaps_core(c, candidate)
+    assert not motion_leaves_core(c, candidate)
     updated = extend_center(c, candidate).center
     assert updated.state is CenterState.EXTENDING
     assert (updated.zd_ticks, updated.zg_ticks) == (c.zd_ticks, c.zg_ticks)
@@ -97,12 +99,16 @@ def test_extension_keeps_fixed_core_when_motion_ends_inside_core():
     assert updated.id == c.id
 
 
-def test_motion_starting_inside_but_ending_outside_is_leave_not_extension():
+def test_motion_can_overlap_geometry_but_structurally_leave():
     c = center_from()
     leaving_up = motion(3, Direction.UP, 8, 15)
     leaving_down = motion(4, Direction.DOWN, 4, 10)
-    assert not motion_overlaps_core(c, leaving_up)
-    assert not motion_overlaps_core(c, leaving_down)
+    assert motion_overlaps_core(c, leaving_up)
+    assert motion_overlaps_core(c, leaving_down)
+    assert motion_leaves_core(c, leaving_up)
+    assert motion_leaves_core(c, leaving_down)
+    assert not extend_center(c, leaving_up).result.valid
+    assert not extend_center(c, leaving_down).result.valid
     assert register_leave(c, leaving_up).center.state is CenterState.LEAVING_UP
     assert register_leave(c, leaving_down).center.state is CenterState.LEAVING_DOWN
 
@@ -148,6 +154,16 @@ def test_return_reentering_center_is_returning_not_third_buy():
     result = register_first_return(c, motion(4, Direction.DOWN, 9, 15))
     assert result.center.state is CenterState.RETURNING
     assert result.events == ()
+
+
+def test_returning_motion_can_cross_core_and_still_extend_original_center():
+    c = register_leave(center_from(), motion(3, Direction.UP, 8, 18)).center
+    returned = register_first_return(c, motion(4, Direction.DOWN, 4, 15)).center
+    assert returned.state is CenterState.RETURNING
+    extended = extend_center(returned, motion(4, Direction.DOWN, 4, 15))
+    assert extended.result.valid
+    assert extended.center.state is CenterState.EXTENDING
+    assert extended.center.dd_ticks == 4
 
 
 def test_independent_up_center_relation():
