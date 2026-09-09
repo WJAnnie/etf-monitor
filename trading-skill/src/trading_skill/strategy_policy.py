@@ -40,18 +40,32 @@ TIMEFRAME_POLICY: dict[Timeframe, TimeframePolicy] = {
 }
 
 # 正式选股主信号：5分钟不能独立创造选股理由；周线只做战略环境。
-PRIMARY_ENTRY_TIMEFRAMES = (Timeframe.M120, Timeframe.DAILY, Timeframe.M30)
+PRIMARY_ENTRY_TIMEFRAMES = (Timeframe.DAILY, Timeframe.M120, Timeframe.M30)
 EXECUTION_TIMEFRAME = Timeframe.M5
 
-# 买点优先级只用于“多个正式信号同时存在时选主逻辑”，不改变缠论定义。
+# 跨周期主信号优先矩阵：先体现交易级别，再体现买点性质。
+# 目的：避免“30分钟二买”无条件压过更重要的“日线/120分钟三买”。
+ENTRY_PRIORITY_MATRIX: dict[tuple[Timeframe, ChanSignalType], int] = {
+    (Timeframe.DAILY, ChanSignalType.SECOND_BUY): 100,
+    (Timeframe.DAILY, ChanSignalType.THIRD_BUY): 95,
+    (Timeframe.M120, ChanSignalType.SECOND_BUY): 90,
+    (Timeframe.M120, ChanSignalType.THIRD_BUY): 85,
+    (Timeframe.M30, ChanSignalType.SECOND_BUY): 80,
+    (Timeframe.M30, ChanSignalType.THIRD_BUY): 75,
+    (Timeframe.M120, ChanSignalType.FIRST_BUY): 60,
+    (Timeframe.DAILY, ChanSignalType.FIRST_BUY): 50,
+    (Timeframe.M30, ChanSignalType.FIRST_BUY): 40,
+}
+
+# 向后兼容旧调用；正式V3主信号选择应优先使用 entry_priority()。
 STANDARD_BUY_PRIORITY = {
     ChanSignalType.SECOND_BUY: 50,
     ChanSignalType.THIRD_BUY: 40,
     ChanSignalType.FIRST_BUY: 30,
 }
 TIMEFRAME_ENTRY_PRIORITY = {
-    Timeframe.M120: 30,
-    Timeframe.DAILY: 25,
+    Timeframe.DAILY: 30,
+    Timeframe.M120: 25,
     Timeframe.M30: 20,
 }
 
@@ -80,6 +94,18 @@ def management_stop_level(timeframe: Timeframe) -> StopLevel:
     return TIMEFRAME_POLICY[timeframe].stop_level
 
 
+def entry_priority(timeframe: Timeframe, signal_type: ChanSignalType, extended_types=()) -> int:
+    """统一决定哪个正式买点成为本轮主交易逻辑；类二买只作为同级二买的加分标签。"""
+    score = ENTRY_PRIORITY_MATRIX.get((timeframe, signal_type), 0)
+    extended = set(extended_types or ())
+    if signal_type is ChanSignalType.SECOND_BUY:
+        if ChanSignalType.STRONG_CLASS2_BUY in extended:
+            score += 3
+        if ChanSignalType.CENTER_CLASS2_BUY in extended:
+            score += 2
+    return score
+
+
 def signal_label(signal) -> str:
     standard = [SIGNAL_CN.get(item, item.value) for item in signal.standard_types]
     extended = [SIGNAL_CN.get(item, item.value) for item in signal.extended_types]
@@ -95,17 +121,17 @@ def entry_permission(timeframe: Timeframe, signal_type: ChanSignalType) -> str:
     if timeframe is Timeframe.M5:
         return "仅执行确认，不单独开仓"
     if timeframe is Timeframe.DAILY and signal_type is ChanSignalType.FIRST_BUY:
-        return "日线一买成立，但默认等待二买"
+        return "日线一买成立，但默认等待标准二买"
     if timeframe is Timeframe.DAILY:
-        return "核心机会，可在低级别确认后分批建立核心仓"
+        return "核心机会，可在低级别执行条件满足后分批建立核心仓"
     if timeframe is Timeframe.M120:
         if signal_type is ChanSignalType.FIRST_BUY:
-            return "120分钟一买可作为小试仓/准备信号，优先等待30分钟或5分钟进一步确认"
-        return "主要结构买点，可在5分钟确认后分批执行"
+            return "120分钟一买只作为准备/小试仓信号，优先等待30分钟或5分钟执行条件进一步确认"
+        return "主要结构买点，可在5分钟执行条件满足后分批执行"
     if timeframe is Timeframe.M30:
         if signal_type is ChanSignalType.FIRST_BUY:
-            return "30分钟一买属于反转初期，只允许观察/小试仓，优先等待二买或5分钟确认"
-        return "战术买点，必须有日线/120分钟上级结构支持并由5分钟确认"
+            return "30分钟一买属于反转初期，只观察，不直接新开仓；优先等待标准二买/三买"
+        return "战术买点，必须有日线/120分钟上级结构支持并满足5分钟执行条件"
     return "观察"
 
 
