@@ -175,3 +175,93 @@ def select_industries_v2(
             if len(dynamic) >= dynamic_supplement:
                 break
     return tuple(prospects + dynamic)
+
+
+# V3：行业池每天轮换，但“长期前景”与“短期热度”职责分离。
+# 位置过高时暂退，不永久删除；当60日涨幅/当日热度冷却后会自动重新具备资格。
+def industry_rotation_state(item: IndustryCandidate) -> str:
+    if item.change_60d >= 48 or item.change_ytd >= 75 or (item.change_60d >= 35 and item.change_pct >= 5):
+        return "高位暂退"
+    if -5 <= item.change_60d <= 22 and item.heat_state in {"升温", "热门"}:
+        return "刚开始升温"
+    if item.heat_state == "回落" and item.change_60d <= 25:
+        return "回落观察"
+    return "持续跟踪"
+
+
+def _early_heat_candidates(material: list[Mapping[str, object]], used: set[str], limit: int) -> list[IndustryCandidate]:
+    pool = []
+    for item in screen_industries(material, limit=max(60, limit * 10)):
+        if item.code in used:
+            continue
+        state = industry_rotation_state(item)
+        if state != "刚开始升温":
+            continue
+        # 刚启动优先：不追60日已经很高的板块，同时要求扩散度/热度已有改善。
+        score = item.rank_score + item.low_position_score * 0.08 + min(item.heat_score, 80) * 0.05
+        pool.append((score, item))
+    pool.sort(key=lambda x: x[0], reverse=True)
+    out = []
+    for _, item in pool[:limit]:
+        out.append(
+            IndustryCandidate(
+                code=item.code,
+                name=item.name,
+                heat_score=item.heat_score,
+                low_position_score=item.low_position_score,
+                prospects_score=item.prospects_score,
+                rank_score=item.rank_score,
+                heat_state=item.heat_state,
+                change_pct=item.change_pct,
+                change_60d=item.change_60d,
+                change_ytd=item.change_ytd,
+                main_flow_ratio=item.main_flow_ratio,
+                breadth=item.breadth,
+                selection_reason="近期升温补充池：位置尚不过高且市场扩散/热度开始改善",
+                prospect_theme=None,
+            )
+        )
+    return out
+
+
+def select_industries_v3(
+    rows: Iterable[Mapping[str, object]], *, prospect_limit: int = 20, early_heat_limit: int = 8, dynamic_supplement: int = 4
+) -> tuple[tuple[IndustryCandidate, ...], tuple[IndustryCandidate, ...]]:
+    """返回(当前重点行业, 因高位暂退行业)。高位行业冷却后会自动重新进入。"""
+    material = list(rows)
+    all_prospects = list(prospect_industry_candidates(material))
+    paused = [item for item in all_prospects if industry_rotation_state(item) == "高位暂退"]
+    eligible_prospects = [item for item in all_prospects if industry_rotation_state(item) != "高位暂退"]
+    prospects = _diversified_prospect_selection(eligible_prospects, limit=max(1, prospect_limit), max_per_theme=2)
+    used = {item.code for item in prospects}
+
+    early = _early_heat_candidates(material, used, early_heat_limit)
+    used.update(item.code for item in early)
+
+    # 最后留少量普通结构补充，防止新行业尚未进入“升温”阈值时完全漏掉。
+    dynamic = []
+    if dynamic_supplement > 0:
+        for item in screen_industries(material, limit=max(40, dynamic_supplement * 8)):
+            if item.code in used or industry_rotation_state(item) == "高位暂退":
+                continue
+            dynamic.append(
+                IndustryCandidate(
+                    code=item.code,
+                    name=item.name,
+                    heat_score=item.heat_score,
+                    low_position_score=item.low_position_score,
+                    prospects_score=item.prospects_score,
+                    rank_score=item.rank_score,
+                    heat_state=item.heat_state,
+                    change_pct=item.change_pct,
+                    change_60d=item.change_60d,
+                    change_ytd=item.change_ytd,
+                    main_flow_ratio=item.main_flow_ratio,
+                    breadth=item.breadth,
+                    selection_reason="市场结构补充池：用于发现尚未进入长期前景表或刚发生结构变化的新方向",
+                    prospect_theme=None,
+                )
+            )
+            if len(dynamic) >= dynamic_supplement:
+                break
+    return tuple(prospects + early + dynamic), tuple(paused)
