@@ -185,6 +185,32 @@ def test_lower_timeframe_new_buy_can_align_execution_without_becoming_primary_si
     # 这里仅表示执行层与主结构同向，不改变primary_timeframe仍为120m。
 
 
+def test_lower_buy_inside_bearish_or_reversal_structure_is_not_execution_alignment():
+    primary_confirmation = NOW - timedelta(hours=6)
+    results = {
+        Timeframe.M120: result("120m", trend="UPTREND"),
+        Timeframe.M30: result("30m", trend="DOWNTREND", signals=[signal("BUY", "FIRST_BUY", hours_ago=2)]),
+        Timeframe.M5: result(
+            "5m",
+            trend="DOWNTREND",
+            divergence_type="TREND_BOTTOM_DIVERGENCE",
+            divergence_state="FORMING",
+            signals=[signal("BUY", "FIRST_BUY", hours_ago=1)],
+        ),
+    }
+    lower = evaluate_lower_context(
+        results,
+        primary_timeframe=Timeframe.M120,
+        primary_confirmation=primary_confirmation,
+        as_of=NOW,
+    )
+    assert lower.state is LowerTimeframeState.MIXED
+    states = dict(lower.child_states)
+    assert states[Timeframe.M30].startswith("MIXED:BUY_IN_")
+    assert states[Timeframe.M5].startswith("MIXED:BUY_IN_")
+    assert all(not state.startswith("ALIGNED:") for state in states.values())
+
+
 def test_missing_parent_is_unresolved_and_cannot_be_silently_treated_as_support():
     results = {
         Timeframe.M120: result("120m", trend="UPTREND"),
