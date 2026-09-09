@@ -78,6 +78,8 @@ class MarketSecurity:
     data_quality: DataQuality
     missing_fields: tuple[str, ...]
     source: str
+    pe: float | None = None
+    pb: float | None = None
 
     def as_dict(self) -> dict:
         data = asdict(self)
@@ -201,6 +203,8 @@ def normalize_stock_row(
         data_quality=quality,
         missing_fields=missing,
         source=source,
+        pe=optional_float(row.get("f9")),
+        pb=optional_float(row.get("f23")),
     )
 
 
