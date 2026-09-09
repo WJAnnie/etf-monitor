@@ -112,6 +112,16 @@ def classify_stock_board(code: str, market: int) -> StockBoard:
     return StockBoard.OTHER
 
 
+def classify_fund_security_type(name: str, fallback: SecurityType) -> SecurityType:
+    """数据源板块只能当兜底，证券名称中的明确 ETF/LOF 标识优先。"""
+    text = "".join(str(name or "").upper().split())
+    if "ETF" in text:
+        return SecurityType.ETF
+    if "LOF" in text:
+        return SecurityType.LOF
+    return fallback
+
+
 def _name_exclusion_reason(name: str) -> str | None:
     text = str(name or "").strip().upper()
     if not text:
@@ -123,7 +133,15 @@ def _name_exclusion_reason(name: str) -> str | None:
     return None
 
 
-def _quality(*, code: str, name: str, price: float | None, amount: float | None, change_60d: float | None, change_ytd: float | None) -> tuple[DataQuality, tuple[str, ...]]:
+def _quality(
+    *,
+    code: str,
+    name: str,
+    price: float | None,
+    amount: float | None,
+    change_60d: float | None,
+    change_ytd: float | None,
+) -> tuple[DataQuality, tuple[str, ...]]:
     missing = []
     for field, value in (("code", code), ("name", name), ("price", price), ("amount", amount)):
         if value in (None, ""):
@@ -137,7 +155,9 @@ def _quality(*, code: str, name: str, price: float | None, amount: float | None,
     return quality, tuple(missing)
 
 
-def normalize_stock_row(row: Mapping[str, object], *, source: str, permissions: TradePermissions | None = None) -> MarketSecurity:
+def normalize_stock_row(
+    row: Mapping[str, object], *, source: str, permissions: TradePermissions | None = None
+) -> MarketSecurity:
     permissions = permissions or TradePermissions()
     code = str(row.get("f12") or "").strip()
     name = str(row.get("f14") or "").strip()
@@ -147,7 +167,9 @@ def normalize_stock_row(row: Mapping[str, object], *, source: str, permissions: 
     amount = optional_float(row.get("f6"))
     change_60d = optional_float(row.get("f24"))
     change_ytd = optional_float(row.get("f25"))
-    quality, missing = _quality(code=code, name=name, price=price, amount=amount, change_60d=change_60d, change_ytd=change_ytd)
+    quality, missing = _quality(
+        code=code, name=name, price=price, amount=amount, change_60d=change_60d, change_ytd=change_ytd
+    )
 
     reasons: list[str] = []
     name_reason = _name_exclusion_reason(name)
@@ -182,36 +204,45 @@ def normalize_stock_row(row: Mapping[str, object], *, source: str, permissions: 
     )
 
 
-def normalize_fund_row(row: Mapping[str, object], *, security_type: SecurityType, source: str, permissions: TradePermissions | None = None) -> MarketSecurity:
+def normalize_fund_row(
+    row: Mapping[str, object],
+    *,
+    security_type: SecurityType,
+    source: str,
+    permissions: TradePermissions | None = None,
+) -> MarketSecurity:
     if security_type is SecurityType.STOCK:
         raise ValueError("normalize_fund_row cannot normalize STOCK")
     permissions = permissions or TradePermissions()
     code = str(row.get("f12") or "").strip()
     name = str(row.get("f14") or "").strip()
+    actual_type = classify_fund_security_type(name, security_type)
     market = int(optional_float(row.get("f13")) or 0)
     price = optional_float(row.get("f2"))
     amount = optional_float(row.get("f6"))
     change_60d = optional_float(row.get("f24"))
     change_ytd = optional_float(row.get("f25"))
-    quality, missing = _quality(code=code, name=name, price=price, amount=amount, change_60d=change_60d, change_ytd=change_ytd)
+    quality, missing = _quality(
+        code=code, name=name, price=price, amount=amount, change_60d=change_60d, change_ytd=change_ytd
+    )
 
     reasons: list[str] = []
-    if not permissions.security_type_allowed(security_type):
-        reasons.append(f"SECURITY_TYPE_NOT_ALLOWED:{security_type.value}")
+    if not permissions.security_type_allowed(actual_type):
+        reasons.append(f"SECURITY_TYPE_NOT_ALLOWED:{actual_type.value}")
     if not code:
         reasons.append("EMPTY_CODE")
     if not name:
         reasons.append("EMPTY_NAME")
     if price is None or price <= 0:
         reasons.append("NO_VALID_PRICE")
-    if "退市" in name or "终止上市" in name:
+    if any(token in name for token in ("退市", "终止上市", "终止运作")):
         reasons.append("DELISTING")
 
     return MarketSecurity(
         code=code,
         name=name,
         market=market,
-        security_type=security_type,
+        security_type=actual_type,
         board=StockBoard.NOT_APPLICABLE,
         price=price,
         change_pct=optional_float(row.get("f3")),
@@ -229,13 +260,31 @@ def normalize_fund_row(row: Mapping[str, object], *, security_type: SecurityType
     )
 
 
-def build_tradeable_universe(stock_rows: Iterable[Mapping[str, object]], etf_rows: Iterable[Mapping[str, object]] = (), lof_rows: Iterable[Mapping[str, object]] = (), fund_rows: Iterable[Mapping[str, object]] = (), *, stock_source: str = "UNKNOWN", fund_source: str = "UNKNOWN", permissions: TradePermissions | None = None) -> tuple[tuple[MarketSecurity, ...], tuple[MarketSecurity, ...]]:
+def build_tradeable_universe(
+    stock_rows: Iterable[Mapping[str, object]],
+    etf_rows: Iterable[Mapping[str, object]] = (),
+    lof_rows: Iterable[Mapping[str, object]] = (),
+    fund_rows: Iterable[Mapping[str, object]] = (),
+    *,
+    stock_source: str = "UNKNOWN",
+    fund_source: str = "UNKNOWN",
+    permissions: TradePermissions | None = None,
+) -> tuple[tuple[MarketSecurity, ...], tuple[MarketSecurity, ...]]:
     permissions = permissions or TradePermissions()
     securities = [
         *(normalize_stock_row(row, source=stock_source, permissions=permissions) for row in stock_rows),
-        *(normalize_fund_row(row, security_type=SecurityType.ETF, source=fund_source, permissions=permissions) for row in etf_rows),
-        *(normalize_fund_row(row, security_type=SecurityType.LOF, source=fund_source, permissions=permissions) for row in lof_rows),
-        *(normalize_fund_row(row, security_type=SecurityType.FUND, source=fund_source, permissions=permissions) for row in fund_rows),
+        *(
+            normalize_fund_row(row, security_type=SecurityType.ETF, source=fund_source, permissions=permissions)
+            for row in etf_rows
+        ),
+        *(
+            normalize_fund_row(row, security_type=SecurityType.LOF, source=fund_source, permissions=permissions)
+            for row in lof_rows
+        ),
+        *(
+            normalize_fund_row(row, security_type=SecurityType.FUND, source=fund_source, permissions=permissions)
+            for row in fund_rows
+        ),
     ]
     dedup: dict[tuple[str, SecurityType], MarketSecurity] = {}
     for item in securities:

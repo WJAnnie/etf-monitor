@@ -4,6 +4,7 @@ from trading_skill.market_universe import (
     StockBoard,
     TradePermissions,
     build_tradeable_universe,
+    classify_fund_security_type,
     classify_stock_board,
     normalize_fund_row,
     normalize_stock_row,
@@ -44,6 +45,13 @@ def test_funds_tracking_restricted_boards_are_still_allowed():
     ]
     items = [normalize_fund_row(row, security_type=SecurityType.ETF, source="test") for row in rows]
     assert all(item.tradable for item in items)
+
+
+def test_explicit_etf_name_overrides_wrong_source_bucket():
+    row = {"f12": "159999", "f13": 0, "f14": "测试ETF", "f2": 1.0, "f6": 50_000_000, "f24": 8, "f25": 12}
+    item = normalize_fund_row(row, security_type=SecurityType.LOF, source="wrong-bucket")
+    assert classify_fund_security_type("测试ETF", SecurityType.LOF) is SecurityType.ETF
+    assert item.security_type is SecurityType.ETF
 
 
 def test_missing_market_history_stays_missing_instead_of_becoming_zero():

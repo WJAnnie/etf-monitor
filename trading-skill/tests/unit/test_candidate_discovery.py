@@ -1,9 +1,36 @@
-from trading_skill.candidate_discovery import CandidateRoute, PositionStage, add_fund_candidates, discover_stock_candidates, finalize_candidates
+from trading_skill.candidate_discovery import (
+    CandidateRoute,
+    FundCategory,
+    PositionStage,
+    add_fund_candidates,
+    classify_fund_category,
+    discover_stock_candidates,
+    finalize_candidates,
+)
 from trading_skill.market_universe import DataQuality, MarketSecurity, SecurityType, StockBoard
 
 
 def sec(code, *, name=None, security_type=SecurityType.STOCK, market=0, amount=100_000_000, turnover=3.0, ch60=10.0, day=1.0):
-    return MarketSecurity(code=code, name=name or code, market=market, security_type=security_type, board=StockBoard.SZ_MAIN if security_type is SecurityType.STOCK else StockBoard.NOT_APPLICABLE, price=10.0, change_pct=day, amount=amount, turnover_rate=turnover, total_market_cap=10_000_000_000, float_market_cap=8_000_000_000, change_60d=ch60, change_ytd=20.0, tradable=True, exclusion_reasons=(), data_quality=DataQuality.COMPLETE, missing_fields=(), source="test")
+    return MarketSecurity(
+        code=code,
+        name=name or code,
+        market=market,
+        security_type=security_type,
+        board=StockBoard.SZ_MAIN if security_type is SecurityType.STOCK else StockBoard.NOT_APPLICABLE,
+        price=10.0,
+        change_pct=day,
+        amount=amount,
+        turnover_rate=turnover,
+        total_market_cap=10_000_000_000,
+        float_market_cap=8_000_000_000,
+        change_60d=ch60,
+        change_ytd=20.0,
+        tradable=True,
+        exclusion_reasons=(),
+        data_quality=DataQuality.COMPLETE if ch60 is not None else DataQuality.PARTIAL,
+        missing_fields=() if ch60 is not None else ("change_60d",),
+        source="test",
+    )
 
 
 def test_high_position_is_tagged_not_hard_excluded():
@@ -21,6 +48,16 @@ def test_high_position_is_tagged_not_hard_excluded():
     assert CandidateRoute.MARKET_STRENGTH.value in out["000001"].source_routes
 
 
+def test_missing_60d_history_cannot_fake_market_strength():
+    items = [
+        sec("000001", amount=2_000_000_000, turnover=10, ch60=None, day=5),
+        sec("000002", amount=500_000_000, turnover=5, ch60=12, day=2),
+        sec("000003", amount=300_000_000, turnover=4, ch60=8, day=1),
+    ]
+    store = discover_stock_candidates(items, score_floor=0, market_strength_cap=10, early_turn_cap=10)
+    assert ("000001", SecurityType.STOCK) not in store
+
+
 def test_same_etf_family_keeps_one_more_tradeable_representative():
     funds = [
         sec("510300", name="沪深300ETF", security_type=SecurityType.ETF, amount=100_000_000, ch60=8),
@@ -34,3 +71,20 @@ def test_same_etf_family_keeps_one_more_tradeable_representative():
     assert len(codes & {"510300", "510310"}) == 1
     assert "510310" in codes
     assert all(CandidateRoute.FUND_RELATIVE.value in x.source_routes for x in out)
+
+
+def test_funds_are_compared_inside_asset_categories_not_one_mixed_ranking():
+    funds = [
+        sec("510300", name="沪深300ETF", security_type=SecurityType.ETF, amount=100_000_000, ch60=8),
+        sec("511010", name="国债ETF", security_type=SecurityType.ETF, amount=2_000_000_000, ch60=1),
+        sec("518880", name="黄金ETF", security_type=SecurityType.ETF, amount=700_000_000, ch60=18),
+        sec("513100", name="纳指ETF", security_type=SecurityType.ETF, amount=500_000_000, ch60=12),
+    ]
+    assert classify_fund_category(funds[0]) is FundCategory.EQUITY_BROAD
+    assert classify_fund_category(funds[1]) is FundCategory.BOND
+    assert classify_fund_category(funds[2]) is FundCategory.COMMODITY
+    assert classify_fund_category(funds[3]) is FundCategory.CROSS_BORDER
+    store = {}
+    add_fund_candidates(store, funds, cap=10, score_floor=0)
+    categories = {x.fund_category for x in finalize_candidates(store)}
+    assert {c.value for c in (FundCategory.EQUITY_BROAD, FundCategory.BOND, FundCategory.COMMODITY, FundCategory.CROSS_BORDER)} <= categories

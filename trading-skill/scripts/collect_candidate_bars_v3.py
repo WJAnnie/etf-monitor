@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import argparse
+import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import scripts.collect_candidate_bars_v2 as v2
 from trading_skill.history_policy import classify_history_counts
+from trading_skill.market_universe import StockBoard, TradePermissions, classify_stock_board
 
 
 V3_METADATA_KEYS = (
@@ -24,23 +29,17 @@ V3_METADATA_KEYS = (
     "industry_context_note",
 )
 
-# 腾讯两个 HTTPS 主机在 GitHub Runner 上会出现不同的瞬时 501/连接状态。
-# 只切换同一个前复权接口，不把未复权日线混进长期缠论。
 TENCENT_DAILY_HOSTS = (
     "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
     "https://ifzq.gtimg.cn/appstock/app/fqkline/get",
 )
 
-
 _fetch_daily_v2 = v2.fetch_daily_v2
 _collect_one_v2 = v2.collect_one
-
-# 长历史分页会显著增加请求数，降低并发可减少同一数据源瞬时限流/501。
 v2.MAX_WORKERS = min(int(getattr(v2, "MAX_WORKERS", 6)), 4)
 
 
 def _fetch_tencent_daily_page(symbol: str, *, end_date: str, count: int) -> tuple[list[dict], list[str]]:
-    """从腾讯多个等价 HTTPS 主机获取一页前复权日线。"""
     errors: list[str] = []
     for url in TENCENT_DAILY_HOSTS:
         try:
@@ -61,12 +60,6 @@ def _fetch_tencent_daily_page(symbol: str, *, end_date: str, count: int) -> tupl
 
 
 def tencent_daily_long(code: str, *, limit: int = v2.DAILY_LIMIT, page_size: int = 500) -> tuple[list[dict], list[str]]:
-    """按结束日期向前分段抓取腾讯前复权日线，突破单次返回条数限制。
-
-    腾讯日线单次请求经常只返回略少于请求数量的历史K线，因此“短页”不能视为上市初期。
-    V3只在空页、没有新增交易日、达到目标长度或达到最大翻页次数时停止；新股翻到上市日前会
-    自然得到空页/重复页，不补造K线。
-    """
     symbol = v2.tx_symbol(code)
     collected: dict[str, dict] = {}
     warnings: list[str] = []
@@ -78,21 +71,16 @@ def tencent_daily_long(code: str, *, limit: int = v2.DAILY_LIMIT, page_size: int
         count = min(max(1, page_size), remaining)
         page_rows, page_errors = _fetch_tencent_daily_page(symbol, end_date=end_date, count=count)
         if page_errors:
-            # 如果备用主机最终取到了数据，保留异常作为质量提示但不丢弃整只股票。
             warnings.extend(f"腾讯前复权分段第{page_no}页:{item}" for item in page_errors)
         if not page_rows:
             break
-
         before = len(collected)
         for row in page_rows:
             day = str(row.get("time") or "")[:10]
             if day:
                 collected[day] = row
-        if len(collected) == before:
+        if len(collected) == before or len(collected) >= limit:
             break
-        if len(collected) >= limit:
-            break
-
         dated_rows = [str(row.get("time") or "")[:10] for row in page_rows if row.get("time")]
         if not dated_rows:
             warnings.append(f"腾讯前复权分段第{page_no}页缺少日期")
@@ -110,13 +98,11 @@ def tencent_daily_long(code: str, *, limit: int = v2.DAILY_LIMIT, page_size: int
 
 
 def fetch_daily_v3(code: str, market: int) -> tuple[list[dict], str, list[str]]:
-    """V3日线：优先腾讯多主机前复权分段长历史，不足时再回退V2前复权供应链。"""
     warnings: list[str] = []
     rows, tx_warnings = tencent_daily_long(code, limit=v2.DAILY_LIMIT)
     warnings.extend(tx_warnings)
     if len(rows) >= v2.MIN_DAILY:
         return rows[-v2.DAILY_LIMIT :], "腾讯前复权分段", warnings
-
     try:
         fallback_rows, fallback_source, fallback_warnings = _fetch_daily_v2(code, market)
         warnings.extend(fallback_warnings)
@@ -127,11 +113,6 @@ def fetch_daily_v3(code: str, market: int) -> tuple[list[dict], str, list[str]]:
 
 
 def merge_v3_metadata(result: dict, source: dict) -> dict:
-    """把V3预筛阶段的行业/财报/估值上下文完整带到多周期行情结果。
-
-    K线采集只负责行情，不得把上游已经确定的行业画像、轮动状态、近期财报、事件上下文，
-    以及跨行业真实行业解析状态丢失。后者直接参与“未解析真实行业时禁止新开仓”的安全门。
-    """
     merged = dict(result)
     for key in V3_METADATA_KEYS:
         if key in source:
@@ -163,10 +144,114 @@ def collect_one_v3(item: dict, now):
     return result
 
 
-# V2的collect_one在运行时读取模块全局函数，因此在V3入口统一替换数据供应链即可。
+def _account_stock_allowed(item: dict, permissions: TradePermissions) -> tuple[bool, str]:
+    code = str(item.get("code") or "")
+    market = int(item.get("market") or 0)
+    board = classify_stock_board(code, market)
+    return permissions.board_allowed(board), board.value
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--universe", type=Path, default=Path("full-a-results/universe_latest.json"))
+    parser.add_argument("--output", type=Path, default=Path("full-a-results/candidate_bars_latest.json"))
+    parser.add_argument("--strict", action="store_true")
+    args = parser.parse_args()
+
+    now = datetime.now(v2.CN_TZ)
+    universe = json.loads(args.universe.read_text(encoding="utf-8"))
+    raw_candidates = [
+        item for item in universe.get("leader_candidates", [])
+        if (item.get("fundamental_prefilter") or {}).get(
+            "deep_scan_eligible", (item.get("fundamental_prefilter") or {}).get("eligible")
+        )
+    ]
+
+    # 过渡权限桥：旧V3候选合同还未整体替换前，深扫入口必须服从新版账户权限。
+    permissions = TradePermissions(sh_main=True, sz_main=True, star=False, chinext=False, bse=False)
+    candidates: list[dict] = []
+    permission_excluded: list[dict] = []
+    for item in raw_candidates:
+        allowed, board = _account_stock_allowed(item, permissions)
+        if allowed:
+            candidates.append(item)
+        else:
+            permission_excluded.append({"code": item.get("code"), "name": item.get("name"), "board": board})
+
+    results: list[dict] = []
+    errors: list[dict] = []
+    with ThreadPoolExecutor(max_workers=v2.MAX_WORKERS) as pool:
+        futures = {pool.submit(collect_one_v3, item, now): item for item in candidates}
+        for future in as_completed(futures):
+            item = futures[future]
+            try:
+                results.append(future.result())
+            except Exception as exc:
+                errors.append({"code": item.get("code"), "name": item.get("name"), "error": str(exc)})
+
+    results.sort(
+        key=lambda x: (
+            str(x.get("prospect_theme") or "ZZZ"),
+            str(x.get("industry_name")),
+            int(x.get("leader_rank") or 99),
+            str(x.get("code")),
+        )
+    )
+    payload = {
+        "mode": "FULL_A_CANDIDATE_LONG_HISTORY_V3",
+        "generated_at": now.isoformat(),
+        "upstream_candidate_count": len(raw_candidates),
+        "permission_excluded_count": len(permission_excluded),
+        "permission_excluded": permission_excluded,
+        "candidate_count": len(candidates),
+        "loaded_count": len(results),
+        "errors": errors,
+        "symbols": results,
+        "guardrails": {
+            "account_stock_boards": [StockBoard.SH_MAIN.value, StockBoard.SZ_MAIN.value],
+            "star_chinext_bse_blocked_before_kline_download": True,
+            "real_5m_only": True,
+            "30m_direct_real_history": True,
+            "120m_from_real_30m": True,
+            "prefer_adjusted_long_history": True,
+            "newer_stocks_can_use_shorter_daily_history": True,
+            "no_15m_to_5m": True,
+            "daily_target": v2.DAILY_LIMIT,
+            "m5_target": v2.M5_LIMIT,
+            "m30_target": v2.M30_LIMIT,
+        },
+    }
+    v2.atomic_json(args.output, payload)
+    print(
+        f"旧链权限桥剔除={len(permission_excluded)}，允许深扫候选={len(candidates)}，"
+        f"长历史五周期成功={len(results)}，异常={len(errors)}"
+    )
+    if permission_excluded:
+        print("受限板块前10:", permission_excluded[:10])
+    for item in results:
+        print(
+            item["code"], item["name"], item["sources"], len(item["daily"]), len(item["weekly"]),
+            len(item["120m"]), len(item["30m"]), len(item["5m"]), item["quality"]["latest_m5"]
+        )
+    if errors:
+        print("异常前10:", errors[:10])
+
+    restricted_results = [
+        item for item in results
+        if classify_stock_board(str(item.get("code") or ""), int(item.get("market") or 0))
+        in {StockBoard.STAR, StockBoard.CHINEXT, StockBoard.BSE}
+    ]
+    if args.strict:
+        if restricted_results:
+            raise SystemExit(f"旧链权限桥失效:{len(restricted_results)}")
+        if candidates and len(results) / len(candidates) < 0.75:
+            raise SystemExit(f"长历史五周期成功率过低:{len(results)}/{len(candidates)}")
+    return 0
+
+
 v2.fetch_daily_v2 = fetch_daily_v3
 v2.collect_one = collect_one_v3
 
 
 if __name__ == "__main__":
-    raise SystemExit(v2.main())
+    raise SystemExit(main())

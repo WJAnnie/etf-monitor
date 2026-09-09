@@ -70,7 +70,18 @@ jobs:
           echo "stage=$STAGE" >> "$GITHUB_OUTPUT"
           echo "本轮时点：$STAGE"
 
-      - name: 动态重点行业与前五候选预筛
+      # 新第一/二步先独立产出并留档；后续基本面与缠论重构完成前，不强绑旧V3数据合同。
+      - name: 新版可交易池与候选发现
+        run: |
+          python -m scripts.collect_candidate_universe \
+            --output full-a-results/candidate_universe_latest.json \
+            --industry-limit 28 \
+            --stock-strength-cap 120 \
+            --stock-early-cap 100 \
+            --fund-cap 100 \
+            --strict
+
+      - name: 旧V3候选预筛回归
         run: |
           python -m scripts.collect_full_a_universe_v3 \
             --output full-a-results/universe_latest.json \
@@ -86,7 +97,7 @@ jobs:
           python -m scripts.enrich_cross_industry_v3 \
             --universe full-a-results/universe_latest.json
 
-      - name: 候选长历史五周期行情V3
+      - name: 账户权限桥与候选长历史五周期行情
         run: |
           python -m scripts.collect_candidate_bars_v3 \
             --universe full-a-results/universe_latest.json \

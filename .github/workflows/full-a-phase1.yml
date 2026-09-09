@@ -48,9 +48,8 @@ jobs:
             --fund-cap 100 \
             --strict
 
-      # 旧V3生产链暂时保留，直到后续基本面/缠论阶段完成逐层重构。
-      # 新候选层当前只验证第一、二步，不强行套入旧的深扫数据契约。
-      - name: 真实全A动态行业与前五候选预筛V3
+      # 旧V3生产链作为后续基本面/缠论重构的回归保护；K线入口已有账户权限桥。
+      - name: 旧V3候选预筛回归
         run: |
           python -m scripts.collect_full_a_universe_v3 \
             --output full-a-results/universe_latest.json \
@@ -66,7 +65,7 @@ jobs:
           python -m scripts.enrich_cross_industry_v3 \
             --universe full-a-results/universe_latest.json
 
-      - name: 真实候选长历史五周期行情V3
+      - name: 旧链账户权限桥与长历史五周期行情
         run: |
           python -m scripts.collect_candidate_bars_v3 \
             --universe full-a-results/universe_latest.json \
@@ -97,18 +96,19 @@ jobs:
               print('新版可交易池=',s.get('tradeable_by_security_type'))
               print('新版权限/状态剔除=',s.get('exclusions'))
               print('新版数据质量=',s.get('data_quality'))
+              print('新版行业分层=',s.get('selected_industry_pools'))
               print('新版候选类型=',s.get('candidate_by_security_type'))
               print('新版候选路线=',s.get('candidate_by_route'))
-              print('新版重点行业=',[(x.get('name'),x.get('state'),x.get('prospect_theme')) for x in p.get('selected_industries',[])[:20]])
+              print('新版基金类别=',s.get('candidate_by_fund_category'))
+              print('新版重点行业=',[(x.get('name'),x.get('pool'),x.get('state'),x.get('quality_score'),x.get('timing_score')) for x in p.get('selected_industries',[])[:20]])
           if universe_path.exists():
               p=json.loads(universe_path.read_text(encoding='utf-8'))
-              selected=p.get('selected_industries',[])
-              print('旧V3全A=',p.get('all_a_stocks_loaded'),'行业=',p.get('industry_rows_loaded'))
-              print('旧V3重点行业=',len(selected),'刚升温=',sum(1 for x in selected if x.get('rotation_state')=='刚开始升温'),'高位暂退=',len(p.get('paused_high_industries',[])))
-              print('旧V3总候选=',p.get('deduped_leader_candidates'),'允许深扫=',p.get('deep_scan_eligible_candidates'))
+              print('旧V3候选=',p.get('deduped_leader_candidates'),'允许深扫=',p.get('deep_scan_eligible_candidates'))
           if bars_path.exists():
               p=json.loads(bars_path.read_text(encoding='utf-8'))
-              print('旧V3长历史候选=',p.get('candidate_count'),'成功=',p.get('loaded_count'),'异常=',len(p.get('errors',[])))
+              print('旧链上游候选=',p.get('upstream_candidate_count'),'权限剔除=',p.get('permission_excluded_count'))
+              print('旧链允许下载=',p.get('candidate_count'),'成功=',p.get('loaded_count'),'异常=',len(p.get('errors',[])))
+              print('旧链权限剔除样本=',p.get('permission_excluded',[])[:10])
           if scan_path.exists():
               p=json.loads(scan_path.read_text(encoding='utf-8'))
               c=p.get('candidates',[])
