@@ -21,7 +21,7 @@ permissions:
 jobs:
   new-pipeline-validation:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 55
     defaults:
       run:
         working-directory: trading-skill
@@ -81,7 +81,22 @@ jobs:
             --capacity-max 150 \
             --strict
 
-      - name: 打印新版STEP1-3摘要
+      - name: STEP4 正式深扫队列五周期行情
+        run: |
+          python -m scripts.collect_step4_bars \
+            --queue full-a-results/deep_scan_queue_latest.json \
+            --output full-a-results/step4_bars_latest.json \
+            --workers 6 \
+            --strict
+
+      - name: STEP4B 五周期层级结构验证
+        run: |
+          python -m scripts.analyze_step4_structure \
+            --bars full-a-results/step4_bars_latest.json \
+            --output full-a-results/step4_structure_latest.json \
+            --strict
+
+      - name: 打印新版STEP1-4B摘要
         if: always()
         run: |
           python - <<'PY'
@@ -90,6 +105,8 @@ jobs:
           c=Path('full-a-results/candidate_universe_latest.json')
           f=Path('full-a-results/fundamental_quality_latest.json')
           q=Path('full-a-results/deep_scan_queue_latest.json')
+          b=Path('full-a-results/step4_bars_latest.json')
+          s4=Path('full-a-results/step4_structure_latest.json')
           if c.exists():
               p=json.loads(c.read_text(encoding='utf-8'))
               s=p.get('summary',{})
@@ -106,29 +123,27 @@ jobs:
               p=json.loads(f.read_text(encoding='utf-8'))
               print('STEP3摘要=',p.get('summary'))
               print('基金参考增强=',p.get('fund_reference_enrichment'))
-              stocks=p.get('stock_assessments',[])
-              funds=p.get('fund_product_assessments',[])
-              print('WATCH->PASS股票=',[(x.get('code'),x.get('name'),(x.get('phase_a_assessment') or {}).get('profile'),(x.get('specialized_evidence') or {}).get('family')) for x in stocks if (x.get('phase_a_assessment') or {}).get('status')=='WATCH' and (x.get('final_decision') or {}).get('status')=='PASS'][:12])
-              print('PASS->WATCH股票=',[(x.get('code'),x.get('name'),(x.get('phase_a_assessment') or {}).get('profile'),(x.get('specialized_evidence') or {}).get('family')) for x in stocks if (x.get('phase_a_assessment') or {}).get('status')=='PASS' and (x.get('final_decision') or {}).get('status')=='WATCH'][:12])
-              print('REJECT股票=',[(x.get('code'),x.get('name'),(x.get('final_decision') or {}).get('reasons')) for x in stocks if (x.get('final_decision') or {}).get('status')=='REJECT'][:8])
-              print('PASS基金=',[(x.get('code'),x.get('name'),x.get('fund_category'),(x.get('assessment') or {}).get('underlying_theme'),(x.get('product_reference') or {}).get('fund_size_cny')) for x in funds if (x.get('assessment') or {}).get('status')=='PASS'][:20])
-              print('WATCH基金=',[(x.get('code'),x.get('name'),x.get('fund_category'),(x.get('assessment') or {}).get('warnings')) for x in funds if (x.get('assessment') or {}).get('status')=='WATCH'][:20])
-              print('REJECT基金=',[(x.get('code'),x.get('name'),(x.get('assessment') or {}).get('hard_risks')) for x in funds if (x.get('assessment') or {}).get('status')=='REJECT'][:10])
           if q.exists():
               p=json.loads(q.read_text(encoding='utf-8'))
               print('STEP3->4深扫资格=',p.get('summary'))
-              print('深扫前20=',[(x.get('code'),x.get('name'),x.get('security_type'),x.get('status'),x.get('tier'),x.get('evidence_level'),x.get('confirmation_count')) for x in p.get('candidates',[])[:20]])
+              print('深扫身份前20=',[(x.get('code'),x.get('market'),x.get('security_type'),x.get('status'),x.get('tier')) for x in p.get('candidates',[])[:20]])
+          if b.exists():
+              p=json.loads(b.read_text(encoding='utf-8'))
+              print('STEP4行情=',{'candidate_count':p.get('candidate_count'),'identity_valid_count':p.get('identity_valid_count'),'loaded_count':p.get('loaded_count'),'errors':len(p.get('errors',[]))})
+          if s4.exists():
+              p=json.loads(s4.read_text(encoding='utf-8'))
+              print('STEP4B摘要=',p.get('summary'))
           PY
 
-      - name: Upload STEP1-3 validation
+      - name: Upload new pipeline validation
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: step1-3-production-validation
+          name: new-pipeline-production-validation
           path: trading-skill/full-a-results/*.json
           if-no-files-found: warn
 
-  # 旧V3仅作为迁移期回归保护。它与新版STEP1-3并行运行，失败时不会掩盖新版是哪一层出问题。
+  # 旧V3仅作为迁移期回归保护。它与新版主链并行运行，失败时不会掩盖新版是哪一层出问题。
   legacy-v3-regression:
     runs-on: ubuntu-latest
     timeout-minutes: 55
