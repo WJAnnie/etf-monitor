@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 import scripts.collect_candidate_bars_v2 as v2
+from trading_skill.history_policy import classify_history_counts
 
 
 V3_METADATA_KEYS = (
@@ -117,7 +118,27 @@ def merge_v3_metadata(result: dict, source: dict) -> dict:
 
 
 def collect_one_v3(item: dict, now):
-    return merge_v3_metadata(_collect_one_v2(item, now), item)
+    result = merge_v3_metadata(_collect_one_v2(item, now), item)
+    history = classify_history_counts(
+        daily=len(result.get("daily") or []),
+        weekly=len(result.get("weekly") or []),
+        m120=len(result.get("120m") or []),
+        m30=len(result.get("30m") or []),
+        m5=len(result.get("5m") or []),
+    ).to_dict()
+    result["history_quality"] = history
+    quality = dict(result.get("quality") or {})
+    quality.update(
+        {
+            "long_term_history_complete": history["long_term_complete"],
+            "long_term_history_tier": history["long_term_tier"],
+            "daily_primary_history_ok": history["daily_primary_ok"],
+            "m120_primary_history_ok": history["m120_primary_ok"],
+            "m30_primary_history_ok": history["m30_primary_ok"],
+        }
+    )
+    result["quality"] = quality
+    return result
 
 
 # V2的collect_one在运行时读取模块全局函数，因此在V3入口统一替换数据供应链即可。
