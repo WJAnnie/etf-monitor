@@ -1,4 +1,4 @@
-version: 1.3.1
+version: 1.4.0
 
 timeframes:
   strategic_context: [weekly]
@@ -27,17 +27,24 @@ core_entry:
   allow_strong_class2_buy: true
   allow_center_class2_buy: true
 
-primary_signal_priority:
-  daily_second_buy: 100
-  daily_third_buy: 95
-  120m_second_buy: 90
-  120m_third_buy: 85
-  30m_second_buy: 80
-  30m_third_buy: 75
-  120m_first_buy: 60
-  daily_first_buy: 50
-  30m_first_buy: 40
-  class2_only_tiebreak_bonus: true
+trade_permission:
+  no_composite_opportunity_score: true
+  structural_dominance_order: [daily, 120m, 30m]
+  step3_pass_required_for_automatic_new_entry: true
+  step3_watch_requires_review: true
+  step3_reject_blocks_new_entry: true
+  major_negative_event_blocks_new_entry: true
+  missing_event_context_is_not_clear: true
+  structural_stop_required_before_risk_budget: true
+  fixed_percent_cost_basis_or_atr_may_replace_missing_structural_stop: false
+  account_security_permission_required: true
+  portfolio_capacity_required: true
+  unknown_portfolio_capacity_blocks_automatic_entry: true
+  daily_first_buy_mode: WAIT_STANDARD_SECOND_BUY
+  120m_first_buy_mode: TEST_ONLY
+  30m_first_buy_mode: OBSERVE_ONLY
+  five_minute_may_be_primary_entry: false
+  note: STEP5A只组合已经存在的技术、质量、事件、止损、账户和组合事实；不重新给缠论或基本面打总分，也不计算仓位金额。
 
 history_evidence:
   target_bars:
