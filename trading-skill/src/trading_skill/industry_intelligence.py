@@ -14,13 +14,22 @@ from trading_skill.industry_profiles import profile_for
 
 SINA_7X24 = "https://zhibo.sina.com.cn/api/zhibo/feed"
 EASTMONEY_SEARCH = "https://search-api-web.eastmoney.com/search/jsonp"
+# 短语优先于单词计数，避免“订单下降”同时命中“订单”后被误判成中性。
+STRONG_POSITIVE_PHRASES = (
+    "政策利好", "大额订单", "订单增长", "新接订单增长", "需求增长", "出口增长", "超预期",
+    "纳入医保", "获批上市", "中标重大项目", "提高补贴", "加大支持", "上调指引",
+)
+STRONG_NEGATIVE_PHRASES = (
+    "订单下降", "需求下滑", "低于预期", "库存高企", "集采降价", "价格战", "出口受限",
+    "暂停审批", "停止采购", "取消订单", "下调指引", "重大事故", "停产整顿", "制裁", "禁令",
+)
 POSITIVE_WORDS = (
-    "支持", "加码", "上调", "增长", "突破", "中标", "订单", "获批", "放量", "扩产", "回暖", "提价", "降税",
-    "补贴", "签约", "创新高", "超预期", "增持", "回购", "政策利好", "出口增长", "需求增长", "纳入医保",
+    "支持", "加码", "上调", "增长", "突破", "中标", "获批", "放量", "扩产", "回暖", "提价", "降税",
+    "补贴", "签约", "创新高", "增持", "回购",
 )
 NEGATIVE_WORDS = (
-    "下调", "下降", "亏损", "减产", "停产", "取消", "制裁", "限制", "调查", "处罚", "召回", "违约", "爆雷",
-    "低于预期", "价格战", "需求下滑", "订单下降", "库存高企", "事故", "禁令", "风险提示", "集采降价",
+    "下调", "下降", "亏损", "减产", "停产", "取消", "限制", "调查", "处罚", "召回", "违约", "爆雷",
+    "事故", "风险提示", "减持",
 )
 MAJOR_WORDS = (
     "国务院", "央行", "国家发改委", "工信部", "财政部", "证监会", "医保局", "国资委", "海关总署", "重大", "首次",
@@ -65,7 +74,6 @@ def _parse_time(value: str, *, as_of: datetime) -> datetime | None:
         if as_of.tzinfo and dt.tzinfo is None:
             dt = dt.replace(tzinfo=as_of.tzinfo)
         return dt
-    # 东财部分搜索结果只给 yyyy-MM-dd HH:mm:ss 以外的格式，解析失败时不凭空补日期。
     return None
 
 
@@ -90,15 +98,10 @@ def fetch_sina_7x24(*, page_size: int = 100, timeout: int = 10) -> list[dict]:
         content = _strip_html(row.get("rich_text"))
         if not content:
             continue
-        out.append(
-            {
-                "id": row.get("id"),
-                "time": str(row.get("create_time") or ""),
-                "content": content,
-                "source": "新浪财经7x24",
-                "query": None,
-            }
-        )
+        out.append({
+            "id": row.get("id"), "time": str(row.get("create_time") or ""), "content": content,
+            "source": "新浪财经7x24", "query": None,
+        })
     return out
 
 
@@ -115,31 +118,16 @@ def _decode_jsonp(text: str) -> dict:
 def fetch_eastmoney_news(query: str, *, page_size: int = 8, timeout: int = 10) -> list[dict]:
     """东财公开资讯搜索兜底。失败由调用层降级，不允许资讯源故障阻断选股。"""
     param = {
-        "uid": "",
-        "keyword": query,
-        "type": ["cmsArticleWebOld"],
-        "client": "web",
-        "clientType": "web",
+        "uid": "", "keyword": query, "type": ["cmsArticleWebOld"], "client": "web", "clientType": "web",
         "clientVersion": "curr",
-        "param": {
-            "cmsArticleWebOld": {
-                "searchScope": "default",
-                "sort": "time",
-                "pageIndex": 1,
-                "pageSize": page_size,
-                "preTag": "",
-                "postTag": "",
-            }
-        },
+        "param": {"cmsArticleWebOld": {"searchScope": "default", "sort": "time", "pageIndex": 1,
+                                          "pageSize": page_size, "preTag": "", "postTag": ""}},
     }
     response = requests.get(
         EASTMONEY_SEARCH,
         params={"cb": "jQuery_trade_skill", "param": json.dumps(param, ensure_ascii=False, separators=(",", ":"))},
-        headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152 Safari/537.36",
-            "Referer": "https://so.eastmoney.com/",
-            "Accept": "*/*",
-        },
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152 Safari/537.36",
+                 "Referer": "https://so.eastmoney.com/", "Accept": "*/*"},
         timeout=timeout,
     )
     response.raise_for_status()
@@ -158,15 +146,11 @@ def fetch_eastmoney_news(query: str, *, page_size: int = 8, timeout: int = 10) -
         content = "；".join(part for part in (title, body) if part)
         if not content:
             continue
-        out.append(
-            {
-                "id": row.get("code") or row.get("id") or row.get("articleId"),
-                "time": str(row.get("date") or row.get("showTime") or row.get("publishTime") or row.get("time") or ""),
-                "content": content[:500],
-                "source": "东方财富资讯",
-                "query": query,
-            }
-        )
+        out.append({
+            "id": row.get("code") or row.get("id") or row.get("articleId"),
+            "time": str(row.get("date") or row.get("showTime") or row.get("publishTime") or row.get("time") or ""),
+            "content": content[:500], "source": "东方财富资讯", "query": query,
+        })
     return out
 
 
@@ -176,22 +160,15 @@ def industry_identity_keywords(industry: Mapping[str, object]) -> tuple[str, ...
     profile = profile_for(name, theme or None)
     words = {name, theme}
     words.update(profile.keywords)
-    return tuple(
-        sorted(
-            {
-                word.strip()
-                for word in words
-                if word and len(word.strip()) >= 2 and word.strip() not in GENERIC_NON_IDENTITY_WORDS
-            },
-            key=len,
-            reverse=True,
-        )
-    )
+    return tuple(sorted({word.strip() for word in words if word and len(word.strip()) >= 2 and word.strip() not in GENERIC_NON_IDENTITY_WORDS}, key=len, reverse=True))
 
 
 def _impact(text: str) -> str:
-    positive = sum(1 for word in POSITIVE_WORDS if word in text)
-    negative = sum(1 for word in NEGATIVE_WORDS if word in text)
+    # 明确复合短语权重更高；这样“订单下降”“需求下滑”等不会被单个正面词误抵消。
+    positive = 3 * sum(1 for phrase in STRONG_POSITIVE_PHRASES if phrase in text)
+    negative = 3 * sum(1 for phrase in STRONG_NEGATIVE_PHRASES if phrase in text)
+    positive += sum(1 for word in POSITIVE_WORDS if word in text)
+    negative += sum(1 for word in NEGATIVE_WORDS if word in text)
     if positive > negative:
         return "利好"
     if negative > positive:
@@ -207,56 +184,37 @@ def _importance(text: str) -> str:
 
 
 def match_industry_events(
-    selected_industries: Iterable[Mapping[str, object]],
-    news_rows: Iterable[Mapping[str, object]],
-    *,
-    as_of: datetime,
-    max_age_hours: int = 36,
-    max_per_industry: int = 3,
+    selected_industries: Iterable[Mapping[str, object]], news_rows: Iterable[Mapping[str, object]], *,
+    as_of: datetime, max_age_hours: int = 36, max_per_industry: int = 3,
 ) -> dict[str, list[dict]]:
     cutoff = as_of - timedelta(hours=max_age_hours)
     material = [dict(row) for row in news_rows]
     result: dict[str, list[dict]] = {}
-
     for industry in selected_industries:
         name = str(industry.get("name") or "")
         theme = str(industry.get("prospect_theme") or "") or None
         keywords = industry_identity_keywords(industry)
         matched: list[IndustryEvent] = []
         seen: set[str] = set()
-
         for row in material:
             content = str(row.get("content") or "")
             if not content:
                 continue
-            query = str(row.get("query") or "")
             hit = next((word for word in keywords if word in content), None)
-            # 东财按行业/主题定向查询的结果，仍要求标题正文中出现行业身份词，避免搜索泛化误配。
             if hit is None:
                 continue
-
             raw_time = str(row.get("time") or "")
             dt = _parse_time(raw_time, as_of=as_of)
             if dt is not None and (dt < cutoff or dt > as_of + timedelta(minutes=5)):
                 continue
-
             fingerprint = re.sub(r"\W+", "", content)[:100]
             if fingerprint in seen:
                 continue
             seen.add(fingerprint)
-            matched.append(
-                IndustryEvent(
-                    name,
-                    theme,
-                    raw_time,
-                    _impact(content),
-                    _importance(content),
-                    content[:220],
-                    str(row.get("source") or "财经资讯"),
-                    hit,
-                )
-            )
-
+            matched.append(IndustryEvent(
+                name, theme, raw_time, _impact(content), _importance(content), content[:220],
+                str(row.get("source") or "财经资讯"), hit,
+            ))
         matched.sort(key=lambda item: (item.importance == "重大", item.time), reverse=True)
         if matched:
             result[name] = [asdict(item) for item in matched[:max_per_industry]]
@@ -287,13 +245,7 @@ def recent_report_event(row: Mapping[str, object], *, as_of: datetime, days: int
             return None
 
     return {
-        "notice_date": notice,
-        "report_date": report_date,
-        "report_type": report_type,
-        "revenue_growth": num("YSTZ"),
-        "profit_growth": num("SJLTZ"),
-        "roe": num("WEIGHTAVG_ROE"),
-        "gross_margin": num("XSMLL"),
-        "eps": num("BASIC_EPS"),
-        "operating_cash_per_share": num("MGJYXJJE"),
+        "notice_date": notice, "report_date": report_date, "report_type": report_type,
+        "revenue_growth": num("YSTZ"), "profit_growth": num("SJLTZ"), "roe": num("WEIGHTAVG_ROE"),
+        "gross_margin": num("XSMLL"), "eps": num("BASIC_EPS"), "operating_cash_per_share": num("MGJYXJJE"),
     }
