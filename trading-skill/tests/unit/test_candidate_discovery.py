@@ -101,7 +101,7 @@ def test_same_family_prefers_liquidity_even_when_weaker_product_has_more_momentu
     assert out["510300"].fund_liquidity_percentile is not None
 
 
-def test_funds_are_compared_inside_asset_categories_not_one_mixed_ranking():
+def test_funds_are_compared_inside_underlying_asset_categories_and_cross_border_is_a_risk_tag():
     funds = [
         sec("510300", name="沪深300ETF", security_type=SecurityType.ETF, amount=100_000_000, ch60=8),
         sec("511010", name="国债ETF", security_type=SecurityType.ETF, amount=2_000_000_000, ch60=1),
@@ -111,11 +111,26 @@ def test_funds_are_compared_inside_asset_categories_not_one_mixed_ranking():
     assert classify_fund_category(funds[0]) is FundCategory.EQUITY_BROAD
     assert classify_fund_category(funds[1]) is FundCategory.BOND
     assert classify_fund_category(funds[2]) is FundCategory.COMMODITY
-    assert classify_fund_category(funds[3]) is FundCategory.CROSS_BORDER
+    assert classify_fund_category(funds[3]) is FundCategory.EQUITY_BROAD
+    assert "CROSS_BORDER_QDII" in fund_risk_tags(funds[3])
     store = {}
     add_fund_candidates(store, funds, cap=10, score_floor=0)
     categories = {x.fund_category for x in finalize_candidates(store)}
-    assert {c.value for c in (FundCategory.EQUITY_BROAD, FundCategory.BOND, FundCategory.COMMODITY, FundCategory.CROSS_BORDER)} <= categories
+    assert {c.value for c in (FundCategory.EQUITY_BROAD, FundCategory.BOND, FundCategory.COMMODITY)} <= categories
+
+
+def test_fund_name_edge_cases_do_not_confuse_asset_class_with_keywords():
+    samples = [
+        (sec("159201", name="自由现金流ETF华夏", security_type=SecurityType.ETF), FundCategory.EQUITY_STRATEGY),
+        (sec("563760", name="全指现金流ETF中银", security_type=SecurityType.ETF), FundCategory.EQUITY_STRATEGY),
+        (sec("511880", name="银华日利ETF", security_type=SecurityType.ETF), FundCategory.CASH),
+        (sec("510210", name="上证指数ETF富国", security_type=SecurityType.ETF), FundCategory.EQUITY_BROAD),
+        (sec("162719", name="石油LOF", security_type=SecurityType.LOF), FundCategory.COMMODITY),
+        (sec("161119", name="易方达新综债LOF", security_type=SecurityType.LOF), FundCategory.BOND),
+        (sec("164906", name="海外科技LOF", security_type=SecurityType.LOF), FundCategory.EQUITY_SECTOR),
+    ]
+    for item, expected in samples:
+        assert classify_fund_category(item) is expected
 
 
 def test_lofs_are_classified_by_underlying_asset_and_risk_tags_are_separate():
@@ -125,7 +140,7 @@ def test_lofs_are_classified_by_underlying_asset_and_risk_tags_are_separate():
         (sec("161125", name="标普油气LOF", security_type=SecurityType.LOF), FundCategory.COMMODITY),
         (sec("161716", name="招商双债LOF", security_type=SecurityType.LOF), FundCategory.BOND),
         (sec("161725", name="招商白酒LOF", security_type=SecurityType.LOF), FundCategory.EQUITY_SECTOR),
-        (sec("164906", name="海外科技LOF", security_type=SecurityType.LOF), FundCategory.CROSS_BORDER),
+        (sec("164906", name="海外科技LOF", security_type=SecurityType.LOF), FundCategory.EQUITY_SECTOR),
     ]
     for item, expected in samples:
         assert classify_fund_category(item) is expected
@@ -133,6 +148,9 @@ def test_lofs_are_classified_by_underlying_asset_and_risk_tags_are_separate():
 
     oil_qdii = sec("161125", name="标普油气LOF", security_type=SecurityType.LOF)
     assert "CROSS_BORDER_QDII" in fund_risk_tags(oil_qdii)
+
+    overseas_tech = sec("164906", name="海外科技LOF", security_type=SecurityType.LOF)
+    assert set(fund_risk_tags(overseas_tech)) == {"CROSS_BORDER_QDII", "LOF_PREMIUM"}
 
     bond_qdii = sec("160140", name="美元债QDII-LOF", security_type=SecurityType.LOF)
     assert classify_fund_category(bond_qdii) is FundCategory.BOND
