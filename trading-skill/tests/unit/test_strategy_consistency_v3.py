@@ -1,19 +1,21 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
+from scripts.run_full_a_scan_v3 import _execution_structure_ok
+from trading_skill.a_share_universe import IndustryCandidate
 from trading_skill.chan.signals import ChanSignal
 from trading_skill.chan_extensions import annotate_second_buy_variants
-from trading_skill.decision import Blocker, Opportunity, OpportunityGrade, RiskState, blockers_for
+from trading_skill.decision import Blocker, RiskState, blockers_for
 from trading_skill.domain.enums import ChanSignalType, SignalState, Timeframe
-from trading_skill.industry_intelligence import match_industry_events, recent_report_event
+from trading_skill.industry_financial_metrics import summarize_sector_metrics
+from trading_skill.industry_intelligence import industry_identity_keywords, match_industry_events, recent_report_event
 from trading_skill.industry_profiles import profile_for
 from trading_skill.industry_prospects import industry_rotation_state
-from trading_skill.a_share_universe import IndustryCandidate
 from trading_skill.position import add_tranche, create_trade, map_sell_scope, target_exposure
 from trading_skill.production_chan import ProductionChanResult
 from trading_skill.sizing import StopCandidate, StopLevel, StopType, TrancheRole
-from trading_skill.strategy_policy import primary_entry_timeframes, entry_permission
+from trading_skill.strategy_policy import entry_permission, primary_entry_timeframes, sell_fraction
 
 
 def _signal(kind: ChanSignalType, *, side="BUY", price=1000, when=None):
@@ -35,6 +37,7 @@ def test_primary_entries_exclude_weekly_and_5m_and_daily_first_buy_waits():
     assert set(primary_entry_timeframes()) == {Timeframe.DAILY, Timeframe.M120, Timeframe.M30}
     assert "等待二买" in entry_permission(Timeframe.DAILY, ChanSignalType.FIRST_BUY)
     assert "执行确认" in entry_permission(Timeframe.M5, ChanSignalType.SECOND_BUY)
+    assert "小试仓" in entry_permission(Timeframe.M120, ChanSignalType.FIRST_BUY)
 
 
 def test_execution_structure_conflict_is_a_real_blocker():
@@ -44,6 +47,45 @@ def test_execution_structure_conflict_is_a_real_blocker():
         portfolio_permission=True, execution_structure_ok=False, allow_daily_first_buy=True,
     )
     assert Blocker.EXECUTION_STRUCTURE_CONFLICT in blockers
+
+
+def test_latest_child_buy_clears_older_child_sell_conflict():
+    base_time = datetime(2026, 9, 9, 9, 30, tzinfo=timezone.utc)
+    candidate = {"timeframe": "120m", "signal_confirmation_time": base_time.isoformat()}
+    analysis = {
+        "timeframes": {
+            "30m": {
+                "signals": [
+                    {"side": "SELL", "types": ["FIRST_SELL"], "confirmation_timestamp": (base_time + timedelta(minutes=30)).isoformat()},
+                    {"side": "BUY", "types": ["SECOND_BUY"], "confirmation_timestamp": (base_time + timedelta(minutes=60)).isoformat()},
+                ]
+            },
+            "5m": {"signals": []},
+        }
+    }
+    ok, conflicts, states = _execution_structure_ok(analysis, candidate)
+    assert ok is True
+    assert conflicts == []
+    assert states["30m"].startswith("BUY:")
+
+
+def test_latest_child_sell_blocks_current_execution_but_not_parent_thesis():
+    base_time = datetime(2026, 9, 9, 9, 30, tzinfo=timezone.utc)
+    candidate = {"timeframe": "30m", "signal_confirmation_time": base_time.isoformat()}
+    analysis = {
+        "timeframes": {
+            "5m": {
+                "signals": [
+                    {"side": "BUY", "types": ["SECOND_BUY"], "confirmation_timestamp": (base_time + timedelta(minutes=10)).isoformat()},
+                    {"side": "SELL", "types": ["FIRST_SELL"], "confirmation_timestamp": (base_time + timedelta(minutes=20)).isoformat()},
+                ]
+            }
+        }
+    }
+    ok, conflicts, states = _execution_structure_ok(analysis, candidate)
+    assert ok is False
+    assert "5分钟最新正式结构仍为卖点" in conflicts
+    assert states["5m"].startswith("SELL:")
 
 
 def test_strong_class2_is_only_annotation_on_standard_second_buy():
@@ -76,6 +118,7 @@ def test_sell_scope_is_hierarchical_and_daily_second_sell_is_not_full_exit():
     assert target_exposure(trade, daily2) == 10000
     daily3 = map_sell_scope(trade, timeframe="daily", sell_class=3)
     assert target_exposure(trade, daily3) == 0
+    assert sell_fraction("daily", 2, TrancheRole.CORE) == 0.5
 
 
 def test_weekly_third_sell_can_exit_all():
@@ -96,14 +139,40 @@ def test_industry_rotation_pauses_high_position_and_profiles_differ():
     assert ship.name != bank.name
 
 
+def test_industry_news_identity_keywords_exclude_generic_order_word():
+    keywords = industry_identity_keywords({"name": "机器人", "prospect_theme": "机器人与高端自动化"})
+    assert "订单" not in keywords
+    as_of = datetime(2026, 9, 9, 12, 0, tzinfo=timezone.utc)
+    industries = [{"name": "机器人", "prospect_theme": "机器人与高端自动化"}]
+    unrelated = [{"time": "2026-09-09 10:00:00", "content": "某造船企业获得重大订单", "source": "测试"}]
+    assert match_industry_events(industries, unrelated, as_of=as_of) == {}
+
+
 def test_industry_news_and_recent_report_are_structured_without_network():
     as_of = datetime(2026, 9, 9, 12, 0, tzinfo=timezone.utc)
     industries = [{"name": "船舶制造", "prospect_theme": "造船与海工"}]
-    news = [{"time": "2026-09-09 10:00:00", "content": "船舶制造企业获得重大订单，新接订单增长"}]
+    news = [{"time": "2026-09-09 10:00:00", "content": "船舶制造企业获得重大订单，新接订单增长", "source": "测试财经"}]
     matched = match_industry_events(industries, news, as_of=as_of)
     assert matched["船舶制造"][0]["impact"] == "利好"
+    assert matched["船舶制造"][0]["source"] == "测试财经"
     report = recent_report_event(
         {"NOTICE_DATE": "2026-09-08", "REPORTDATE": "2026-06-30", "YSTZ": 20, "SJLTZ": 30, "WEIGHTAVG_ROE": 8},
         as_of=as_of,
     )
     assert report and report["report_type"] == "中报"
+
+
+def test_sector_specific_report_metrics_prioritize_shipbuilding_and_special_finance():
+    metrics = {
+        "changes": {
+            "contract_liabilities_change_pct": 18.5,
+            "construction_in_progress_change_pct": 12.0,
+            "fixed_asset_change_pct": 5.0,
+            "operating_cash_flow_change_pct": -3.0,
+        }
+    }
+    ship = summarize_sector_metrics("造船与海工", metrics)
+    assert ship[0].startswith("合同负债同比")
+    assert any(item.startswith("在建工程同比") for item in ship)
+    bank = summarize_sector_metrics("银行", metrics)
+    assert len(bank) == 1 and "净息差" in bank[0] and "不良率" in bank[0]
