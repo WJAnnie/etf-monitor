@@ -61,6 +61,8 @@ class CandidateRecord:
     industry_quality_score: float | None = None
     fund_category: str | None = None
     fund_family: str | None = None
+    fund_liquidity_percentile: float | None = None
+    fund_risk_tags: tuple[str, ...] = ()
     event_tags: tuple[str, ...] = ()
 
     def as_dict(self) -> dict:
@@ -144,7 +146,7 @@ BOND_TOKENS = (
 )
 CASH_TOKENS = ("货币", "现金", "同业存单")
 COMMODITY_TOKENS = (
-    "黄金ETF", "白银", "豆粕", "原油ETF", "原油", "商品ETF", "能源化工ETF", "有色期货",
+    "黄金", "白银", "豆粕", "原油", "油气", "商品ETF", "能源化工ETF", "有色期货",
 )
 STRATEGY_TOKENS = ("红利", "低波", "价值", "质量", "自由现金流", "ESG", "央企", "国企", "高股息", "增强")
 BROAD_TOKENS = (
@@ -158,25 +160,40 @@ SECTOR_TOKENS = (
 )
 
 
+def _has_token(text: str, tokens: Iterable[str]) -> bool:
+    return any(token.upper() in text for token in tokens)
+
+
 def classify_fund_category(item: MarketSecurity) -> FundCategory:
+    """只描述底层资产类别；QDII/跨境等交易风险使用 fund_risk_tags 单独表达。"""
     text = "".join(str(item.name or "").upper().split())
-    if any(token.upper() in text for token in BOND_TOKENS):
+    if _has_token(text, BOND_TOKENS):
         return FundCategory.BOND
-    if any(token.upper() in text for token in CASH_TOKENS):
+    if _has_token(text, CASH_TOKENS):
         return FundCategory.CASH
-    if any(token.upper() in text for token in CROSS_BORDER_TOKENS):
-        return FundCategory.CROSS_BORDER
-    if "黄金股" not in text and any(token.upper() in text for token in COMMODITY_TOKENS):
+    if "黄金股" not in text and _has_token(text, COMMODITY_TOKENS):
         return FundCategory.COMMODITY
-    if any(token.upper() in text for token in STRATEGY_TOKENS):
+    if _has_token(text, CROSS_BORDER_TOKENS):
+        return FundCategory.CROSS_BORDER
+    if _has_token(text, STRATEGY_TOKENS):
         return FundCategory.EQUITY_STRATEGY
-    if any(token.upper() in text for token in BROAD_TOKENS):
+    if _has_token(text, BROAD_TOKENS):
         return FundCategory.EQUITY_BROAD
-    if any(token.upper() in text for token in SECTOR_TOKENS):
+    if _has_token(text, SECTOR_TOKENS):
         return FundCategory.EQUITY_SECTOR
     if item.security_type is SecurityType.ETF:
         return FundCategory.EQUITY_SECTOR
     return FundCategory.OTHER
+
+
+def fund_risk_tags(item: MarketSecurity) -> tuple[str, ...]:
+    text = "".join(str(item.name or "").upper().split())
+    tags: list[str] = []
+    if _has_token(text, CROSS_BORDER_TOKENS):
+        tags.append("CROSS_BORDER_QDII")
+    if item.security_type is SecurityType.LOF:
+        tags.append("LOF_PREMIUM")
+    return tuple(tags)
 
 
 FAMILY_BENCHMARK_TOKENS = (
@@ -213,12 +230,23 @@ def _merge_candidate(
     industry: Mapping[str, object] | None = None,
     fund_category: FundCategory | None = None,
     fund_family: str | None = None,
+    fund_liquidity_percentile: float | None = None,
+    fund_tags: Iterable[str] = (),
     event_tags: Iterable[str] = (),
 ) -> None:
     key = (item.code, item.security_type)
     row = store.setdefault(
         key,
-        {"item": item, "route_scores": {}, "industry": None, "fund_category": None, "fund_family": None, "event_tags": set()},
+        {
+            "item": item,
+            "route_scores": {},
+            "industry": None,
+            "fund_category": None,
+            "fund_family": None,
+            "fund_liquidity_percentile": None,
+            "fund_risk_tags": set(),
+            "event_tags": set(),
+        },
     )
     row["route_scores"][route.value] = round(float(score), 2)
     if industry is not None:
@@ -227,6 +255,9 @@ def _merge_candidate(
         row["fund_category"] = fund_category.value
     if fund_family:
         row["fund_family"] = fund_family
+    if fund_liquidity_percentile is not None:
+        row["fund_liquidity_percentile"] = round(float(fund_liquidity_percentile), 2)
+    row["fund_risk_tags"].update(str(x) for x in fund_tags if str(x))
     row["event_tags"].update(str(x) for x in event_tags if str(x))
 
 
@@ -325,8 +356,12 @@ def add_industry_candidates(
         events = list(event_map.get(name, ()))
         event_tags = tuple(str(event.get("content") or event.get("title") or "")[:80] for event in events[:3] if isinstance(event, Mapping))
         meta = {
-            "code": code, "name": name, "state": industry.get("state"), "pool": industry.get("pool"),
-            "priority_score": industry.get("priority_score"), "quality_score": industry.get("quality_score"),
+            "code": code,
+            "name": name,
+            "state": industry.get("state"),
+            "pool": industry.get("pool"),
+            "priority_score": industry.get("priority_score"),
+            "quality_score": industry.get("quality_score"),
         }
         for score, item in ranked[:limit]:
             _merge_candidate(store, item, route=CandidateRoute.INDUSTRY, score=score, industry=meta)
@@ -352,13 +387,16 @@ def add_fund_candidates(
     groups: dict[FundCategory, list[MarketSecurity]] = {}
     for item in funds:
         groups.setdefault(classify_fund_category(item), []).append(item)
-    ranked_all: list[tuple[float, MarketSecurity, FundCategory, str]] = []
+
+    ranked_all: list[tuple[float, MarketSecurity, FundCategory, str, float, tuple[str, ...]]] = []
     for category, peers in groups.items():
         amounts = [x.amount for x in peers if x.amount is not None]
         strengths = [x.change_60d for x in peers if x.change_60d is not None]
         days = [x.change_pct for x in peers if x.change_pct is not None]
         liquidity_floor = max(2_000_000.0, _quantile(amounts, 0.20)) if amounts else 0.0
-        best_by_family: dict[str, tuple[float, MarketSecurity]] = {}
+        # 同一指数/主题只保留一个代表产品。代表性先看同类流动性，再用机会分打破并列；
+        # 不允许因为短期涨得更强而选中一个明显更难交易的同指数产品。
+        best_by_family: dict[str, tuple[float, float, MarketSecurity]] = {}
         for item in peers:
             if item.amount is None or item.amount < liquidity_floor:
                 continue
@@ -370,18 +408,28 @@ def add_fund_candidates(
                 continue
             family = _fund_family_key(item, category)
             previous = best_by_family.get(family)
-            if previous is None or score > previous[0]:
-                best_by_family[family] = (score, item)
-        for family, (score, item) in best_by_family.items():
-            ranked_all.append((score, item, category, family))
+            if previous is None or (amount_p, score) > (previous[0], previous[1]):
+                best_by_family[family] = (amount_p, score, item)
+        for family, (amount_p, score, item) in best_by_family.items():
+            ranked_all.append((score, item, category, family, amount_p, fund_risk_tags(item)))
+
     ranked_all.sort(key=lambda x: x[0], reverse=True)
     category_cap = max(3, int(cap * max_category_share))
     category_counts: dict[FundCategory, int] = {}
     picked = 0
-    for score, item, category, family in ranked_all:
+    for score, item, category, family, amount_p, risk_tags in ranked_all:
         if category_counts.get(category, 0) >= category_cap:
             continue
-        _merge_candidate(store, item, route=CandidateRoute.FUND_RELATIVE, score=score, fund_category=category, fund_family=family)
+        _merge_candidate(
+            store,
+            item,
+            route=CandidateRoute.FUND_RELATIVE,
+            score=score,
+            fund_category=category,
+            fund_family=family,
+            fund_liquidity_percentile=amount_p,
+            fund_tags=risk_tags,
+        )
         category_counts[category] = category_counts.get(category, 0) + 1
         picked += 1
         if picked >= cap:
@@ -396,19 +444,32 @@ def finalize_candidates(store: Mapping[tuple[str, SecurityType], dict]) -> tuple
         industry = row.get("industry") or {}
         stage = position_stage(item)
         out.append(CandidateRecord(
-            code=item.code, name=item.name, security_type=item.security_type, board=item.board.value,
-            source_routes=tuple(route_scores), route_scores=route_scores,
-            research_priority=_research_priority(route_scores, stage), position_stage=stage,
-            data_quality=item.data_quality.value, price=item.price, change_pct=item.change_pct,
-            change_60d=item.change_60d, amount=item.amount, turnover_rate=item.turnover_rate,
-            valuation_pe=item.pe, valuation_pb=item.pb,
+            code=item.code,
+            name=item.name,
+            security_type=item.security_type,
+            board=item.board.value,
+            source_routes=tuple(route_scores),
+            route_scores=route_scores,
+            research_priority=_research_priority(route_scores, stage),
+            position_stage=stage,
+            data_quality=item.data_quality.value,
+            price=item.price,
+            change_pct=item.change_pct,
+            change_60d=item.change_60d,
+            amount=item.amount,
+            turnover_rate=item.turnover_rate,
+            valuation_pe=item.pe,
+            valuation_pb=item.pb,
             industry_code=str(industry.get("code") or "") or None,
             industry_name=str(industry.get("name") or "") or None,
             industry_state=str(industry.get("state") or "") or None,
             industry_pool=str(industry.get("pool") or "") or None,
             industry_priority_score=float(industry["priority_score"]) if industry.get("priority_score") is not None else None,
             industry_quality_score=float(industry["quality_score"]) if industry.get("quality_score") is not None else None,
-            fund_category=row.get("fund_category"), fund_family=row.get("fund_family"),
+            fund_category=row.get("fund_category"),
+            fund_family=row.get("fund_family"),
+            fund_liquidity_percentile=row.get("fund_liquidity_percentile"),
+            fund_risk_tags=tuple(sorted(row.get("fund_risk_tags") or ())),
             event_tags=tuple(sorted(row.get("event_tags") or ())),
         ))
     priority_rank = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
