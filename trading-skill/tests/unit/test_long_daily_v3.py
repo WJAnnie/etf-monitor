@@ -58,3 +58,28 @@ def test_tencent_daily_long_deduplicates_overlapping_pages(monkeypatch):
     rows, _ = mod.tencent_daily_long("600000", limit=4, page_size=2)
     assert [row["time"] for row in rows] == ["2026-09-06", "2026-09-07", "2026-09-08", "2026-09-09"]
     assert len({row["time"] for row in rows}) == 4
+
+
+def test_tencent_daily_long_short_page_does_not_stop_if_older_history_exists(monkeypatch):
+    calls = []
+    pages = {
+        # 模拟生产接口常见情况：请求500根却只返回略少于500根，但老股仍有更早历史。
+        "": [_row("2026-09-07", 10.7), _row("2026-09-08", 10.8), _row("2026-09-09", 10.9)],
+        "2026-09-06": [_row("2026-09-04", 10.4), _row("2026-09-05", 10.5), _row("2026-09-06", 10.6)],
+        "2026-09-03": [_row("2026-09-03", 10.3)],
+    }
+
+    def fake_request(url, *, params=None, referer):
+        end_date = str((params or {}).get("param") or "").split(",")[3]
+        calls.append(end_date)
+        return _Response({"data": {"sh600000": {"qfqday": pages.get(end_date, [])}}})
+
+    monkeypatch.setattr(mod.v2, "_request", fake_request)
+    rows, warnings = mod.tencent_daily_long("600000", limit=7, page_size=5)
+
+    assert warnings == []
+    assert [row["time"] for row in rows] == [
+        "2026-09-03", "2026-09-04", "2026-09-05", "2026-09-06",
+        "2026-09-07", "2026-09-08", "2026-09-09",
+    ]
+    assert calls == ["", "2026-09-06", "2026-09-03"]
