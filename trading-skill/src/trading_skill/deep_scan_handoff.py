@@ -103,7 +103,10 @@ def _fund_candidate(row: Mapping[str, object]) -> DeepScanCandidate:
     deep_eligible = bool(assessment.get("deep_analysis_eligible"))
     reasons: list[str] = []
 
-    if status == "REJECT" or not deep_eligible:
+    if category == "OTHER":
+        tier = DeepScanTier.EXCLUDE
+        reasons.append("基金底层资产类别尚未可靠解析，先隔离，不进入多周期重扫")
+    elif status == "REJECT" or not deep_eligible:
         tier = DeepScanTier.EXCLUDE
         reasons.append("产品质量REJECT" if status == "REJECT" else "该产品默认不进入多周期重扫")
     elif risk == "HIGH" or product in {"WEAK", "UNKNOWN"} or trading in {"WEAK", "UNKNOWN"}:
