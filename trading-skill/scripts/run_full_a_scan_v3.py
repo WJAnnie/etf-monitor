@@ -18,7 +18,6 @@ base = v2.base
 _raw_analyze_production_chan = base.analyze_production_chan
 _original_v2_analyze_symbol = base.analyze_symbol
 
-# 统一近期信号窗口；窗口只是“仍值得观察的最大期限”，不是自动买入期限。
 base.FRESHNESS = {
     timeframe: timedelta(days=policy.freshness_days)
     for timeframe, policy in TIMEFRAME_POLICY.items()
@@ -44,15 +43,7 @@ def choose_primary_v3(results, *, as_of):
                 continue
             if v2._invalidated_by_later_sell(result, signal, as_of=as_of):
                 continue
-            choices.append(
-                (
-                    STANDARD_BUY_PRIORITY[kind],
-                    TIMEFRAME_ENTRY_PRIORITY.get(timeframe, 0),
-                    signal.confirmation_timestamp,
-                    timeframe,
-                    signal,
-                )
-            )
+            choices.append((STANDARD_BUY_PRIORITY[kind], TIMEFRAME_ENTRY_PRIORITY.get(timeframe, 0), signal.confirmation_timestamp, timeframe, signal))
     if not choices:
         return None
     choices.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
@@ -97,7 +88,6 @@ def _latest_child_signal_after(raw: dict, confirmation) -> dict | None:
 
 
 def _execution_structure_ok(analysis: dict, candidate: dict) -> tuple[bool, list[str], dict[str, str]]:
-    """低级别只看当前最新正式结构；旧卖点之后若已有新买点，不再永久阻断父级买点。"""
     confirmation = _parse_iso(candidate.get("signal_confirmation_time"))
     if confirmation is None:
         return True, [], {}
@@ -138,22 +128,39 @@ def _entry_zones(kind: str, signal_price: float) -> tuple[str, str]:
     return f"{signal_price:.2f}～{signal_price*(1+trigger):.2f}元", f"不高于约{signal_price*(1+prepare):.2f}元"
 
 
+HARD_ENTRY_BLOCKERS = {
+    "FUNDAMENTAL_VETO",
+    "STOP_UNDEFINED",
+    "RISK_TOO_HIGH",
+    "TECHNICAL_EXECUTION_PAUSED",
+    "PARENT_CONTEXT_INVALID",
+    "DATA_INCOMPLETE",
+    "PORTFOLIO_RISK_FULL",
+    "REENTRY_LOCKED",
+}
+
+
 def _enforce_first_buy_permission(candidate: dict) -> None:
-    """一买的交易权限必须与统一周期政策一致，而不是沿用旧决策层的通用开仓行为。"""
+    """一买权限位于硬风控之后；任何周期权限都不能复活被基本面/风险/数据否决的交易。"""
     if str(candidate.get("signal") or "") != ChanSignalType.FIRST_BUY.value:
         return
+    blockers = set(candidate.get("blockers") or [])
+    hard_blocked = bool(blockers & HARD_ENTRY_BLOCKERS)
     timeframe = str(candidate.get("timeframe") or "")
+    if hard_blocked:
+        candidate["push"] = False
+        candidate["action"] = "OBSERVE"
+        candidate["recent_signal_note"] = "一买结构存在，但存在基本面/风险/数据/上级结构等硬阻断，仅保留观察"
+        return
     if timeframe == Timeframe.DAILY.value:
         candidate["action"] = "WAIT_2B"
         candidate["push"] = False
         candidate["recent_signal_note"] = "日线一买已成立，但按策略默认等待标准二买，不直接建立核心仓"
     elif timeframe == Timeframe.M120.value:
-        # 120分钟一买是反转早期：允许进入飞书“准备”候选，但不自动执行第一笔。
         candidate["action"] = "PREPARE_BUY"
         candidate["push"] = True
-        candidate["recent_signal_note"] = "120分钟一买：只进入准备/小试仓观察，不等同120分钟二买或三买"
+        candidate["recent_signal_note"] = "120分钟一买：进入准备/小试仓观察，不等同120分钟标准二买或三买"
     elif timeframe == Timeframe.M30.value:
-        # 30分钟一买噪声更高，保持观察，优先等待标准二买/三买。
         candidate["action"] = "OBSERVE"
         candidate["push"] = False
         candidate["recent_signal_note"] = "30分钟一买：反转初期，仅观察；优先等待标准二买/三买和5分钟执行确认"
@@ -213,17 +220,11 @@ def analyze_symbol_v3(symbol, industry_map, *, as_of, equity):
     candidate["industry_analysis_profile"] = symbol.get("industry_analysis_profile")
     candidate["recent_report"] = symbol.get("recent_report")
     candidate["sector_financial_metrics"] = symbol.get("sector_financial_metrics")
-    candidate["stop_logic"] = (
-        f"止损跟随{candidate.get('timeframe','主结构')}买点/中枢失效；单根5分钟影线或短线卖点不能直接否定更高周期核心结构。"
-    )
-    candidate["add_plan"] = (
-        "首笔后只有出现新的同级或更高级确认买点/结构升级，且保护位能够抬高或保持，才允许第二笔/趋势加仓；"
-        "禁止因为价格下跌而机械补仓。"
-    )
-    candidate["take_profit_plan"] = (
-        "不设固定盈利百分比止盈；5分钟/30分钟卖点先处理试仓和战术仓，120分钟卖点逐级降低确认仓，"
-        "日线二卖开始分批减核心仓，日线三卖或周线战略结构失效退出。"
-    )
+    candidate["sector_observation_override"] = symbol.get("sector_observation_override", False)
+    candidate["sector_observation_reason"] = symbol.get("sector_observation_reason")
+    candidate["stop_logic"] = f"止损跟随{candidate.get('timeframe','主结构')}买点/中枢失效；单根5分钟影线或短线卖点不能直接否定更高周期核心结构。"
+    candidate["add_plan"] = "首笔后只有出现新的同级或更高级确认买点/结构升级，且保护位能够抬高或保持，才允许第二笔/趋势加仓；禁止因为价格下跌而机械补仓。"
+    candidate["take_profit_plan"] = "不设固定盈利百分比止盈；5分钟/30分钟卖点先处理试仓和战术仓，120分钟卖点逐级降低确认仓，日线二卖开始分批减核心仓，日线三卖或周线战略结构失效退出。"
     return analysis, candidate
 
 
