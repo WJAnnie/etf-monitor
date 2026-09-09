@@ -1,3 +1,4 @@
+from scripts.collect_candidate_universe import ETF_FS, LOF_FS
 from trading_skill.market_universe import (
     DataQuality,
     SecurityType,
@@ -47,11 +48,21 @@ def test_funds_tracking_restricted_boards_are_still_allowed():
     assert all(item.tradable for item in items)
 
 
-def test_explicit_etf_name_overrides_wrong_source_bucket():
-    row = {"f12": "159999", "f13": 0, "f14": "测试ETF", "f2": 1.0, "f6": 50_000_000, "f24": 8, "f25": 12}
-    item = normalize_fund_row(row, security_type=SecurityType.LOF, source="wrong-bucket")
+def test_explicit_etf_or_lof_name_overrides_wrong_source_bucket():
+    etf_row = {"f12": "159999", "f13": 0, "f14": "测试ETF", "f2": 1.0, "f6": 50_000_000, "f24": 8, "f25": 12}
+    lof_row = {"f12": "166009", "f13": 0, "f14": "中欧动力LOF", "f2": 3.0, "f6": 20_000_000, "f24": 5, "f25": 10}
+    etf = normalize_fund_row(etf_row, security_type=SecurityType.LOF, source="wrong-bucket")
+    lof = normalize_fund_row(lof_row, security_type=SecurityType.ETF, source="wrong-bucket")
     assert classify_fund_security_type("测试ETF", SecurityType.LOF) is SecurityType.ETF
-    assert item.security_type is SecurityType.ETF
+    assert classify_fund_security_type("中欧动力LOF", SecurityType.ETF) is SecurityType.LOF
+    assert etf.security_type is SecurityType.ETF
+    assert lof.security_type is SecurityType.LOF
+
+
+def test_etf_and_lof_use_distinct_eastmoney_market_sets():
+    assert "MK0023" in ETF_FS
+    assert all(code in LOF_FS for code in ("MK0404", "MK0405", "MK0406", "MK0407"))
+    assert "MK0023" not in LOF_FS
 
 
 def test_missing_market_history_stays_missing_instead_of_becoming_zero():
