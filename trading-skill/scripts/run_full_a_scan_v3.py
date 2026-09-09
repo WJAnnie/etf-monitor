@@ -222,6 +222,8 @@ def analyze_symbol_v3(symbol, industry_map, *, as_of, equity):
     candidate["sector_financial_metrics"] = symbol.get("sector_financial_metrics")
     candidate["sector_observation_override"] = symbol.get("sector_observation_override", False)
     candidate["sector_observation_reason"] = symbol.get("sector_observation_reason")
+    candidate["pe"] = symbol.get("pe")
+    candidate["pb"] = symbol.get("pb")
     candidate["stop_logic"] = f"止损跟随{candidate.get('timeframe','主结构')}买点/中枢失效；单根5分钟影线或短线卖点不能直接否定更高周期核心结构。"
     candidate["add_plan"] = "首笔后只有出现新的同级或更高级确认买点/结构升级，且保护位能够抬高或保持，才允许第二笔/趋势加仓；禁止因为价格下跌而机械补仓。"
     candidate["take_profit_plan"] = "不设固定盈利百分比止盈；5分钟/30分钟卖点先处理试仓和战术仓，120分钟卖点逐级降低确认仓，日线二卖开始分批减核心仓，日线三卖或周线战略结构失效退出。"
