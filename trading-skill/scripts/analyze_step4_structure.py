@@ -4,22 +4,18 @@ import argparse
 import json
 import os
 from collections import Counter, defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 from trading_skill.a_share_bars import CN_TZ
-from trading_skill.chan_extensions import annotate_second_buy_variants, class2_buy_types
+from trading_skill.chan_extensions import annotate_second_buy_variants
 from trading_skill.domain.bar import RawBar
-from trading_skill.domain.enums import ChanSignalType, Timeframe
-from trading_skill.multi_timeframe_structure import (
-    build_structure_book,
-    evaluate_lower_context,
-    evaluate_parent_context,
-)
+from trading_skill.domain.enums import Timeframe
+from trading_skill.multi_timeframe_structure import build_structure_book, evaluate_parent_context
 from trading_skill.production_chan import result_dict
 from trading_skill.production_chan_v3 import analyze_production_chan_v3
 from trading_skill.security_pricing import tick_size_for_security_type
-from trading_skill.strategy_policy import TIMEFRAME_POLICY, primary_entry_timeframes
+from trading_skill.strategy_policy import primary_entry_timeframes
 
 
 TF_ROWS = {
@@ -38,15 +34,17 @@ def atomic_json(path: Path, payload: dict) -> None:
     os.replace(tmp, path)
 
 
+def _parse_bar_time(raw_time: str) -> datetime:
+    if len(raw_time) == 10:
+        return datetime.fromisoformat(raw_time).replace(tzinfo=CN_TZ, hour=15)
+    dt = datetime.fromisoformat(raw_time)
+    return dt.replace(tzinfo=CN_TZ) if dt.tzinfo is None else dt.astimezone(CN_TZ)
+
+
 def rows_to_raw(symbol: str, timeframe: Timeframe, rows: list[dict]) -> tuple[RawBar, ...]:
     bars: list[RawBar] = []
     for row in rows:
-        raw_time = str(row["time"])
-        if len(raw_time) == 10:
-            dt = datetime.fromisoformat(raw_time).replace(tzinfo=CN_TZ, hour=15)
-        else:
-            dt = datetime.fromisoformat(raw_time)
-            dt = dt.replace(tzinfo=CN_TZ) if dt.tzinfo is None else dt.astimezone(CN_TZ)
+        dt = _parse_bar_time(str(row["time"]))
         bars.append(
             RawBar.make(
                 symbol=symbol,
@@ -66,21 +64,33 @@ def rows_to_raw(symbol: str, timeframe: Timeframe, rows: list[dict]) -> tuple[Ra
     return tuple(bars)
 
 
-def _fresh_buy(result, *, as_of: datetime):
-    cutoff = as_of - timedelta(days=TIMEFRAME_POLICY[result.timeframe].freshness_days)
-    candidates = [
-        signal
-        for signal in result.signals
-        if signal.side == "BUY"
-        and cutoff <= signal.confirmation_timestamp <= as_of
-        and any(
-            kind in signal.standard_types
-            for kind in (ChanSignalType.FIRST_BUY, ChanSignalType.SECOND_BUY, ChanSignalType.THIRD_BUY)
-        )
-    ]
-    if not candidates:
+def _latest_completed_bar(rows: list[dict]) -> datetime | None:
+    completed = [row for row in rows if bool(row.get("_complete", True)) and row.get("time")]
+    if not completed:
         return None
-    return max(candidates, key=lambda signal: (signal.confirmation_timestamp, signal.id))
+    return max(_parse_bar_time(str(row["time"])) for row in completed)
+
+
+def _empty_result(timeframe: Timeframe, *, issue: str) -> dict:
+    """Keep the requested timeframe identity when short history cannot form even one bar."""
+    return {
+        "status": "DATA_INCOMPLETE",
+        "timeframe": timeframe.value,
+        "raw_bars": 0,
+        "completed_bars": 0,
+        "processed_bars": 0,
+        "fractals": 0,
+        "strokes": 0,
+        "segments": 0,
+        "finalized_segments": 0,
+        "centers": [],
+        "trend": {"classification": None, "state": None},
+        "divergence": {"type": None, "state": None},
+        "signals": [],
+        "technical": None,
+        "latest_close": None,
+        "issues": [issue],
+    }
 
 
 def analyze_symbol(item: dict, *, as_of: datetime) -> dict:
@@ -93,8 +103,20 @@ def analyze_symbol(item: dict, *, as_of: datetime) -> dict:
 
     results = {}
     serialized = {}
+    bar_evidence = {}
     for timeframe, key in TF_ROWS.items():
         rows = list(item.get(key) or [])
+        latest_completed = _latest_completed_bar(rows)
+        bar_evidence[key] = {
+            "row_count": len(rows),
+            "completed_row_count": sum(1 for row in rows if bool(row.get("_complete", True))),
+            "latest_completed_bar": latest_completed.isoformat() if latest_completed else None,
+        }
+        if not rows:
+            result = _empty_result(timeframe, issue=f"NO_{timeframe.value.upper()}_BARS")
+            results[timeframe] = result
+            serialized[key] = result
+            continue
         raw = rows_to_raw(code, timeframe, rows)
         result = annotate_second_buy_variants(
             analyze_production_chan_v3(raw, tick_size=tick_size, as_of=as_of)
@@ -104,28 +126,9 @@ def analyze_symbol(item: dict, *, as_of: datetime) -> dict:
 
     structure_book = build_structure_book(results, as_of=as_of)
     parent_contexts = {}
-    fresh_buy_contexts = {}
     for timeframe in primary_entry_timeframes():
         parent = evaluate_parent_context(results, primary_timeframe=timeframe, as_of=as_of)
         parent_contexts[timeframe.value] = parent.to_dict()
-        signal = _fresh_buy(results[timeframe], as_of=as_of)
-        if signal is None:
-            continue
-        lower = evaluate_lower_context(
-            results,
-            primary_timeframe=timeframe,
-            primary_confirmation=signal.confirmation_timestamp,
-            as_of=as_of,
-        )
-        fresh_buy_contexts[timeframe.value] = {
-            "signal_id": signal.id,
-            "standard_types": [kind.value for kind in signal.standard_types],
-            "class2_types": [kind.value for kind in class2_buy_types(signal)],
-            "structural_timestamp": signal.structural_timestamp.isoformat(),
-            "confirmation_timestamp": signal.confirmation_timestamp.isoformat(),
-            "parent_context": parent.to_dict(),
-            "lower_context": lower.to_dict(),
-        }
 
     return {
         "code": code,
@@ -136,9 +139,10 @@ def analyze_symbol(item: dict, *, as_of: datetime) -> dict:
         "step3_status": item.get("step3_status"),
         "step3_tier": item.get("step3_tier"),
         "research_priority": item.get("research_priority"),
+        "history_quality": ((item.get("quality") or {}).get("history_quality") or {}),
+        "bar_evidence": bar_evidence,
         "structures": structure_book.to_dict(),
         "parent_contexts": parent_contexts,
-        "fresh_buy_contexts": fresh_buy_contexts,
         "chan": serialized,
     }
 
@@ -158,9 +162,6 @@ def main() -> int:
 
     phase_counts: dict[str, Counter] = defaultdict(Counter)
     parent_counts: dict[str, Counter] = defaultdict(Counter)
-    lower_counts: dict[str, Counter] = defaultdict(Counter)
-    signal_counts = Counter()
-    class2_counts = Counter()
 
     for item in symbols:
         try:
@@ -170,14 +171,6 @@ def main() -> int:
                 phase_counts[timeframe][str(snapshot.get("phase"))] += 1
             for timeframe, context in (row.get("parent_contexts") or {}).items():
                 parent_counts[timeframe][str(context.get("state"))] += 1
-            for timeframe, context in (row.get("fresh_buy_contexts") or {}).items():
-                standard = list(context.get("standard_types") or [])
-                for kind in standard:
-                    signal_counts[f"{timeframe}:{kind}"] += 1
-                for kind in context.get("class2_types") or []:
-                    class2_counts[f"{timeframe}:{kind}"] += 1
-                lower_state = str((context.get("lower_context") or {}).get("state") or "")
-                lower_counts[timeframe][lower_state] += 1
         except Exception as exc:
             errors.append({
                 "code": item.get("code"),
@@ -197,10 +190,12 @@ def main() -> int:
             "m120_is_primary_trading_structure": True,
             "m30_is_tactical_structure": True,
             "m5_is_execution_only": True,
-            "lower_sell_does_not_invalidate_higher_buy": True,
+            "step4b_does_not_choose_current_buy_or_sell_signal": True,
+            "signal_freshness_and_invalidation_belong_to_step4c": True,
             "higher_caution_preserves_opportunity_but_can_pause_entry": True,
             "class2_buy_is_extension_not_standard_second_buy": True,
             "security_specific_tick_size": True,
+            "short_history_preserves_timeframe_identity": True,
             "this_stage_does_not_size_positions": True,
         },
         "input_symbols": len(symbols),
@@ -209,9 +204,6 @@ def main() -> int:
         "summary": {
             "phase_by_timeframe": {key: dict(value) for key, value in phase_counts.items()},
             "parent_context_by_primary_timeframe": {key: dict(value) for key, value in parent_counts.items()},
-            "lower_context_for_fresh_buys": {key: dict(value) for key, value in lower_counts.items()},
-            "fresh_standard_buys": dict(signal_counts),
-            "fresh_class2_buys": dict(class2_counts),
         },
         "symbols": analyzed,
     }
@@ -220,9 +212,6 @@ def main() -> int:
     print("STEP4B分析:", len(analyzed), "/", len(symbols), "异常:", len(errors))
     print("各周期阶段:", output["summary"]["phase_by_timeframe"])
     print("上级环境:", output["summary"]["parent_context_by_primary_timeframe"])
-    print("近期正式买点:", output["summary"]["fresh_standard_buys"])
-    print("近期类二买:", output["summary"]["fresh_class2_buys"])
-    print("低级别执行关系:", output["summary"]["lower_context_for_fresh_buys"])
 
     if args.strict:
         problems: list[str] = []
@@ -235,17 +224,17 @@ def main() -> int:
         ]
         if wrong_ticks:
             problems.append(f"证券价格最小变动单位错误:{len(wrong_ticks)}")
-        standalone_m5 = [
-            row for row in analyzed if "5m" in (row.get("fresh_buy_contexts") or {})
-        ]
-        if standalone_m5:
-            problems.append(f"5分钟错误成为主买点周期:{len(standalone_m5)}")
         missing_snapshots = [
             row for row in analyzed
             if set((row.get("structures") or {}).keys()) != {"weekly", "daily", "120m", "30m", "5m"}
         ]
         if missing_snapshots:
             problems.append(f"五周期结构快照不完整:{len(missing_snapshots)}")
+        missing_history = [row for row in analyzed if not isinstance(row.get("history_quality"), dict)]
+        if missing_history:
+            problems.append(f"4B缺少历史证据合同:{len(missing_history)}")
+        if any("fresh_buy_contexts" in row for row in analyzed):
+            problems.append("4B仍然泄漏当前买点选择职责")
         if problems:
             raise SystemExit("；".join(problems))
     return 0
