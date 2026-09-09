@@ -1,0 +1,102 @@
+name: Full A Production Validation
+
+on:
+  pull_request:
+    paths:
+      - 'trading-skill/src/trading_skill/a_share_*.py'
+      - 'trading-skill/src/trading_skill/production_chan.py'
+      - 'trading-skill/scripts/collect_full_a_universe.py'
+      - 'trading-skill/scripts/collect_candidate_bars.py'
+      - 'trading-skill/scripts/run_full_a_scan.py'
+      - 'trading-skill/scripts/send_full_a_report.py'
+      - 'trading-skill/tests/unit/test_a_share_*.py'
+      - 'trading-skill/tests/unit/test_production_chan.py'
+      - '.github/workflows/full-a-phase1.yml'
+      - '.github/workflows/full-a-production-scan.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  production-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: trading-skill
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install
+        run: |
+          python -m pip install -e '.[dev]'
+          python -m pip install -r ../requirements.txt
+
+      - name: 全量回归测试
+        run: python -m pytest
+
+      - name: 真实全A行业与龙头预筛
+        run: |
+          python scripts/collect_full_a_universe.py \
+            --output full-a-results/universe_latest.json \
+            --industry-limit 8 \
+            --leaders-per-industry 3 \
+            --strict
+
+      - name: 真实候选五周期行情
+        run: |
+          python scripts/collect_candidate_bars.py \
+            --universe full-a-results/universe_latest.json \
+            --output full-a-results/candidate_bars_latest.json \
+            --strict
+
+      - name: 正式缠论深度扫描
+        run: |
+          python scripts/run_full_a_scan.py \
+            --universe full-a-results/universe_latest.json \
+            --bars full-a-results/candidate_bars_latest.json \
+            --output full-a-results/scan_latest.json \
+            --stage 'CI真实验证'
+
+      - name: 打印验收摘要
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          for name in ('universe_latest.json','candidate_bars_latest.json','scan_latest.json'):
+              path=Path('full-a-results')/name
+              if not path.exists():
+                  print(name, '未生成')
+                  continue
+              p=json.loads(path.read_text(encoding='utf-8'))
+              if name=='universe_latest.json':
+                  print('全A加载=', p.get('all_a_stocks_loaded'), '来源=', p.get('all_a_source'))
+                  print('行业加载=', p.get('industry_rows_loaded'))
+                  print('入选行业=', [(x['name'],x['rank_score'],x['heat_state']) for x in p.get('selected_industries',[])])
+                  print('龙头候选=',len(p.get('leader_candidates',[])),'财务通过=',p.get('fundamental_eligible_candidates'))
+                  print('行业成员异常=',p.get('member_errors'))
+                  print('财报异常=',p.get('finance_errors'))
+              elif name=='candidate_bars_latest.json':
+                  print('五周期候选=',p.get('candidate_count'),'成功=',p.get('loaded_count'),'异常=',p.get('errors'))
+              else:
+                  candidates=p.get('candidates',[])
+                  pushed=[x for x in candidates if x.get('push')]
+                  print('深度缠论=',p.get('deep_scanned'),'正式买点=',len(candidates),'达到推送条件=',len(pushed))
+                  print('推送候选=',[(x.get('code'),x.get('name'),x.get('signal'),x.get('timeframe'),x.get('opportunity'),x.get('risk'),x.get('action')) for x in pushed])
+          PY
+
+      - name: Upload production validation
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-a-production-validation
+          path: trading-skill/full-a-results/*.json
+          if-no-files-found: warn
