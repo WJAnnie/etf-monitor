@@ -9,6 +9,7 @@ from trading_skill.chan.center import (
     Center,
     CenterMotion,
     extend_center,
+    motion_leaves_core,
     motion_overlaps_core,
     register_first_return,
     register_leave,
@@ -133,13 +134,20 @@ def build_center_lifecycle(
             continue
 
         motion = motions[index]
-        if motion_overlaps_core(active, motion):
-            updated = extend_center(active, motion)
-            if updated.result.valid:
-                active = updated.center
-                _replace_center(centers, active)
-            else:
-                reasons.extend(updated.result.reason_codes)
+        # 一个运动可以“包络与中枢相交”同时“结构终点已经离开”。
+        # 生命周期必须先处理结构离开，不能被几何 overlap 抢先吞成 extension。
+        if not motion_leaves_core(active, motion):
+            if motion_overlaps_core(active, motion):
+                updated = extend_center(active, motion)
+                if updated.result.valid:
+                    active = updated.center
+                    _replace_center(centers, active)
+                else:
+                    reasons.extend(updated.result.reason_codes)
+                index += 1
+                continue
+            reasons.append("MOTION_NEITHER_OVERLAP_NOR_VALID_LEAVE")
+            active = None
             index += 1
             continue
 
@@ -185,6 +193,7 @@ def build_center_lifecycle(
             continue
 
         # 回到原中枢核心区，按延伸处理；ZD/ZG保持种子时固定，不重算。
+        # RETURNING 状态允许一段回试穿过中枢后继续到另一侧，只要其包络真实经过核心区。
         extended = extend_center(active, return_motion)
         if extended.result.valid:
             active = extended.center
