@@ -1,29 +1,36 @@
 from __future__ import annotations
 
 import html
+import json
 import re
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from typing import Iterable, Mapping
 
 import requests
 
-from trading_skill.industry_profiles import profile_dict
+from trading_skill.industry_profiles import profile_for
 
 
 SINA_7X24 = "https://zhibo.sina.com.cn/api/zhibo/feed"
+EASTMONEY_SEARCH = "https://search-api-web.eastmoney.com/search/jsonp"
 POSITIVE_WORDS = (
     "支持", "加码", "上调", "增长", "突破", "中标", "订单", "获批", "放量", "扩产", "回暖", "提价", "降税",
-    "补贴", "签约", "创新高", "超预期", "增持", "回购", "政策利好", "出口增长", "需求增长",
+    "补贴", "签约", "创新高", "超预期", "增持", "回购", "政策利好", "出口增长", "需求增长", "纳入医保",
 )
 NEGATIVE_WORDS = (
     "下调", "下降", "亏损", "减产", "停产", "取消", "制裁", "限制", "调查", "处罚", "召回", "违约", "爆雷",
-    "低于预期", "价格战", "需求下滑", "订单下降", "库存高企", "事故", "禁令", "风险提示",
+    "低于预期", "价格战", "需求下滑", "订单下降", "库存高企", "事故", "禁令", "风险提示", "集采降价",
 )
 MAJOR_WORDS = (
-    "国务院", "央行", "国家发改委", "工信部", "财政部", "证监会", "医保局", "国资委", "重大", "首次", "正式发布",
-    "获批", "中标", "订单", "制裁", "禁令", "停产", "召回", "并购", "重组", "回购", "增持", "减持",
+    "国务院", "央行", "国家发改委", "工信部", "财政部", "证监会", "医保局", "国资委", "海关总署", "重大", "首次",
+    "正式发布", "获批", "中标", "大额订单", "制裁", "禁令", "停产", "召回", "并购", "重组", "回购", "增持", "减持",
 )
+# 这些词是行业分析指标，而不是行业身份词；不得用于把新闻归属到行业。
+GENERIC_NON_IDENTITY_WORDS = {
+    "订单", "毛利率", "研发", "研发投入", "资本开支", "固定资产", "在建工程", "存货", "应收账款", "经营现金流",
+    "合同负债", "销量", "收入", "利润", "增长", "政策", "价格", "产品", "扩产", "中标", "回购", "增持",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,7 +41,8 @@ class IndustryEvent:
     impact: str
     importance: str
     content: str
-    source: str = "新浪财经7x24"
+    source: str
+    matched_keyword: str | None = None
 
 
 def _strip_html(text: str) -> str:
@@ -42,6 +50,23 @@ def _strip_html(text: str) -> str:
     text = re.sub(r"<[^>]+>", "", text)
     text = re.sub(r"〖[^〗]*〗", "", text)
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _parse_time(value: str, *, as_of: datetime) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    candidates = [raw, raw.replace("/", "-")]
+    for candidate in candidates:
+        try:
+            dt = datetime.fromisoformat(candidate)
+        except ValueError:
+            continue
+        if as_of.tzinfo and dt.tzinfo is None:
+            dt = dt.replace(tzinfo=as_of.tzinfo)
+        return dt
+    # 东财部分搜索结果只给 yyyy-MM-dd HH:mm:ss 以外的格式，解析失败时不凭空补日期。
+    return None
 
 
 def fetch_sina_7x24(*, page_size: int = 100, timeout: int = 10) -> list[dict]:
@@ -65,20 +90,103 @@ def fetch_sina_7x24(*, page_size: int = 100, timeout: int = 10) -> list[dict]:
         content = _strip_html(row.get("rich_text"))
         if not content:
             continue
-        out.append({"id": row.get("id"), "time": str(row.get("create_time") or ""), "content": content})
+        out.append(
+            {
+                "id": row.get("id"),
+                "time": str(row.get("create_time") or ""),
+                "content": content,
+                "source": "新浪财经7x24",
+                "query": None,
+            }
+        )
     return out
 
 
-def _industry_keywords(industry: Mapping[str, object]) -> tuple[str, ...]:
-    profile = profile_dict(str(industry.get("name") or ""), str(industry.get("prospect_theme") or "") or None)
-    words = {str(industry.get("name") or ""), str(industry.get("prospect_theme") or "")}
-    # 从行业画像的关注项中提取最有辨识度的中文词，避免只靠板块全名。
-    for bucket in ("operating_focus", "report_focus"):
-        for text in profile.get(bucket, []):
-            for token in re.findall(r"[\u4e00-\u9fffA-Za-z0-9]+", str(text)):
-                if len(token) >= 3:
-                    words.add(token)
-    return tuple(word for word in words if len(word) >= 2)
+def _decode_jsonp(text: str) -> dict:
+    raw = str(text or "").strip()
+    start = raw.find("(")
+    end = raw.rfind(")")
+    if start >= 0 and end > start:
+        raw = raw[start + 1 : end]
+    payload = json.loads(raw)
+    return payload if isinstance(payload, dict) else {}
+
+
+def fetch_eastmoney_news(query: str, *, page_size: int = 8, timeout: int = 10) -> list[dict]:
+    """东财公开资讯搜索兜底。失败由调用层降级，不允许资讯源故障阻断选股。"""
+    param = {
+        "uid": "",
+        "keyword": query,
+        "type": ["cmsArticleWebOld"],
+        "client": "web",
+        "clientType": "web",
+        "clientVersion": "curr",
+        "param": {
+            "cmsArticleWebOld": {
+                "searchScope": "default",
+                "sort": "time",
+                "pageIndex": 1,
+                "pageSize": page_size,
+                "preTag": "",
+                "postTag": "",
+            }
+        },
+    }
+    response = requests.get(
+        EASTMONEY_SEARCH,
+        params={"cb": "jQuery_trade_skill", "param": json.dumps(param, ensure_ascii=False, separators=(",", ":"))},
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/152 Safari/537.36",
+            "Referer": "https://so.eastmoney.com/",
+            "Accept": "*/*",
+        },
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    payload = _decode_jsonp(response.text)
+    result = payload.get("result") or payload.get("Result") or {}
+    block = result.get("cmsArticleWebOld") or result.get("CmsArticleWebOld") or {}
+    rows = block.get("list") or block.get("data") or block.get("items") or []
+    if isinstance(block, list):
+        rows = block
+    out = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        title = _strip_html(row.get("title") or row.get("Title") or "")
+        body = _strip_html(row.get("content") or row.get("summary") or row.get("Content") or "")
+        content = "；".join(part for part in (title, body) if part)
+        if not content:
+            continue
+        out.append(
+            {
+                "id": row.get("code") or row.get("id") or row.get("articleId"),
+                "time": str(row.get("date") or row.get("showTime") or row.get("publishTime") or row.get("time") or ""),
+                "content": content[:500],
+                "source": "东方财富资讯",
+                "query": query,
+            }
+        )
+    return out
+
+
+def industry_identity_keywords(industry: Mapping[str, object]) -> tuple[str, ...]:
+    name = str(industry.get("name") or "").strip()
+    theme = str(industry.get("prospect_theme") or "").strip()
+    profile = profile_for(name, theme or None)
+    words = {name, theme}
+    words.update(profile.keywords)
+    return tuple(
+        sorted(
+            {
+                word.strip()
+                for word in words
+                if word and len(word.strip()) >= 2 and word.strip() not in GENERIC_NON_IDENTITY_WORDS
+            },
+            key=len,
+            reverse=True,
+        )
+    )
 
 
 def _impact(text: str) -> str:
@@ -91,6 +199,13 @@ def _impact(text: str) -> str:
     return "中性/待观察"
 
 
+def _importance(text: str) -> str:
+    score = sum(1 for word in MAJOR_WORDS if word in text)
+    if score >= 2 or any(authority in text for authority in ("国务院", "国家发改委", "工信部", "医保局", "证监会")):
+        return "重大"
+    return "重要"
+
+
 def match_industry_events(
     selected_industries: Iterable[Mapping[str, object]],
     news_rows: Iterable[Mapping[str, object]],
@@ -100,28 +215,49 @@ def match_industry_events(
     max_per_industry: int = 3,
 ) -> dict[str, list[dict]]:
     cutoff = as_of - timedelta(hours=max_age_hours)
+    material = [dict(row) for row in news_rows]
     result: dict[str, list[dict]] = {}
+
     for industry in selected_industries:
         name = str(industry.get("name") or "")
         theme = str(industry.get("prospect_theme") or "") or None
-        keywords = _industry_keywords(industry)
+        keywords = industry_identity_keywords(industry)
         matched: list[IndustryEvent] = []
-        for row in news_rows:
+        seen: set[str] = set()
+
+        for row in material:
             content = str(row.get("content") or "")
-            if not content or not any(word in content for word in keywords):
+            if not content:
                 continue
+            query = str(row.get("query") or "")
+            hit = next((word for word in keywords if word in content), None)
+            # 东财按行业/主题定向查询的结果，仍要求标题正文中出现行业身份词，避免搜索泛化误配。
+            if hit is None:
+                continue
+
             raw_time = str(row.get("time") or "")
-            try:
-                dt = datetime.fromisoformat(raw_time)
-                if as_of.tzinfo and dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=as_of.tzinfo)
-                if dt < cutoff or dt > as_of + timedelta(minutes=5):
-                    continue
-            except ValueError:
-                pass
-            importance = "重大" if any(word in content for word in MAJOR_WORDS) else "重要"
-            matched.append(IndustryEvent(name, theme, raw_time, _impact(content), importance, content[:220]))
-        matched.sort(key=lambda x: (x.importance == "重大", x.time), reverse=True)
+            dt = _parse_time(raw_time, as_of=as_of)
+            if dt is not None and (dt < cutoff or dt > as_of + timedelta(minutes=5)):
+                continue
+
+            fingerprint = re.sub(r"\W+", "", content)[:100]
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            matched.append(
+                IndustryEvent(
+                    name,
+                    theme,
+                    raw_time,
+                    _impact(content),
+                    _importance(content),
+                    content[:220],
+                    str(row.get("source") or "财经资讯"),
+                    hit,
+                )
+            )
+
+        matched.sort(key=lambda item: (item.importance == "重大", item.time), reverse=True)
         if matched:
             result[name] = [asdict(item) for item in matched[:max_per_industry]]
     return result
@@ -142,12 +278,14 @@ def recent_report_event(row: Mapping[str, object], *, as_of: datetime, days: int
         return None
     suffix = report_date[5:]
     report_type = {"03-31": "一季报", "06-30": "中报", "09-30": "三季报", "12-31": "年报"}.get(suffix, "定期报告")
+
     def num(key):
         value = row.get(key)
         try:
             return None if value in (None, "", "-") else round(float(value), 2)
         except (TypeError, ValueError):
             return None
+
     return {
         "notice_date": notice,
         "report_date": report_date,
