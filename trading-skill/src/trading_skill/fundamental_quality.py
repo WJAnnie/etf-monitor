@@ -442,6 +442,8 @@ def assess_stock_fundamentals(
         status = FundamentalStatus.WATCH
     elif latest is None:
         status = FundamentalStatus.WATCH
+    elif coverage is EvidenceCoverage.LIMITED:
+        status = FundamentalStatus.WATCH
     elif growth is GrowthState.DETERIORATING and profile not in CYCLICAL_PROFILES | RND_TOLERANT_PROFILES:
         status = FundamentalStatus.WATCH
     elif risk is RiskLevel.HIGH or quality in {CompanyQuality.WEAK, CompanyQuality.UNKNOWN}:
@@ -459,6 +461,8 @@ def assess_stock_fundamentals(
         f"风险:{risk.value}",
         f"证据覆盖:{coverage.value}",
     ]
+    if coverage is EvidenceCoverage.LIMITED:
+        rationale.append("证据覆盖有限，只允许WATCH，不给出PASS")
     if valuation is ValuationState.VERY_HIGH:
         rationale.append("估值很高仅作为风险标签，不单独否决")
     if profile in CYCLICAL_PROFILES:
