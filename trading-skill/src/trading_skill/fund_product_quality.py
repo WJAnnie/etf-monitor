@@ -84,6 +84,33 @@ def _num(value: object) -> float | None:
     return number if isfinite(number) else None
 
 
+FUND_THEME_ALIASES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("半导体", "芯片"), "半导体设备与材料"),
+    (("创新药", "生物医药", "生物科技"), "创新药"),
+    (("机器人", "工业母机", "自动化"), "机器人与高端自动化"),
+    (("通信", "算力", "人工智能", "AI", "服务器", "光模块"), "人工智能基础设施"),
+    (("电网", "特高压", "储能"), "电网升级与储能"),
+    (("军工", "航天", "卫星"), "商业航天与军工电子"),
+    (("智能驾驶", "汽车电子"), "智能驾驶与汽车电子"),
+    (("医疗器械", "医疗设备"), "医疗器械"),
+    (("核电", "氢能", "风电"), "先进能源装备"),
+    (("新材料", "碳纤维"), "新材料"),
+    (("工业软件", "网络安全"), "工业软件与网络安全"),
+    (("船舶", "海工"), "造船与海工"),
+)
+
+
+def _fund_theme_name(name: str) -> str | None:
+    matched = match_theme(name)
+    if matched:
+        return matched.name
+    text = str(name or "").upper()
+    for tokens, theme in FUND_THEME_ALIASES:
+        if any(token.upper() in text for token in tokens):
+            return theme
+    return None
+
+
 def _selected_theme_names(selected_industries: Iterable[Mapping[str, object]]) -> set[str]:
     names: set[str] = set()
     for item in selected_industries:
@@ -104,8 +131,7 @@ def _underlying_state(
     name = str(item.get("name") or "")
     positives: list[str] = []
     warnings: list[str] = []
-    matched = match_theme(name)
-    theme = matched.name if matched else None
+    theme = _fund_theme_name(name)
 
     if category == "EQUITY_BROAD":
         positives.append("宽基底层资产具备分散化基础，不以单一行业景气作为准入门槛")
@@ -198,7 +224,6 @@ def _product_quality(
         else:
             score += 1
 
-    total_fee = None
     if management_fee is not None or custody_fee is not None:
         total_fee = (management_fee or 0.0) + (custody_fee or 0.0)
         evidence += 1
@@ -274,7 +299,7 @@ def assess_fund_product(
     )
     if reference_fields >= 3 and (not special_premium_check or (premium is not None and premium_fresh)):
         coverage = ProductEvidenceCoverage.FULL
-    elif fund_family := str(item.get("fund_family") or "").strip():
+    elif str(item.get("fund_family") or "").strip():
         coverage = ProductEvidenceCoverage.PARTIAL
     else:
         coverage = ProductEvidenceCoverage.LIMITED
