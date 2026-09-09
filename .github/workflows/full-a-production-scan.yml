@@ -1,0 +1,110 @@
+name: 全A正式买点扫描
+
+on:
+  schedule:
+    # 北京时间 14:30 / 14:50 / 16:30，周一到周五。
+    - cron: '30 6 * * 1-5'
+    - cron: '50 6 * * 1-5'
+    - cron: '30 8 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: '扫描时点'
+        required: true
+        type: choice
+        default: '16:30收盘确认'
+        options:
+          - '14:30盘中扫描'
+          - '14:50收盘前扫描'
+          - '16:30收盘确认'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-a-production-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: trading-skill
+    env:
+      FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+      FEISHU_SECRET: ${{ secrets.FEISHU_SECRET }}
+      FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+      FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+      FEISHU_CHAT_ID: ${{ secrets.FEISHU_CHAT_ID }}
+      TRADING_EQUITY: ${{ secrets.TRADING_EQUITY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install
+        run: |
+          python -m pip install -e '.[dev]'
+          python -m pip install -r ../requirements.txt
+
+      - name: 确定扫描时点
+        id: stage
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            STAGE='${{ inputs.stage }}'
+          else
+            case "${{ github.event.schedule }}" in
+              '30 6 * * 1-5') STAGE='14:30盘中扫描' ;;
+              '50 6 * * 1-5') STAGE='14:50收盘前扫描' ;;
+              '30 8 * * 1-5') STAGE='16:30收盘确认' ;;
+              *) STAGE='16:30收盘确认' ;;
+            esac
+          fi
+          echo "stage=$STAGE" >> "$GITHUB_OUTPUT"
+          echo "本轮时点：$STAGE"
+
+      - name: 全A行业与龙头预筛
+        run: |
+          python scripts/collect_full_a_universe.py \
+            --output full-a-results/universe_latest.json \
+            --industry-limit 8 \
+            --leaders-per-industry 3 \
+            --strict
+
+      - name: 候选五周期真实行情
+        run: |
+          python scripts/collect_candidate_bars.py \
+            --universe full-a-results/universe_latest.json \
+            --output full-a-results/candidate_bars_latest.json \
+            --strict
+
+      - name: 正式缠论深度扫描
+        run: |
+          python scripts/run_full_a_scan.py \
+            --universe full-a-results/universe_latest.json \
+            --bars full-a-results/candidate_bars_latest.json \
+            --output full-a-results/scan_latest.json \
+            --stage '${{ steps.stage.outputs.stage }}'
+
+      - name: 飞书中文报告
+        run: |
+          python scripts/send_full_a_report.py \
+            --scan full-a-results/scan_latest.json \
+            --bars full-a-results/candidate_bars_latest.json \
+            --stage '${{ steps.stage.outputs.stage }}'
+
+      - name: Upload scan result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-a-production-${{ github.run_id }}
+          path: trading-skill/full-a-results/*.json
+          if-no-files-found: warn
