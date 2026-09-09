@@ -12,8 +12,8 @@ from trading_skill.market_universe import (
 )
 
 
-def stock(code, name="测试", market=0, price=10, amount=100_000_000, ch60=10, ytd=20):
-    return {"f12": code, "f13": market, "f14": name, "f2": price, "f3": 1.2, "f6": amount, "f8": 2.3, "f20": 10_000_000_000, "f21": 8_000_000_000, "f24": ch60, "f25": ytd}
+def stock(code, name="测试", market=0, price=10, amount=100_000_000, ch60=10, ytd=20, pe=None, pb=None):
+    return {"f12": code, "f13": market, "f14": name, "f2": price, "f3": 1.2, "f6": amount, "f8": 2.3, "f9": pe, "f20": 10_000_000_000, "f21": 8_000_000_000, "f23": pb, "f24": ch60, "f25": ytd}
 
 
 def test_default_permissions_only_keep_sh_sz_main_stock_boards():
@@ -36,6 +36,12 @@ def test_st_and_delisting_are_hard_exclusions():
     retired = normalize_stock_row(stock("600002", name="测试退", market=1), source="test")
     assert not st.tradable and "ST" in st.exclusion_reasons
     assert not retired.tradable and "DELISTING" in retired.exclusion_reasons
+
+
+def test_stock_valuation_is_carried_from_full_market_row():
+    item = normalize_stock_row(stock("600003", market=1, pe=28.5, pb=3.2), source="test")
+    assert item.pe == 28.5
+    assert item.pb == 3.2
 
 
 def test_funds_tracking_restricted_boards_are_still_allowed():
