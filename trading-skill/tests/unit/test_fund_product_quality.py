@@ -43,12 +43,43 @@ def test_cross_border_without_fresh_premium_must_watch():
         fund(
             code="513100",
             name="纳指ETF",
-            fund_category="CROSS_BORDER",
-            fund_family="CROSS_BORDER:纳斯达克100",
+            fund_category="EQUITY_BROAD",
+            fund_family="EQUITY_BROAD:纳斯达克100",
+            fund_risk_tags=("CROSS_BORDER_QDII",),
         )
     )
     assert result.status is FundProductStatus.WATCH
     assert any("折溢价" in text for text in result.warnings)
+    assert any("底层资产专属上下文" in text for text in result.warnings)
+
+
+def test_cross_border_broad_fund_still_needs_asset_context_even_when_premium_is_fresh():
+    result = assess_fund_product(
+        fund(
+            code="513100",
+            name="纳指ETF",
+            fund_category="EQUITY_BROAD",
+            fund_family="EQUITY_BROAD:纳斯达克100",
+            fund_risk_tags=("CROSS_BORDER_QDII",),
+        ),
+        reference={"premium_discount_pct": 1.0, "premium_is_fresh": True},
+    )
+    assert result.status is FundProductStatus.WATCH
+    assert any("底层资产专属上下文" in text for text in result.warnings)
+
+
+def test_cross_border_broad_can_pass_only_after_premium_and_asset_context_are_complete():
+    result = assess_fund_product(
+        fund(
+            code="513100",
+            name="纳指ETF",
+            fund_category="EQUITY_BROAD",
+            fund_family="EQUITY_BROAD:纳斯达克100",
+            fund_risk_tags=("CROSS_BORDER_QDII",),
+        ),
+        reference={"premium_discount_pct": 1.0, "premium_is_fresh": True, "asset_context_complete": True},
+    )
+    assert result.status is FundProductStatus.PASS
 
 
 def test_commodity_qdii_keeps_commodity_asset_class_but_requires_premium_check():
@@ -100,8 +131,8 @@ def test_commodity_can_pass_after_asset_context_is_completed():
 
 def test_fresh_extreme_premium_cannot_pass():
     result = assess_fund_product(
-        fund(code="161130", name="纳斯达克100LOF", security_type="LOF", fund_category="CROSS_BORDER"),
-        reference={"premium_discount_pct": 12.5, "premium_is_fresh": True},
+        fund(code="161130", name="纳斯达克100LOF", security_type="LOF", fund_category="EQUITY_BROAD", fund_risk_tags=("CROSS_BORDER_QDII", "LOF_PREMIUM")),
+        reference={"premium_discount_pct": 12.5, "premium_is_fresh": True, "asset_context_complete": True},
     )
     assert result.status is FundProductStatus.WATCH
     assert result.premium_discount_pct == 12.5
@@ -109,8 +140,8 @@ def test_fresh_extreme_premium_cannot_pass():
 
 def test_stale_premium_is_not_used_as_if_current():
     result = assess_fund_product(
-        fund(code="161130", name="纳斯达克100LOF", security_type="LOF", fund_category="CROSS_BORDER"),
-        reference={"premium_discount_pct": 1.0, "premium_is_fresh": False},
+        fund(code="161130", name="纳斯达克100LOF", security_type="LOF", fund_category="EQUITY_BROAD", fund_risk_tags=("CROSS_BORDER_QDII", "LOF_PREMIUM")),
+        reference={"premium_discount_pct": 1.0, "premium_is_fresh": False, "asset_context_complete": True},
     )
     assert result.status is FundProductStatus.WATCH
     assert result.premium_discount_pct is None
@@ -141,6 +172,26 @@ def test_sector_etf_can_use_dynamic_quality_industry_context():
     )
     assert result.underlying_state is UnderlyingAssetState.SUPPORTIVE
     assert result.status is FundProductStatus.PASS
+
+
+def test_bank_etf_can_match_generic_dynamic_industry_not_only_long_term_theme_table():
+    result = assess_fund_product(
+        fund(code="512800", name="银行ETF华宝", fund_category="EQUITY_SECTOR", fund_family="EQUITY_SECTOR:银行"),
+        selected_industries=[{"name": "国有大型银行Ⅲ"}],
+    )
+    assert result.underlying_theme == "银行"
+    assert result.underlying_state is UnderlyingAssetState.SUPPORTIVE
+    assert result.status is FundProductStatus.PASS
+
+
+def test_identified_sector_outside_current_priority_pool_stays_watch():
+    result = assess_fund_product(
+        fund(code="512800", name="银行ETF华宝", fund_category="EQUITY_SECTOR", fund_family="EQUITY_SECTOR:银行"),
+        selected_industries=[{"name": "半导体材料"}],
+    )
+    assert result.underlying_theme == "银行"
+    assert result.underlying_state is UnderlyingAssetState.NEUTRAL
+    assert result.status is FundProductStatus.WATCH
 
 
 def test_sector_etf_without_resolved_theme_stays_watch_not_fake_pass():
