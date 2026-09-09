@@ -17,9 +17,23 @@ def _money(value):
         return str(value)
 
 
+def _append_watch_candidates(lines: list[str], candidates: list[dict], confirmed_codes: set[str]) -> None:
+    watch = [item for item in candidates if item.get("code") not in confirmed_codes and item.get("recent_signal_note")]
+    if not watch:
+        return
+    watch.sort(key=lambda item: (item.get("signal") == "二买", item.get("timeframe") == "120分钟", -(abs(float(item.get("rise_since_signal_pct") or 999)))), reverse=True)
+    lines.extend(["", f"【近期买点观察】共{len(watch)}只，以下列出最值得继续跟踪的前8只："])
+    for idx, item in enumerate(watch[:8], 1):
+        lines.append(
+            f"{idx}. {item.get('name')}（{item.get('code')}）｜{item.get('timeframe')} {item.get('signal')}｜"
+            f"买点后{item.get('rise_since_signal_pct', '暂无')}%｜{item.get('risk', '暂无')}｜{item.get('action', '观察')}"
+        )
+
+
 def build_report(scan: dict, universe: dict, *, stage: str) -> tuple[str, str]:
     candidates = list(scan.get("candidates") or [])
     confirmed = [item for item in candidates if item.get("push") is not False]
+    confirmed_codes = {item.get("code") for item in confirmed}
     selected = list(universe.get("selected_industries") or [])
     prospect_industries = [item for item in selected if item.get("prospect_theme")]
     supplement_industries = [item for item in selected if not item.get("prospect_theme")]
@@ -31,13 +45,13 @@ def build_report(scan: dict, universe: dict, *, stage: str) -> tuple[str, str]:
         f"全A股票：{scan.get('total_stocks', 0)}只",
         f"行业/细分板块：{scan.get('industries_screened', 0)}个",
         f"长期前景行业：{len(prospect_industries)}个｜市场结构补充：{len(supplement_industries)}个",
-        f"前五/新龙头去重候选：{universe.get('deduped_leader_candidates', scan.get('leader_candidates', 0))}只",
+        f"行业前五+跨行业去重候选：{universe.get('deduped_leader_candidates', scan.get('leader_candidates', 0))}只",
         f"允许长历史深扫：{universe.get('deep_scan_eligible_candidates', scan.get('fundamental_passed', 0))}只",
         f"实际五周期深扫：{scan.get('deep_scanned', 0)}只",
         f"近期出现正式缠论买点：{scan.get('chan_buy_candidates', 0)}只",
         f"当前达到执行/准备标准：{len(confirmed)}只",
         "",
-        "【行业逻辑】长期前景决定主要扫描池；当日热度只用于判断节奏，不再作为行业准入门槛。",
+        "【行业逻辑】长期前景决定主要扫描池；当日热度只用于判断节奏，不再作为行业准入门槛；另设跨行业结构补充，防止个股先于板块启动时漏掉。",
         "【买点逻辑】30分钟/120分钟近期已经出现的一买、二买、三买，只要结构未失效且距离买点涨幅不大，仍保留为机会。",
     ]
 
@@ -49,10 +63,8 @@ def build_report(scan: dict, universe: dict, *, stage: str) -> tuple[str, str]:
         lines.extend(["", "【重点前景方向】" + "、".join(names)])
 
     if not confirmed:
-        near = [item for item in candidates if item.get("recent_signal_note")]
         lines.extend(["", "【结论】本轮没有达到正式执行标准的股票，不为了凑数量而降低缠论定义。"])
-        if near:
-            lines.append(f"但已有{len(near)}只股票出现过近期买点，系统会继续观察其涨幅、上级结构和风险状态。")
+        _append_watch_candidates(lines, candidates, confirmed_codes)
         return title, "\n".join(lines)
 
     lines.extend(["", "【可执行/准备候选】"])
@@ -60,7 +72,7 @@ def build_report(scan: dict, universe: dict, *, stage: str) -> tuple[str, str]:
         lines.extend([
             "",
             f"{idx}. {item.get('name', '未知')}（{item.get('code', '')}）",
-            f"前景主题：{item.get('prospect_theme') or '市场结构补充'}",
+            f"前景主题：{item.get('prospect_theme') or '跨行业/市场结构补充'}",
             f"细分行业：{item.get('industry', '暂无')}｜行业节奏：{item.get('industry_state', '暂无')}",
             f"行业位置：{item.get('leader_rank', '暂无')}｜基本面：{item.get('fundamental_grade', '暂无')}级",
             f"缠论买点：{item.get('signal', '暂无')}｜级别：{item.get('timeframe', '暂无')}",
@@ -74,6 +86,7 @@ def build_report(scan: dict, universe: dict, *, stage: str) -> tuple[str, str]:
             f"建议首笔资金：{_money(item.get('buy_amount'))}｜建议股数：{item.get('buy_quantity') or '待总资金配置'}",
             f"后续加仓：{item.get('add_plan', '只有形成新的确认结构后再考虑加仓')}",
         ])
+    _append_watch_candidates(lines, candidates, confirmed_codes)
     lines.extend([
         "",
         "说明：不因当天没有候选而放宽一买/二买/三买定义；扩大的是历史、覆盖范围和近期买点有效观察窗口。",
