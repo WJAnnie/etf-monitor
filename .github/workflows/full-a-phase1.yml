@@ -38,6 +38,18 @@ jobs:
       - name: 全量回归测试
         run: python -m pytest
 
+      - name: 新版可交易证券池与候选发现验证
+        run: |
+          python -m scripts.collect_candidate_universe \
+            --output full-a-results/candidate_universe_latest.json \
+            --industry-limit 28 \
+            --stock-strength-cap 120 \
+            --stock-early-cap 100 \
+            --fund-cap 100 \
+            --strict
+
+      # 旧V3生产链暂时保留，直到后续基本面/缠论阶段完成逐层重构。
+      # 新候选层当前只验证第一、二步，不强行套入旧的深扫数据契约。
       - name: 真实全A动态行业与前五候选预筛V3
         run: |
           python -m scripts.collect_full_a_universe_v3 \
@@ -69,40 +81,39 @@ jobs:
             --output full-a-results/scan_latest.json \
             --stage 'CI真实验证'
 
-      - name: 打印V3验收摘要
+      - name: 打印验收摘要
         if: always()
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
+          candidate_path=Path('full-a-results/candidate_universe_latest.json')
           universe_path=Path('full-a-results/universe_latest.json')
           bars_path=Path('full-a-results/candidate_bars_latest.json')
           scan_path=Path('full-a-results/scan_latest.json')
+          if candidate_path.exists():
+              p=json.loads(candidate_path.read_text(encoding='utf-8'))
+              s=p.get('summary',{})
+              print('新版可交易池=',s.get('tradeable_by_security_type'))
+              print('新版权限/状态剔除=',s.get('exclusions'))
+              print('新版数据质量=',s.get('data_quality'))
+              print('新版候选类型=',s.get('candidate_by_security_type'))
+              print('新版候选路线=',s.get('candidate_by_route'))
+              print('新版重点行业=',[(x.get('name'),x.get('state'),x.get('prospect_theme')) for x in p.get('selected_industries',[])[:20]])
           if universe_path.exists():
               p=json.loads(universe_path.read_text(encoding='utf-8'))
               selected=p.get('selected_industries',[])
-              print('全A=',p.get('all_a_stocks_loaded'),'行业=',p.get('industry_rows_loaded'))
-              print('重点行业=',len(selected),'刚升温=',sum(1 for x in selected if x.get('rotation_state')=='刚开始升温'),'高位暂退=',len(p.get('paused_high_industries',[])))
-              print('资讯匹配=',sum(1 for x in selected if x.get('events')),'资讯源=',p.get('industry_intelligence'))
-              print('近期财报行业=',len(p.get('industry_recent_reports',{})))
-              print('总候选=',p.get('deduped_leader_candidates'),'允许深扫=',p.get('deep_scan_eligible_candidates'))
-              print('跨行业真实行业=',p.get('cross_market_industry_enrichment'))
-              print('入选=',[(x.get('name'),x.get('rotation_state'),x.get('prospect_theme')) for x in selected])
+              print('旧V3全A=',p.get('all_a_stocks_loaded'),'行业=',p.get('industry_rows_loaded'))
+              print('旧V3重点行业=',len(selected),'刚升温=',sum(1 for x in selected if x.get('rotation_state')=='刚开始升温'),'高位暂退=',len(p.get('paused_high_industries',[])))
+              print('旧V3总候选=',p.get('deduped_leader_candidates'),'允许深扫=',p.get('deep_scan_eligible_candidates'))
           if bars_path.exists():
               p=json.loads(bars_path.read_text(encoding='utf-8'))
-              print('长历史候选=',p.get('candidate_count'),'成功=',p.get('loaded_count'),'异常=',len(p.get('errors',[])))
-              if p.get('symbols'):
-                  s=p['symbols'][0]
-                  print('历史长度 daily/weekly/120/30/5=',len(s.get('daily',[])),len(s.get('weekly',[])),len(s.get('120m',[])),len(s.get('30m',[])),len(s.get('5m',[])))
-                  print('V3元数据=',{k:s.get(k) for k in ('industry_name','industry_analysis_profile','recent_report','pe','pb','candidate_route')})
+              print('旧V3长历史候选=',p.get('candidate_count'),'成功=',p.get('loaded_count'),'异常=',len(p.get('errors',[])))
           if scan_path.exists():
               p=json.loads(scan_path.read_text(encoding='utf-8'))
               c=p.get('candidates',[])
-              print('深扫=',p.get('deep_scanned'),'近期买点=',len(c),'推送=',sum(1 for x in c if x.get('push')))
-              print('一买=',sum(1 for x in c if x.get('signal')=='FIRST_BUY'),'二买=',sum(1 for x in c if x.get('signal')=='SECOND_BUY'),'三买=',sum(1 for x in c if x.get('signal')=='THIRD_BUY'))
-              print('类二买=',sum(1 for x in c if x.get('extended_signal_types')))
-              print('执行冲突=',sum(1 for x in c if not x.get('execution_structure_ok',True)))
-              print('样本=',[(x.get('code'),x.get('signal'),x.get('class2_label'),x.get('timeframe'),x.get('action')) for x in c[:20]])
+              print('旧V3深扫=',p.get('deep_scanned'),'近期买点=',len(c),'推送=',sum(1 for x in c if x.get('push')))
+              print('旧V3一买=',sum(1 for x in c if x.get('signal')=='FIRST_BUY'),'二买=',sum(1 for x in c if x.get('signal')=='SECOND_BUY'),'三买=',sum(1 for x in c if x.get('signal')=='THIRD_BUY'))
           PY
 
       - name: Upload production validation
