@@ -23,8 +23,9 @@ from trading_skill.industry_intelligence import fetch_sina_7x24, match_industry_
 from trading_skill.industry_priority import ROTATION_REFRESH_POLICY, rank_industries, select_priority_industries
 from trading_skill.market_universe import SecurityType, TradePermissions, build_tradeable_universe, normalize_stock_row
 
-ETF_FS = "b:MK0021,b:MK0022,b:MK0024,b:MK0827"
-LOF_FS = "b:MK0023"
+# 东方财富 ETF 与 LOF 是两套独立板块。MK0021~24/MK0827 属于 ETF；LOF 使用 MK0404~0407。
+ETF_FS = "b:MK0021,b:MK0022,b:MK0023,b:MK0024,b:MK0827"
+LOF_FS = "b:MK0404,b:MK0405,b:MK0406,b:MK0407"
 
 
 def fetch_raw_stock_rows() -> tuple[list[dict], str, list[str]]:
@@ -56,21 +57,27 @@ def fetch_raw_stock_rows() -> tuple[list[dict], str, list[str]]:
             market = 1 if symbol.startswith("sh") else 0
             if not code:
                 continue
-            sina_rows.append({
-                "f12": code,
-                "f13": market,
-                "f14": item.get("name"),
-                "f2": item.get("trade"),
-                "f3": item.get("changepercent"),
-                "f6": item.get("amount"),
-                "f8": item.get("turnoverratio"),
-                "f9": item.get("per"),
-                "f20": (_safe_float(item.get("mktcap")) * 10_000) if item.get("mktcap") not in (None, "", "-") else None,
-                "f21": (_safe_float(item.get("nmc")) * 10_000) if item.get("nmc") not in (None, "", "-") else None,
-                "f23": item.get("pb"),
-                "f24": None,
-                "f25": None,
-            })
+            sina_rows.append(
+                {
+                    "f12": code,
+                    "f13": market,
+                    "f14": item.get("name"),
+                    "f2": item.get("trade"),
+                    "f3": item.get("changepercent"),
+                    "f6": item.get("amount"),
+                    "f8": item.get("turnoverratio"),
+                    "f9": item.get("per"),
+                    "f20": (_safe_float(item.get("mktcap")) * 10_000)
+                    if item.get("mktcap") not in (None, "", "-")
+                    else None,
+                    "f21": (_safe_float(item.get("nmc")) * 10_000)
+                    if item.get("nmc") not in (None, "", "-")
+                    else None,
+                    "f23": item.get("pb"),
+                    "f24": None,
+                    "f25": None,
+                }
+            )
     if len(sina_rows) >= 4000:
         return sina_rows, "新浪全A原始证券兜底", errors
     raise RuntimeError(f"股票主备数据源均不足：东财={len(rows)} 新浪={len(sina_rows)}")
@@ -146,13 +153,22 @@ def main() -> int:
     now = datetime.now(CN_TZ)
     stock_rows, stock_source, stock_errors = fetch_raw_stock_rows()
     etf_rows, lof_rows, fund_errors = fetch_exchange_funds()
-    permissions = TradePermissions(sh_main=True, sz_main=True, star=False, chinext=False, bse=False, etf=True, lof=True, fund=True)
+    permissions = TradePermissions(
+        sh_main=True,
+        sz_main=True,
+        star=False,
+        chinext=False,
+        bse=False,
+        etf=True,
+        lof=True,
+        fund=True,
+    )
     all_items, tradeable = build_tradeable_universe(
         stock_rows,
         etf_rows,
         lof_rows,
         stock_source=stock_source,
-        fund_source="东方财富场内基金",
+        fund_source="东方财富场内ETF/LOF",
         permissions=permissions,
     )
 
@@ -196,19 +212,21 @@ def main() -> int:
         "generated_at": now.isoformat(),
         "permissions": asdict(permissions),
         "design_contract": {
-            "step1": "只回答当前账户权限下哪些证券可进入扫描：沪深主板股票+ETF/LOF/场内基金；排除科创板、创业板、北交所个股、ST/*ST、退市和无有效行情证券。",
+            "step1": "只回答当前账户权限下哪些证券可进入扫描：沪深主板股票+ETF+LOF/其他场内基金；排除科创板、创业板、北交所个股、ST/*ST、退市和无有效行情证券。",
             "step2": "只回答哪些证券值得继续研究；股票走市场强势/刚启动/行业/事件多路线，ETF/场内基金先按资产类别同类比较；不产生基本面最终结论、缠论买点或交易建议。",
             "missing_data_is_never_zero": True,
             "industry_is_not_hard_stock_gate": True,
             "industry_quality_and_short_term_heat_are_separate": True,
             "quality_industries_rotate_periodically": True,
+            "quality_score_never_uses_short_term_market_heat": True,
             "high_position_is_risk_tag_not_hard_veto": True,
             "static_industry_themes_are_prior_not_whitelist": True,
             "restricted_stock_boards_never_enter_candidates": True,
+            "etf_and_lof_use_distinct_market_sources": True,
         },
         "sources": {
             "stocks": stock_source,
-            "funds": "东方财富ETF/LOF板块",
+            "funds": "东方财富ETF(MK0021~24/MK0827)+LOF(MK0404~0407)",
             "stock_errors": stock_errors,
             "fund_errors": fund_errors,
             "industry_member_errors": member_errors,
@@ -219,16 +237,28 @@ def main() -> int:
         "selected_industries": selected_dicts,
         "deferred_industries": [item.as_dict() for item in deferred[:60]],
         "industry_refresh_policy": ROTATION_REFRESH_POLICY,
-        "industry_events": {name: rows for name, rows in rotation_events.items() if name in {item.name for item in selected}},
+        "industry_events": {
+            name: rows for name, rows in rotation_events.items() if name in {item.name for item in selected}
+        },
         "candidates": [item.as_dict() for item in candidates],
     }
     atomic_json(args.output, payload)
 
     print("第一步可交易池:", summary["tradeable_by_security_type"])
-    print("权限剔除:", {k: v for k, v in summary["exclusions"].items() if "BOARD_NOT_ALLOWED" in k or k in {"ST", "DELISTING"}})
+    print(
+        "权限剔除:",
+        {k: v for k, v in summary["exclusions"].items() if "BOARD_NOT_ALLOWED" in k or k in {"ST", "DELISTING"}},
+    )
     print("数据质量:", summary["data_quality"])
     print("动态行业分层:", summary["selected_industry_pools"])
-    print("动态重点行业:", len(selected), [(x.name, x.pool.value, x.state.value, round(x.quality_score, 1), round(x.timing_score, 1)) for x in selected[:16]])
+    print(
+        "动态重点行业:",
+        len(selected),
+        [
+            (x.name, x.pool.value, x.state.value, round(x.quality_score, 1), round(x.timing_score, 1))
+            for x in selected[:16]
+        ],
+    )
     print("第二步候选:", summary["candidate_by_security_type"], summary["candidate_by_route"])
     print("ETF/基金同类分组:", summary["candidate_by_fund_category"])
 
@@ -236,15 +266,32 @@ def main() -> int:
         problems: list[str] = []
         raw_stock_count = summary["raw_by_security_type"].get(SecurityType.STOCK.value, 0)
         tradeable_stock_count = summary["tradeable_by_security_type"].get(SecurityType.STOCK.value, 0)
-        fund_count = sum(summary["tradeable_by_security_type"].get(kind.value, 0) for kind in (SecurityType.ETF, SecurityType.LOF, SecurityType.FUND))
-        restricted_stock = [item for item in tradeable if item.security_type is SecurityType.STOCK and item.board.value in {"STAR", "CHINEXT", "BSE"}]
-        restricted_candidates = [item for item in candidates if item.security_type is SecurityType.STOCK and item.board in {"STAR", "CHINEXT", "BSE"}]
+        etf_count = summary["tradeable_by_security_type"].get(SecurityType.ETF.value, 0)
+        lof_count = summary["tradeable_by_security_type"].get(SecurityType.LOF.value, 0)
+        fund_count = sum(
+            summary["tradeable_by_security_type"].get(kind.value, 0)
+            for kind in (SecurityType.ETF, SecurityType.LOF, SecurityType.FUND)
+        )
+        restricted_stock = [
+            item
+            for item in tradeable
+            if item.security_type is SecurityType.STOCK and item.board.value in {"STAR", "CHINEXT", "BSE"}
+        ]
+        restricted_candidates = [
+            item
+            for item in candidates
+            if item.security_type is SecurityType.STOCK and item.board in {"STAR", "CHINEXT", "BSE"}
+        ]
         if raw_stock_count < 4000:
             problems.append(f"原始股票数量异常:{raw_stock_count}")
         if tradeable_stock_count < 2500:
             problems.append(f"沪深主板可交易股票过少:{tradeable_stock_count}")
-        if fund_count < 100:
-            problems.append(f"ETF/场内基金数量异常:{fund_count}")
+        if etf_count < 500:
+            problems.append(f"ETF数量异常:{etf_count}")
+        if lof_count < 20:
+            problems.append(f"LOF数量异常:{lof_count}")
+        if fund_count < 600:
+            problems.append(f"ETF/场内基金总量异常:{fund_count}")
         if restricted_stock:
             problems.append(f"权限过滤失效:{len(restricted_stock)}")
         if restricted_candidates:
