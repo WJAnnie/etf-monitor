@@ -27,14 +27,14 @@ class CenterMotion:
     confirmation_timestamp: datetime
     completed: bool = True
     source_object_id: str | None = None
+    structural_start_price_ticks: int | None = None
+    structural_end_price_ticks: int | None = None
 
     @property
     def structural_end_ticks(self) -> int:
-        """运动结构终点。
-
-        当前基础 motion 由已完成线段归一化而来；向上线段的结构终点取上端，向下取下端。
-        后续若底层线段暴露显式 endpoint，可在这里无缝替换而不改中枢生命周期。
-        """
+        """运动结构终点；优先使用线段显式 endpoint，旧对象才退化到方向极值。"""
+        if self.structural_end_price_ticks is not None:
+            return self.structural_end_price_ticks
         if self.direction is Direction.UP:
             return self.high_ticks
         if self.direction is Direction.DOWN:
@@ -57,6 +57,8 @@ class CenterMotion:
             confirmation_timestamp=segment.confirmation_timestamp,
             completed=True,
             source_object_id=segment.id,
+            structural_start_price_ticks=segment.structural_start_ticks,
+            structural_end_price_ticks=segment.structural_end_ticks,
         )
 
 
@@ -265,8 +267,6 @@ def extend_center(center: Center, motion: CenterMotion) -> CenterUpdate:
         return CenterUpdate(center, result=ValidationResult(False, ("CENTER_LEVEL_MISMATCH",)))
     if not motion_overlaps_core(center, motion):
         return CenterUpdate(center, result=ValidationResult(False, ("CENTER_STILL_LEAVING",)))
-    # 正常确认/延伸阶段，终点已经离开就不能再把它记作中枢延伸。
-    # RETURNING 是例外：回试已经被确认重新进入中枢，即使该完成运动进一步穿越到另一侧，仍属于原中枢的回归/延伸处理。
     if center.state is not CenterState.RETURNING and motion_leaves_core(center, motion):
         return CenterUpdate(center, result=ValidationResult(False, ("CENTER_STILL_LEAVING",)))
     updated = replace(
