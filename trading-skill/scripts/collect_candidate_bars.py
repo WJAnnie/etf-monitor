@@ -281,8 +281,8 @@ def collect_one(item: dict, now: datetime) -> dict:
             "daily_history_ok": len(daily) >= MIN_DAILY,
             "m5_history_ok": len(m5) >= MIN_M5,
             "latest_m5": m5[-1]["time"] if m5 else None,
-            "covers_1430": bool(m5 and parse_cn_time(m5[-1]["time"]).date() == now.date() and parse_cn_time(m5[-1]["time"]).time() >= dt_time(14, 30)) if now.time() >= dt_time(14, 30) else True,
-            "covers_1450": bool(m5 and parse_cn_time(m5[-1]["time"]).date() == now.date() and parse_cn_time(m5[-1]["time"]).time() >= dt_time(14, 50)) if now.time() >= dt_time(14, 50) else True,
+            "covers_1345": bool(m5 and parse_cn_time(m5[-1]["time"]).date() == now.date() and parse_cn_time(m5[-1]["time"]).time() >= dt_time(13, 45)) if now.time() >= dt_time(13, 45) else True,
+            "covers_1445": bool(m5 and parse_cn_time(m5[-1]["time"]).date() == now.date() and parse_cn_time(m5[-1]["time"]).time() >= dt_time(14, 45)) if now.time() >= dt_time(14, 45) else True,
         },
     }
 
