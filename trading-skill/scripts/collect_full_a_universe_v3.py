@@ -25,9 +25,15 @@ from scripts.collect_full_a_universe_v2 import (
 from trading_skill.a_share_fundamentals import evaluate_prefilter
 from trading_skill.a_share_universe import rank_industry_leaders
 from trading_skill.industry_financial_metrics import compare_snapshots, statement_snapshot
-from trading_skill.industry_intelligence import fetch_sina_7x24, match_industry_events, recent_report_event
+from trading_skill.industry_intelligence import (
+    fetch_eastmoney_news,
+    fetch_sina_7x24,
+    match_industry_events,
+    recent_report_event,
+)
 from trading_skill.industry_profiles import profile_dict
 from trading_skill.industry_prospects import industry_rotation_state, select_industries_v3
+from trading_skill.sector_fundamental_gate import sector_observation_override
 
 
 def _serialize_industry(item, events: dict[str, list[dict]]) -> dict:
@@ -92,6 +98,58 @@ def fetch_detailed_financial_metrics(code: str, report_date: str) -> dict:
     }
 
 
+def _industry_news(selected, *, now: datetime) -> tuple[list[dict], dict[str, list[dict]], list[str], dict[str, int]]:
+    """资讯是行业上下文，不是交易信号。任一来源故障都不能阻断全A扫描。"""
+    errors: list[str] = []
+    all_rows: list[dict] = []
+    source_counts: dict[str, int] = {}
+
+    try:
+        sina = fetch_sina_7x24(page_size=120)
+        all_rows.extend(sina)
+        source_counts["新浪财经7x24"] = len(sina)
+    except Exception as exc:
+        errors.append(f"新浪财经7x24:{exc}")
+
+    # 第二来源只查询最重要的一部分行业，控制网络请求量；新浪流覆盖全部重点行业。
+    queries: list[str] = []
+    for item in selected:
+        query = str(item.prospect_theme or item.name).strip()
+        if query and query not in queries:
+            queries.append(query)
+        if len(queries) >= 16:
+            break
+    east_rows: list[dict] = []
+    if queries:
+        with ThreadPoolExecutor(max_workers=min(4, len(queries))) as pool:
+            futures = {pool.submit(fetch_eastmoney_news, query, page_size=6): query for query in queries}
+            for future in as_completed(futures):
+                query = futures[future]
+                try:
+                    east_rows.extend(future.result())
+                except Exception as exc:
+                    errors.append(f"东方财富资讯[{query}]:{exc}")
+    if east_rows:
+        all_rows.extend(east_rows)
+    source_counts["东方财富资讯"] = len(east_rows)
+
+    # 去掉跨源重复新闻。
+    deduped: list[dict] = []
+    seen: set[str] = set()
+    for row in all_rows:
+        content = str(row.get("content") or "").strip()
+        fingerprint = "".join(content.split())[:140]
+        if not fingerprint or fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        deduped.append(row)
+
+    events = match_industry_events(
+        [asdict(item) for item in selected], deduped, as_of=now, max_age_hours=36, max_per_industry=3
+    )
+    return deduped, events, errors, source_counts
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, default=Path("full-a-results/universe_latest.json"))
@@ -114,16 +172,7 @@ def main() -> int:
     )
     selected_map = {item.code: item for item in selected}
 
-    intelligence_errors: list[str] = []
-    try:
-        news_rows = fetch_sina_7x24(page_size=100)
-        industry_events = match_industry_events(
-            [asdict(item) for item in selected], news_rows, as_of=now, max_age_hours=36, max_per_industry=3
-        )
-    except Exception as exc:
-        news_rows = []
-        industry_events = {}
-        intelligence_errors.append(f"新浪财经7x24:{exc}")
+    news_rows, industry_events, intelligence_errors, news_source_counts = _industry_news(selected, now=now)
 
     raw_leaders = []
     member_errors: list[dict] = []
@@ -167,7 +216,7 @@ def main() -> int:
                 finance_errors.append({"code": item.code, "name": item.name, "error": str(exc)})
                 finance_rows[item.code] = []
 
-    # 先找最近10天真正有新定期报告的股票，再补抓重报表字段。
+    # 最近10天新披露的一季报/中报/三季报/年报触发行业复核。
     recent_report_by_code: dict[str, dict] = {}
     for leader in leaders:
         events = [event for row in finance_rows.get(leader.code, []) if (event := recent_report_event(row, as_of=now))]
@@ -191,15 +240,23 @@ def main() -> int:
 
     candidates = []
     industry_recent_reports: dict[str, list[dict]] = {}
+    sector_override_count = 0
     for leader in leaders:
         rows = finance_rows.get(leader.code, [])
         prefilter = evaluate_prefilter(rows, as_of=now, pe=leader.pe, pb=leader.pb)
         reasons = list(prefilter.reasons)
-        deep_scan_eligible = prefilter.eligible or (prefilter.grade == "D" and not _has_hard_financial_problem(reasons))
         industry = selected_map.get(leader.industry_code)
         is_cross = leader.industry_code == "CROSS_MARKET"
         industry_name = leader.industry_name
         theme = industry.prospect_theme if industry else None
+        profile = profile_dict(industry_name, theme)
+
+        generic_observe = prefilter.grade == "D" and not _has_hard_financial_problem(reasons)
+        sector_override, sector_override_reason = sector_observation_override(profile.get("profile", ""), prefilter)
+        deep_scan_eligible = prefilter.eligible or generic_observe or sector_override
+        if sector_override and not prefilter.eligible:
+            sector_override_count += 1
+
         recent_report = recent_report_by_code.get(leader.code)
         detailed = detailed_metrics.get(leader.code)
         if recent_report and not is_cross:
@@ -214,12 +271,15 @@ def main() -> int:
                     if is_cross else industry.selection_reason if industry else ""
                 ),
                 "industry_rotation_state": "跨行业个股路线" if is_cross else industry_rotation_state(industry),
-                "industry_analysis_profile": profile_dict(industry_name, theme),
+                "industry_analysis_profile": profile,
                 "prospect_theme": theme,
                 "candidate_route": "跨行业结构补充" if is_cross else "动态行业路线",
                 "recent_report": recent_report,
                 "sector_financial_metrics": detailed,
+                "sector_observation_override": sector_override and not prefilter.eligible,
+                "sector_observation_reason": sector_override_reason,
                 "fundamental_prefilter": {
+                    # eligible 保持原值；行业专属观察绝不偷偷改成“基本面通过”。
                     "eligible": prefilter.eligible,
                     "deep_scan_eligible": deep_scan_eligible,
                     "grade": prefilter.grade,
@@ -249,7 +309,7 @@ def main() -> int:
         "paused_high_industries": [_serialize_industry(item, industry_events) for item in paused[:20]],
         "industry_recent_reports": industry_recent_reports,
         "industry_intelligence": {
-            "news_source": "新浪财经7x24",
+            "news_sources": news_source_counts,
             "news_rows_loaded": len(news_rows),
             "errors": intelligence_errors,
             "detailed_report_metrics_loaded": len(detailed_metrics),
@@ -258,6 +318,7 @@ def main() -> int:
         "leader_candidates": candidates,
         "fundamental_eligible_candidates": len(strict_eligible),
         "deep_scan_eligible_candidates": len(deep_eligible),
+        "sector_observation_overrides": sector_override_count,
         "raw_leader_rows_before_dedup": len(raw_leaders),
         "deduped_industry_candidates": len(industry_leaders),
         "cross_market_candidates": len(cross_market),
@@ -271,6 +332,8 @@ def main() -> int:
             "paused_industries_reenter_after_cooling": True,
             "industry_specific_analysis_profile": True,
             "major_news_and_recent_reports_included": True,
+            "industry_news_is_context_not_signal": True,
+            "sector_override_allows_observation_not_buy": True,
             "recent_reports_use_statement_metrics_when_available": True,
             "contract_liabilities_are_not_claimed_as_order_volume": True,
             "industry_is_not_hard_entry_gate": True,
@@ -287,8 +350,8 @@ def main() -> int:
     print(f"当前重点行业: {len(selected)}，高位暂退: {len(paused)}")
     print("入选行业:", ", ".join(f"{item.name}[{industry_rotation_state(item)}]" for item in selected))
     print(f"行业前五原始候选: {len(raw_leaders)}，行业去重后: {len(industry_leaders)}，跨行业补充: {len(cross_market)}")
-    print(f"严格基本面通过: {len(strict_eligible)}，允许观察性深扫: {len(deep_eligible)}")
-    print(f"资讯匹配行业: {len(industry_events)}，近期财报行业: {len(industry_recent_reports)}，财报明细: {len(detailed_metrics)}，资讯异常: {len(intelligence_errors)}")
+    print(f"严格基本面通过: {len(strict_eligible)}，允许观察性深扫: {len(deep_eligible)}，行业专属观察覆盖: {sector_override_count}")
+    print(f"资讯匹配行业: {len(industry_events)}，资讯来源: {news_source_counts}，近期财报行业: {len(industry_recent_reports)}，财报明细: {len(detailed_metrics)}，资讯异常: {len(intelligence_errors)}")
 
     if args.strict:
         problems = []
