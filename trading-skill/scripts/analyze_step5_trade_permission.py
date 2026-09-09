@@ -113,8 +113,13 @@ def _event_facts(
             return state, events, f"行业ETF精确匹配事件上下文:{family}"
         return EventEntryState.UNKNOWN, [], "行业ETF缺少可验证的精确行业事件映射；不得静默视为CLEAR"
 
-    # 宽基/策略/债券/商品等不适用“单一行业36h事件”这一门；宏观、QDII、商品专属事件属于后续独立风险源。
-    return EventEntryState.CLEAR, [], f"{category or 'FUND'}不适用单一行业事件门；未声称宏观/跨境事件已覆盖"
+    # 当前事件源只能证明“已映射行业的36小时事件”是否清晰。宽基/策略/跨境/商品/债券
+    # 需要各自的市场、海外、商品或利率事件源；在这些适配器接入前不能把“行业门不适用”写成全局CLEAR。
+    return (
+        EventEntryState.UNKNOWN,
+        [],
+        f"{category or 'FUND'}缺少对应的宏观/跨境/商品/利率事件适配器；当前行业事件源不足以证明事件风险CLEAR",
+    )
 
 
 def _proposal(technical_row: Mapping[str, Any]) -> dict | None:
@@ -278,6 +283,7 @@ def main() -> int:
             "step3_watch_requires_review_not_risk_discount": True,
             "major_negative_event_blocks_new_entry": True,
             "missing_event_context_is_not_clear": True,
+            "fund_event_scope_must_match_product_exposure_before_clear": True,
             "structural_stop_must_come_from_matching_step4b_signal": True,
             "fixed_percent_cost_basis_and_atr_are_not_stop_substitutes": True,
             "step1_strategy_security_permission_is_distinct_from_portfolio_capacity": True,
