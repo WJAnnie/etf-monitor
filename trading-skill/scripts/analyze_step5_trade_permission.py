@@ -15,6 +15,14 @@ from trading_skill.trade_permission import (
 )
 
 
+_CONTEXT_BOOL_KEYS = (
+    "account_context_known",
+    "account_allows_security",
+    "portfolio_context_known",
+    "portfolio_allows_new_risk",
+)
+
+
 def atomic_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -142,10 +150,27 @@ def _proposal(technical_row: Mapping[str, Any]) -> dict | None:
     return None
 
 
+def _validate_context_booleans(mapping: Mapping[str, Any], *, label: str) -> None:
+    for key in _CONTEXT_BOOL_KEYS:
+        if key in mapping and not isinstance(mapping.get(key), bool):
+            raise ValueError(f"{label}.{key}必须是JSON boolean，不能使用字符串/数字代替")
+
+
 def _load_risk_context(path: Path | None) -> dict:
     if path is None:
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("risk-context顶层必须是JSON对象")
+    _validate_context_booleans(payload, label="risk_context")
+    symbols = payload.get("symbols") or {}
+    if not isinstance(symbols, dict):
+        raise ValueError("risk_context.symbols必须是JSON对象")
+    for symbol_key, override in symbols.items():
+        if not isinstance(override, dict):
+            raise ValueError(f"risk_context.symbols[{symbol_key}]必须是JSON对象")
+        _validate_context_booleans(override, label=f"risk_context.symbols[{symbol_key}]")
+    return payload
 
 
 def _context_for_symbol(context: Mapping[str, Any], item: Mapping[str, Any]) -> dict[str, bool]:
@@ -159,9 +184,9 @@ def _context_for_symbol(context: Mapping[str, Any], item: Mapping[str, Any]) -> 
         "portfolio_context_known": False,
         "portfolio_allows_new_risk": False,
     }
-    for key in ("account_context_known", "account_allows_security", "portfolio_context_known", "portfolio_allows_new_risk"):
+    for key in _CONTEXT_BOOL_KEYS:
         if key in context:
-            defaults[key] = bool(context.get(key))
+            defaults[key] = context[key]
 
     symbol_map = dict(context.get("symbols") or {})
     code = str(item.get("code") or "")
@@ -170,9 +195,9 @@ def _context_for_symbol(context: Mapping[str, Any], item: Mapping[str, Any]) -> 
     candidates = (f"{market}:{code}:{security_type}", f"{market}:{code}", code)
     override = next((symbol_map.get(key) for key in candidates if isinstance(symbol_map.get(key), Mapping)), None)
     if isinstance(override, Mapping):
-        for key in ("account_context_known", "account_allows_security", "portfolio_context_known", "portfolio_allows_new_risk"):
+        for key in _CONTEXT_BOOL_KEYS:
             if key in override:
-                defaults[key] = bool(override.get(key))
+                defaults[key] = override[key]
     return defaults
 
 
@@ -303,6 +328,7 @@ def main() -> int:
             "step1_strategy_security_permission_is_distinct_from_real_account_permission": True,
             "unknown_account_permission_never_defaults_to_allowed": True,
             "unknown_portfolio_capacity_never_defaults_to_available": True,
+            "risk_context_boolean_types_are_strict": True,
             "120m_first_buy_can_only_request_test_entry_permission": True,
             "this_stage_does_not_compute_risk_amount_position_value_or_quantity": True,
         },
