@@ -26,6 +26,20 @@ def test_bar_collection_preserves_industry_report_and_valuation_metadata():
     assert merged["industry_events"][0]["impact"] == "利好"
 
 
+def test_bar_collection_preserves_cross_industry_context_gate():
+    base = {"code": "000001", "daily": [], "30m": [], "120m": [], "5m": []}
+    source = {
+        "candidate_route": "跨行业结构补充",
+        "industry_context_complete": False,
+        "industry_context_note": "真实细分行业暂未解析，禁止新开仓",
+        "industry_events": [],
+    }
+    merged = merge_v3_metadata(base, source)
+    assert merged["candidate_route"] == "跨行业结构补充"
+    assert merged["industry_context_complete"] is False
+    assert "禁止新开仓" in merged["industry_context_note"]
+
+
 def test_cross_market_candidate_gets_real_industry_profile_and_events():
     item = {
         "code": "600000",
