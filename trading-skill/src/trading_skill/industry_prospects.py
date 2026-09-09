@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 from math import isfinite
 from typing import Iterable, Mapping
@@ -21,15 +22,15 @@ PROSPECT_THEMES: tuple[ProspectTheme, ...] = (
     ProspectTheme("创新药", 96, ("创新药", "生物药", "生物制品", "化学制剂", "医药研发"), "创新管线、授权出海与支付机制改善带来长期成长空间"),
     ProspectTheme("造船与海工", 95, ("船舶制造", "船舶", "海工装备", "航海装备"), "船队更新、环保规则与高附加值订单支撑中长期景气"),
     ProspectTheme("半导体设备与材料", 94, ("半导体设备", "半导体材料", "电子特气", "光刻", "晶圆制造"), "国产替代与先进制造扩产形成长期资本开支需求"),
-    ProspectTheme("人工智能基础设施", 93, ("服务器", "光模块", "光通信", "数据中心", "液冷", "算力", "高速连接"), "算力资本开支、网络升级和AI应用扩张形成结构性需求"),
+    ProspectTheme("人工智能基础设施", 93, ("服务器", "光模块", "光通信", "数据中心", "液冷", "算力", "高速连接", "通信网络设备", "其他通信设备", "通信线缆", "印制电路板"), "算力资本开支、网络升级和AI应用扩张形成结构性需求"),
     ProspectTheme("机器人与高端自动化", 92, ("机器人", "工业自动化", "数控机床", "减速器", "伺服", "机器视觉"), "自动化率提升、设备更新和智能制造带来长期渗透率机会"),
-    ProspectTheme("电网升级与储能", 91, ("电网设备", "特高压", "配电", "储能", "电力电子", "变压器"), "电力系统升级、新能源消纳和电网投资构成持续需求"),
+    ProspectTheme("电网升级与储能", 91, ("电网设备", "特高压", "配电", "储能", "电力电子", "变压器", "综合电力设备商"), "电力系统升级、新能源消纳和电网投资构成持续需求"),
     ProspectTheme("商业航天与军工电子", 90, ("商业航天", "航天装备", "军工电子", "卫星", "航空电子"), "卫星互联网和高端电子装备具备产业扩张空间"),
     ProspectTheme("智能驾驶与汽车电子", 89, ("汽车电子", "智能驾驶", "线控", "车载", "汽车芯片", "汽车零部件"), "汽车智能化提升单车价值量并推动零部件重构"),
     ProspectTheme("医疗器械", 88, ("医疗器械", "医疗设备", "体外诊断", "医学影像"), "国产替代、设备更新和人口结构变化支撑长期需求"),
-    ProspectTheme("先进能源装备", 87, ("核电", "核能", "燃气轮机", "氢能", "燃料电池"), "能源安全、清洁化和高端装备国产化带来中长期机会"),
-    ProspectTheme("新材料", 86, ("碳纤维", "高温合金", "先进封装材料", "复合材料", "特种材料", "膜材料"), "高端制造升级推动关键材料国产化和性能迭代"),
-    ProspectTheme("工业软件与网络安全", 85, ("工业软件", "网络安全", "信息安全", "基础软件", "数据库"), "数字化升级与自主可控带来持续软件需求"),
+    ProspectTheme("先进能源装备", 87, ("核电", "核能", "燃气轮机", "氢能", "燃料电池", "风电整机", "风电设备"), "能源安全、清洁化和高端装备国产化带来中长期机会"),
+    ProspectTheme("新材料", 86, ("碳纤维", "高温合金", "先进封装材料", "复合材料", "特种材料", "膜材料", "金属新材料", "非金属材料"), "高端制造升级推动关键材料国产化和性能迭代"),
+    ProspectTheme("工业软件与网络安全", 85, ("工业软件", "网络安全", "信息安全", "基础软件", "数据库", "垂直应用软件", "横向通用软件"), "数字化升级与自主可控带来持续软件需求"),
 )
 
 
@@ -85,7 +86,6 @@ def prospect_industry_candidates(rows: Iterable[Mapping[str, object]]) -> tuple[
         ytd = _num(row.get("f25"))
         flow = _num(row.get("f184"))
         breadth = _breadth(row)
-        # 长期前景是主排序；当前位置只做轻微二级排序，避免“前景好但已经过度加速”总排最前。
         extension_penalty = max(0.0, ch60 - 30.0) * 0.12 + max(0.0, pct - 5.0) * 0.8
         low_position = max(0.0, min(100.0, 60.0 - ch60 * 0.8 - ytd * 0.2))
         heat_score = max(0.0, min(100.0, 50.0 + pct * 4.0 + (breadth - 0.5) * 40.0 + flow * 0.1))
@@ -112,14 +112,43 @@ def prospect_industry_candidates(rows: Iterable[Mapping[str, object]]) -> tuple[
     return tuple(out)
 
 
+def _diversified_prospect_selection(
+    candidates: Iterable[IndustryCandidate], *, limit: int, max_per_theme: int = 2
+) -> list[IndustryCandidate]:
+    """按主题轮询选取，避免一个大主题用多个相近板块挤掉其他长期方向。"""
+    groups: dict[str, list[IndustryCandidate]] = defaultdict(list)
+    for item in candidates:
+        if item.prospect_theme:
+            groups[item.prospect_theme].append(item)
+    for items in groups.values():
+        items.sort(key=lambda item: (item.rank_score, item.low_position_score), reverse=True)
+
+    chosen: list[IndustryCandidate] = []
+    for round_index in range(max_per_theme):
+        for theme in PROSPECT_THEMES:
+            items = groups.get(theme.name) or []
+            if round_index < len(items):
+                chosen.append(items[round_index])
+                if len(chosen) >= limit:
+                    return chosen
+
+    remaining = [item for items in groups.values() for item in items[max_per_theme:]]
+    remaining.sort(key=lambda item: (item.rank_score, item.low_position_score), reverse=True)
+    for item in remaining:
+        chosen.append(item)
+        if len(chosen) >= limit:
+            break
+    return chosen
+
+
 def select_industries_v2(
     rows: Iterable[Mapping[str, object]], *, prospect_limit: int = 24, dynamic_supplement: int = 6
 ) -> tuple[IndustryCandidate, ...]:
     material = list(rows)
-    prospects = list(prospect_industry_candidates(material))[: max(1, prospect_limit)]
+    all_prospects = prospect_industry_candidates(material)
+    prospects = _diversified_prospect_selection(all_prospects, limit=max(1, prospect_limit), max_per_theme=2)
     used = {item.code for item in prospects}
 
-    # 少量市场结构补充池只负责发现“配置表尚未覆盖的新赛道”，不改变长期前景池的主导地位。
     dynamic = []
     if dynamic_supplement > 0:
         for item in screen_industries(material, limit=max(dynamic_supplement * 4, 24)):
