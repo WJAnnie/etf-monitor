@@ -5,6 +5,7 @@ from datetime import timedelta
 import scripts.run_full_a_scan_v2 as v2
 from trading_skill.chan_extensions import annotate_second_buy_variants
 from trading_skill.domain.enums import ChanSignalType, Timeframe
+from trading_skill.production_chan_v3 import analyze_production_chan_v3
 from trading_skill.strategy_policy import (
     TIMEFRAME_POLICY,
     entry_permission,
@@ -15,7 +16,6 @@ from trading_skill.strategy_policy import (
 
 
 base = v2.base
-_raw_analyze_production_chan = base.analyze_production_chan
 _original_v2_analyze_symbol = base.analyze_symbol
 
 base.FRESHNESS = {
@@ -25,7 +25,7 @@ base.FRESHNESS = {
 
 
 def _analyze_with_extensions(raw_bars, *, tick_size, as_of):
-    return annotate_second_buy_variants(_raw_analyze_production_chan(raw_bars, tick_size=tick_size, as_of=as_of))
+    return annotate_second_buy_variants(analyze_production_chan_v3(raw_bars, tick_size=tick_size, as_of=as_of))
 
 
 base.analyze_production_chan = _analyze_with_extensions
