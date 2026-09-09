@@ -96,7 +96,14 @@ jobs:
             --output full-a-results/step4_structure_latest.json \
             --strict
 
-      - name: 打印新版STEP1-4B摘要
+      - name: STEP4C 买卖点生命周期验证
+        run: |
+          python -m scripts.analyze_step4_signal_lifecycle \
+            --structure full-a-results/step4_structure_latest.json \
+            --output full-a-results/step4_signal_lifecycle_latest.json \
+            --strict
+
+      - name: 打印新版STEP1-4C摘要
         if: always()
         run: |
           python - <<'PY'
@@ -107,6 +114,7 @@ jobs:
           q=Path('full-a-results/deep_scan_queue_latest.json')
           b=Path('full-a-results/step4_bars_latest.json')
           s4=Path('full-a-results/step4_structure_latest.json')
+          l4=Path('full-a-results/step4_signal_lifecycle_latest.json')
           if c.exists():
               p=json.loads(c.read_text(encoding='utf-8'))
               s=p.get('summary',{})
@@ -129,10 +137,20 @@ jobs:
               print('深扫身份前20=',[(x.get('code'),x.get('market'),x.get('security_type'),x.get('status'),x.get('tier')) for x in p.get('candidates',[])[:20]])
           if b.exists():
               p=json.loads(b.read_text(encoding='utf-8'))
-              print('STEP4行情=',{'candidate_count':p.get('candidate_count'),'identity_valid_count':p.get('identity_valid_count'),'loaded_count':p.get('loaded_count'),'errors':len(p.get('errors',[]))})
+              print('STEP4行情=',{
+                  'candidate_count':p.get('candidate_count'),
+                  'identity_valid_count':p.get('identity_valid_count'),
+                  'loaded_count':p.get('loaded_count'),
+                  'history_limited_count':p.get('history_limited_count'),
+                  'history_tiers':p.get('history_tiers'),
+                  'errors':len(p.get('errors',[])),
+              })
           if s4.exists():
               p=json.loads(s4.read_text(encoding='utf-8'))
               print('STEP4B摘要=',p.get('summary'))
+          if l4.exists():
+              p=json.loads(l4.read_text(encoding='utf-8'))
+              print('STEP4C摘要=',p.get('summary'))
           PY
 
       - name: Upload new pipeline validation
