@@ -5,9 +5,11 @@ from datetime import datetime, timedelta, timezone
 from trading_skill.domain.enums import Timeframe
 from trading_skill.signal_lifecycle import (
     SIGNAL_ENTRY_WINDOW_BARS,
+    LowerTimeframeState,
     SignalFreshness,
     SignalLifecycleStage,
     build_signal_lifecycle_book,
+    evaluate_lower_context,
     evaluate_signal_lifecycle,
 )
 
@@ -39,11 +41,34 @@ def signal(
     return row
 
 
-def result(timeframe: str, signals: list[dict], *, status: str = "OK"):
+def result(
+    timeframe: str,
+    signals: list[dict],
+    *,
+    status: str = "OK",
+    trend: str | None = None,
+    divergence_type: str | None = None,
+    divergence_state: str | None = None,
+    center_state: str | None = "EXTENDING",
+):
+    centers = []
+    if center_state is not None:
+        centers.append(
+            {
+                "state": center_state,
+                "confirmation": (NOW - timedelta(hours=1)).isoformat(),
+            }
+        )
     return {
         "status": status,
         "timeframe": timeframe,
         "signals": signals,
+        "centers": centers,
+        "trend": {"classification": trend, "state": "EXTENDING"},
+        "divergence": {"type": divergence_type, "state": divergence_state},
+        "completed_bars": 300,
+        "latest_close": 10.0,
+        "issues": [],
     }
 
 
@@ -260,4 +285,126 @@ def test_book_builds_all_five_timeframes_but_does_not_decide_primary_trade_cycle
     book = build_signal_lifecycle_book(results, as_of=NOW, completed_bar_times_by_timeframe=times)
     assert set(book) == set(Timeframe)
     assert book[Timeframe.M5].current_buy() is not None
-    # 5m拥有自己的信号生命周期，但是否允许成为主交易周期由strategy_policy决定，不由4C篡改4A信号。
+    # 5m拥有生命周期，但是否允许成为主交易周期由strategy_policy决定，不由4C篡改4A信号。
+
+
+def test_lower_timeframe_current_sell_means_waiting_not_primary_invalidation():
+    primary_confirmation = NOW - timedelta(hours=6)
+    primary = signal("p", "BUY", "SECOND_BUY", hours_ago=6)
+    child_sell = signal("s30", "SELL", "FIRST_SELL", hours_ago=2)
+    results = {
+        Timeframe.DAILY: result("daily", [], trend="UPTREND"),
+        Timeframe.M120: result("120m", [primary], trend="UPTREND"),
+        Timeframe.M30: result("30m", [child_sell], trend="UPTREND"),
+        Timeframe.M5: result("5m", [], trend="UPTREND"),
+    }
+    times = {
+        Timeframe.M120: completed_after(primary, 1),
+        Timeframe.M30: completed_after(child_sell, 1),
+        Timeframe.DAILY: (),
+        Timeframe.M5: (),
+    }
+    book = build_signal_lifecycle_book(results, as_of=NOW, completed_bar_times_by_timeframe=times)
+    lower = evaluate_lower_context(
+        results,
+        book,
+        primary_timeframe=Timeframe.M120,
+        primary_confirmation=primary_confirmation,
+        as_of=NOW,
+    )
+    assert lower.state is LowerTimeframeState.WAITING_PULLBACK
+    states = dict(lower.child_states)
+    assert states[Timeframe.M30].startswith("PULLBACK:")
+    assert any("不反向失效主周期买点" in reason for reason in lower.reasons)
+
+
+def test_expired_lower_sell_does_not_become_a_ghost_blocker():
+    primary_confirmation = NOW - timedelta(hours=100)
+    primary = signal("p", "BUY", "SECOND_BUY", hours_ago=100)
+    old_sell = signal("s30", "SELL", "FIRST_SELL", hours_ago=80)
+    results = {
+        Timeframe.M120: result("120m", [primary], trend="UPTREND"),
+        Timeframe.M30: result("30m", [old_sell], trend="UPTREND"),
+        Timeframe.M5: result("5m", [], trend="UPTREND"),
+    }
+    times = {
+        Timeframe.M120: completed_after(primary, 2),
+        Timeframe.M30: completed_after(old_sell, SIGNAL_ENTRY_WINDOW_BARS[Timeframe.M30] + 1),
+        Timeframe.M5: (),
+    }
+    book = build_signal_lifecycle_book(results, as_of=NOW, completed_bar_times_by_timeframe=times)
+    assert book[Timeframe.M30].current_sell() is None
+    lower = evaluate_lower_context(
+        results,
+        book,
+        primary_timeframe=Timeframe.M120,
+        primary_confirmation=primary_confirmation,
+        as_of=NOW,
+    )
+    assert lower.state is LowerTimeframeState.ALIGNED
+    assert dict(lower.child_states)[Timeframe.M30] == "ALIGNED:BULL_TREND"
+
+
+def test_lower_timeframe_new_buy_can_align_execution_without_becoming_primary_signal():
+    primary_confirmation = NOW - timedelta(hours=6)
+    primary = signal("p", "BUY", "SECOND_BUY", hours_ago=6)
+    buy30 = signal("b30", "BUY", "SECOND_BUY", hours_ago=2)
+    buy5 = signal("b5", "BUY", "THIRD_BUY", hours_ago=1)
+    results = {
+        Timeframe.M120: result("120m", [primary], trend="UPTREND"),
+        Timeframe.M30: result("30m", [buy30], trend="UPTREND"),
+        Timeframe.M5: result("5m", [buy5], trend="UPTREND"),
+    }
+    times = {
+        Timeframe.M120: completed_after(primary, 1),
+        Timeframe.M30: completed_after(buy30, 1),
+        Timeframe.M5: completed_after(buy5, 1),
+    }
+    book = build_signal_lifecycle_book(results, as_of=NOW, completed_bar_times_by_timeframe=times)
+    lower = evaluate_lower_context(
+        results,
+        book,
+        primary_timeframe=Timeframe.M120,
+        primary_confirmation=primary_confirmation,
+        as_of=NOW,
+    )
+    assert lower.state is LowerTimeframeState.ALIGNED
+    states = dict(lower.child_states)
+    assert states[Timeframe.M30] == "ALIGNED:SECOND_BUY"
+    assert states[Timeframe.M5] == "ALIGNED:THIRD_BUY"
+
+
+def test_lower_buy_inside_bearish_or_reversal_structure_is_not_execution_alignment():
+    primary_confirmation = NOW - timedelta(hours=6)
+    primary = signal("p", "BUY", "SECOND_BUY", hours_ago=6)
+    buy30 = signal("b30", "BUY", "FIRST_BUY", hours_ago=2)
+    buy5 = signal("b5", "BUY", "FIRST_BUY", hours_ago=1)
+    results = {
+        Timeframe.M120: result("120m", [primary], trend="UPTREND"),
+        Timeframe.M30: result("30m", [buy30], trend="DOWNTREND"),
+        Timeframe.M5: result(
+            "5m",
+            [buy5],
+            trend="DOWNTREND",
+            divergence_type="TREND_BOTTOM_DIVERGENCE",
+            divergence_state="FORMING",
+        ),
+    }
+    times = {
+        Timeframe.M120: completed_after(primary, 1),
+        Timeframe.M30: completed_after(buy30, 1),
+        Timeframe.M5: completed_after(buy5, 1),
+    }
+    book = build_signal_lifecycle_book(results, as_of=NOW, completed_bar_times_by_timeframe=times)
+    lower = evaluate_lower_context(
+        results,
+        book,
+        primary_timeframe=Timeframe.M120,
+        primary_confirmation=primary_confirmation,
+        as_of=NOW,
+    )
+    assert lower.state is LowerTimeframeState.MIXED
+    states = dict(lower.child_states)
+    assert states[Timeframe.M30].startswith("MIXED:BUY_IN_")
+    assert states[Timeframe.M5].startswith("MIXED:BUY_IN_")
+    assert all(not state.startswith("ALIGNED:") for state in states.values())
