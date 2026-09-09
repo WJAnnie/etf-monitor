@@ -22,14 +22,14 @@ def stock(code, *, status="PASS", priority="HIGH", risk="LOW", evidence="FULL", 
     }
 
 
-def fund(code, *, status="PASS", priority="HIGH", risk="LOW", product="ADEQUATE", trading="STRONG", deep=True):
+def fund(code, *, status="PASS", priority="HIGH", risk="LOW", product="ADEQUATE", trading="STRONG", deep=True, category="EQUITY_BROAD"):
     return {
         "code": code,
         "name": code,
         "security_type": "ETF",
         "source_routes": ["FUND_RELATIVE"],
         "research_priority": priority,
-        "fund_category": "EQUITY_BROAD",
+        "fund_category": category,
         "assessment": {
             "status": status,
             "risk_level": risk,
@@ -95,4 +95,14 @@ def test_fund_watch_with_adequate_product_can_be_observed_but_high_risk_cannot()
 
 def test_cash_or_non_deep_fund_is_excluded_even_if_product_passes():
     queue = build_deep_scan_queue([], [fund("511990", deep=False)], capacity_max=20, soft_target_min=5)
+    assert queue == ()
+
+
+def test_unresolved_other_fund_never_enters_step4_even_if_other_fields_look_good():
+    queue = build_deep_scan_queue(
+        [],
+        [fund("599999", status="PASS", priority="HIGH", category="OTHER")],
+        capacity_max=20,
+        soft_target_min=5,
+    )
     assert queue == ()
