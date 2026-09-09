@@ -8,9 +8,11 @@ on:
       - 'trading-skill/scripts/collect_full_a_universe.py'
       - 'trading-skill/scripts/collect_candidate_bars.py'
       - 'trading-skill/scripts/run_full_a_scan.py'
+      - 'trading-skill/scripts/send_full_a_report.py'
       - 'trading-skill/tests/unit/test_a_share_*.py'
       - 'trading-skill/tests/unit/test_production_chan.py'
       - '.github/workflows/full-a-phase1.yml'
+      - '.github/workflows/full-a-production-scan.yml'
   workflow_dispatch:
 
 permissions:
