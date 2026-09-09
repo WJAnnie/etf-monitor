@@ -81,9 +81,14 @@ jobs:
             --cross-market-limit 20 \
             --strict
 
-      - name: 候选长历史五周期行情
+      - name: 跨行业候选真实行业补全
         run: |
-          python -m scripts.collect_candidate_bars_v2 \
+          python -m scripts.enrich_cross_industry_v3 \
+            --universe full-a-results/universe_latest.json
+
+      - name: 候选长历史五周期行情V3
+        run: |
+          python -m scripts.collect_candidate_bars_v3 \
             --universe full-a-results/universe_latest.json \
             --output full-a-results/candidate_bars_latest.json \
             --strict
