@@ -39,6 +39,7 @@ class FundCategory(StrEnum):
 class CandidateRecord:
     code: str
     name: str
+    market: int
     security_type: SecurityType
     board: str
     source_routes: tuple[str, ...]
@@ -427,7 +428,7 @@ def finalize_candidates(store: Mapping[tuple[str, SecurityType], dict]) -> tuple
         industry = row.get("industry") or {}
         stage = position_stage(item)
         out.append(CandidateRecord(
-            code=item.code, name=item.name, security_type=item.security_type, board=item.board.value,
+            code=item.code, name=item.name, market=item.market, security_type=item.security_type, board=item.board.value,
             source_routes=tuple(route_scores), route_scores=route_scores, research_priority=_research_priority(route_scores, stage),
             position_stage=stage, data_quality=item.data_quality.value, price=item.price, change_pct=item.change_pct,
             change_60d=item.change_60d, amount=item.amount, turnover_rate=item.turnover_rate, valuation_pe=item.pe, valuation_pb=item.pb,
