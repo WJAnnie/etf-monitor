@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 import scripts.collect_candidate_bars_v2 as v2
 
 
@@ -22,7 +24,82 @@ V3_METADATA_KEYS = (
 )
 
 
+_fetch_daily_v2 = v2.fetch_daily_v2
 _collect_one_v2 = v2.collect_one
+
+
+def tencent_daily_long(code: str, *, limit: int = v2.DAILY_LIMIT, page_size: int = 500) -> tuple[list[dict], list[str]]:
+    """按结束日期向前分段抓取腾讯前复权日线，突破单次返回条数限制。
+
+    腾讯日线单次请求通常只能稳定返回约500根。V3按最早日期继续向前回溯，按交易日去重，
+    直到达到目标长度或确认已经没有更早历史。新股自然只返回其全部上市历史，不补造K线。
+    """
+    symbol = v2.tx_symbol(code)
+    collected: dict[str, dict] = {}
+    warnings: list[str] = []
+    end_date = ""
+    max_pages = max(2, (max(1, limit) + max(1, page_size) - 1) // max(1, page_size) + 2)
+
+    for page_no in range(1, max_pages + 1):
+        remaining = max(1, limit - len(collected))
+        count = min(max(1, page_size), remaining)
+        try:
+            response = v2._request(
+                "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get",
+                params={"param": f"{symbol},day,,{end_date},{count},qfq"},
+                referer="https://gu.qq.com/",
+            )
+            payload = v2._decode_json_or_jsonp(response.text)
+            stock = (payload.get("data") or {}).get(symbol) or {}
+            page_rows = v2._parse_array(stock.get("qfqday") or stock.get("day") or [])
+        except Exception as exc:
+            warnings.append(f"腾讯前复权分段第{page_no}页:{exc}")
+            break
+
+        if not page_rows:
+            break
+
+        before = len(collected)
+        for row in page_rows:
+            day = str(row.get("time") or "")[:10]
+            if day:
+                collected[day] = row
+        if len(collected) == before:
+            break
+        if len(collected) >= limit:
+            break
+
+        earliest_text = min(str(row.get("time") or "")[:10] for row in page_rows if row.get("time"))
+        try:
+            earliest = datetime.fromisoformat(earliest_text)
+        except ValueError:
+            warnings.append(f"腾讯前复权分段日期异常:{earliest_text}")
+            break
+        end_date = (earliest - timedelta(days=1)).strftime("%Y-%m-%d")
+
+        # 本页不足请求条数通常表示已到上市初期；继续请求只会返回空或重复数据。
+        if len(page_rows) < count:
+            break
+
+    rows = [collected[key] for key in sorted(collected)]
+    return rows[-limit:], warnings
+
+
+def fetch_daily_v3(code: str, market: int) -> tuple[list[dict], str, list[str]]:
+    """V3日线：优先使用腾讯前复权分段长历史，失败时回退V2供应链。"""
+    warnings: list[str] = []
+    rows, tx_warnings = tencent_daily_long(code, limit=v2.DAILY_LIMIT)
+    warnings.extend(tx_warnings)
+    if len(rows) >= v2.MIN_DAILY:
+        return rows[-v2.DAILY_LIMIT :], "腾讯前复权分段", warnings
+
+    try:
+        fallback_rows, fallback_source, fallback_warnings = _fetch_daily_v2(code, market)
+        warnings.extend(fallback_warnings)
+        return fallback_rows, fallback_source, warnings
+    except Exception as exc:
+        warnings.append(f"V2日线回退:{exc}")
+        raise RuntimeError("；".join(warnings)) from exc
 
 
 def merge_v3_metadata(result: dict, source: dict) -> dict:
@@ -42,6 +119,8 @@ def collect_one_v3(item: dict, now):
     return merge_v3_metadata(_collect_one_v2(item, now), item)
 
 
+# V2的collect_one在运行时读取模块全局函数，因此在V3入口统一替换数据供应链即可。
+v2.fetch_daily_v2 = fetch_daily_v3
 v2.collect_one = collect_one_v3
 
 
