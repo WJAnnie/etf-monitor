@@ -103,10 +103,10 @@ def _parse_time(value: Any) -> datetime | None:
 
 
 def _expected_time(stage: str) -> time:
-    if "14:30" in stage:
-        return time(14, 30)
-    if "14:50" in stage:
-        return time(14, 50)
+    if "13:45" in stage:
+        return time(13, 45)
+    if "14:45" in stage:
+        return time(14, 45)
     return time(15, 0)
 
 
