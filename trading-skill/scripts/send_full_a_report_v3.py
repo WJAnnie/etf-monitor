@@ -56,6 +56,17 @@ def _sector_metrics_text(profile: dict, metrics: dict | None) -> str:
     return "；".join(items) if items else "本期暂未取得足够的行业专属报表变化字段"
 
 
+def _history_text(item: dict) -> str:
+    quality = item.get("history_quality") or {}
+    if not quality:
+        return "历史证据：暂无"
+    return (
+        f"历史证据：{quality.get('long_term_tier','暂无')}｜"
+        f"日线{quality.get('daily_count','?')}｜周线{quality.get('weekly_count','?')}｜"
+        f"120分钟{quality.get('m120_count','?')}｜30分钟{quality.get('m30_count','?')}｜5分钟{quality.get('m5_count','?')}"
+    )
+
+
 def _append_industry_intelligence(lines: list[str], universe: dict) -> None:
     selected = list(universe.get("selected_industries") or [])
     reports = universe.get("industry_recent_reports") or {}
@@ -90,9 +101,7 @@ def _append_industry_intelligence(lines: list[str], universe: dict) -> None:
         if new_reports:
             for report in new_reports[:2]:
                 lines.append(f"   新财报：{report.get('name')}（{report.get('code')}）｜{_fmt_report(report)}")
-                lines.append(
-                    "   行业专属财报变化：" + _sector_metrics_text(profile, report.get("sector_metrics"))
-                )
+                lines.append("   行业专属财报变化：" + _sector_metrics_text(profile, report.get("sector_metrics")))
 
     paused = list(universe.get("paused_high_industries") or [])
     if paused:
@@ -124,8 +133,13 @@ def _append_watch_candidates(lines: list[str], candidates: list[dict], confirmed
             f"{('｜'+variant) if variant and '无类二买' not in variant else ''}｜买点后{item.get('rise_since_signal_pct','暂无')}%｜"
             f"{item.get('risk','暂无')}｜{item.get('action','观察')}"
         )
+        if item.get("history_quality"):
+            lines.append("   " + _history_text(item))
         if item.get("execution_conflicts"):
             lines.append("   暂缓原因：" + "；".join(item.get("execution_conflicts") or []))
+        blockers = item.get("blockers") or []
+        if "HISTORY_CONTEXT_INCOMPLETE" in blockers:
+            lines.append("   暂缓原因：当前主买点周期历史证据不足，结构保留观察但不直接开仓")
 
 
 def build_report(scan: dict, universe: dict, *, stage: str) -> tuple[str, str]:
@@ -139,6 +153,7 @@ def build_report(scan: dict, universe: dict, *, stage: str) -> tuple[str, str]:
         "【统一交易口径】",
         "周线＝战略环境，不单独下单；日线＝中期核心结构；120分钟＝主要中短线买点；30分钟＝战术买点；5分钟＝精细执行确认，不能独立形成选股买入理由。",
         "正式主买点只从日线、120分钟、30分钟产生；日线一买默认等待二买。标准二买与类二买分别标注，类二买不替代经典二买定义。",
+        "历史K线采用目标值+实际证据分级：不因数据源只返回较短历史就伪装成完整长期证据，不同主买点周期按各自最低历史门槛判断。",
         "止损跟随产生买入依据的主结构级别；止盈不设固定百分比，按5分钟→30分钟→120分钟→日线→周线卖点逐级处理对应仓位。",
         "",
         "【扫描范围】",
@@ -169,6 +184,7 @@ def build_report(scan: dict, universe: dict, *, stage: str) -> tuple[str, str]:
             f"当前估值：PE {_valuation(item.get('pe'), kind='PE')}｜PB {_valuation(item.get('pb'), kind='PB')}｜行业口径：{valuation_focus}",
             f"缠论主买点：{item.get('timeframe','暂无')} {_signal_cn(item.get('signal'))}｜类二买标注：{variant}",
             f"周期职责：{item.get('timeframe_role','暂无')}｜执行权限：{item.get('entry_permission','暂无')}",
+            _history_text(item),
             f"买点确认：{item.get('signal_confirmation_time','暂无')}｜买点后涨幅：{item.get('rise_since_signal_pct','暂无')}%",
             f"上级结构：{item.get('parent_structure','暂无')}｜低级别执行：{'通过' if item.get('execution_structure_ok',True) else '暂缓'}",
             f"量价：{item.get('volume_price','暂无')}｜技术确认：{item.get('technical','暂无')}",
@@ -181,9 +197,7 @@ def build_report(scan: dict, universe: dict, *, stage: str) -> tuple[str, str]:
             f"新财报：{_fmt_report(item.get('recent_report'))}",
         ])
         if item.get("recent_report"):
-            lines.append(
-                "行业专属财报变化：" + _sector_metrics_text(profile, item.get("sector_financial_metrics"))
-            )
+            lines.append("行业专属财报变化：" + _sector_metrics_text(profile, item.get("sector_financial_metrics")))
         if item.get("execution_latest_states"):
             states = "；".join(f"{key}:{value}" for key, value in item.get("execution_latest_states", {}).items())
             lines.append("低级别最新结构：" + states)
