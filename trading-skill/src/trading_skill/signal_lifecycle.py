@@ -6,6 +6,7 @@ from enum import StrEnum
 from typing import Any, Mapping, Sequence
 
 from trading_skill.domain.enums import ChanSignalType, SignalState, Timeframe
+from trading_skill.multi_timeframe_structure import StructurePhase, build_structure_book
 from trading_skill.strategy_policy import STANDARD_BUY_PRIORITY
 
 
@@ -25,9 +26,16 @@ class SignalFreshness(StrEnum):
     UNKNOWN = "UNKNOWN"
 
 
-# 这是“是否仍适合作为新的当前机会”的观察窗，不是4A缠论定义，也不是结构止损。
+class LowerTimeframeState(StrEnum):
+    ALIGNED = "ALIGNED"
+    MIXED = "MIXED"
+    WAITING_PULLBACK = "WAITING_PULLBACK"
+    UNRESOLVED = "UNRESOLVED"
+
+
+# “仍适合作为新的当前机会”的观察窗，不是4A缠论定义，也不是结构止损。
 # 用完成K线根数而不是自然日/小时，避免周末、节假日、停牌让相同结构拥有不同寿命。
-# 含义大致为：周线8周、日线20个交易日、120m约10个交易日、30m约3个交易日、5m约1个交易日。
+# 大致对应：周线8周、日线20个交易日、120m约10个交易日、30m约3个交易日、5m约1个交易日。
 SIGNAL_ENTRY_WINDOW_BARS: dict[Timeframe, int] = {
     Timeframe.WEEKLY: 8,
     Timeframe.DAILY: 20,
@@ -87,6 +95,22 @@ class TimeframeSignalLifecycle:
             "records": [record.to_dict() for record in self.records],
             "current_buy": current_buy.to_dict() if current_buy else None,
             "current_sell": current_sell.to_dict() if current_sell else None,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class LowerTimeframeContext:
+    primary_timeframe: Timeframe
+    state: LowerTimeframeState
+    child_states: tuple[tuple[Timeframe, str], ...]
+    reasons: tuple[str, ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "primary_timeframe": self.primary_timeframe.value,
+            "state": self.state.value,
+            "child_states": {tf.value: state for tf, state in self.child_states},
+            "reasons": list(self.reasons),
         }
 
 
@@ -195,17 +219,11 @@ def evaluate_signal_lifecycle(
     latest_completed_bar_timestamp: datetime | None = None,
     fallback_timeframe: Timeframe | None = None,
 ) -> TimeframeSignalLifecycle:
-    """Evaluate confirmed Chan signals without rewriting the canonical 4A signal definition.
+    """管理4A正式买卖点的生命周期，不重写4A canonical定义。
 
-    EXPIRED and INVALIDATED are deliberately different:
-    - EXPIRED: too many *completed bars* have passed for the signal to be treated as a new current opportunity.
-      It remains structurally valid unless a later same-level opposite signal disproves it.
-    - INVALIDATED: a later formal opposite signal at the same timeframe and level (or explicit 4A invalidation) exists.
-    - MATURE: a newer same-side formal signal at the same timeframe and level has advanced the structure.
-
-    ``latest_completed_bar_timestamp`` is retained only as a compatibility fallback for deciding
-    CONFIRMED vs ACTIVE when an exact completed-bar sequence is unavailable. Without exact bar-age
-    evidence, freshness is UNKNOWN and the signal cannot be selected as a current opportunity.
+    EXPIRED：完成K根数超过当前机会观察窗，但结构没有被反向信号证伪。
+    INVALIDATED：之后出现同周期、同级别反向正式信号，或4A显式标记失效。
+    MATURE：之后出现同周期、同级别更新的同向正式信号，旧入口让位于新结构。
     """
     timeframe = _timeframe(result, fallback_timeframe)
     status = str(_get(result, "status", "UNAVAILABLE") or "UNAVAILABLE")
@@ -249,8 +267,7 @@ def evaluate_signal_lifecycle(
             reasons.append("4A结构引擎已明确标记该信号失效")
         else:
             simultaneous_opposites = [
-                other
-                for other in ordered
+                other for other in ordered
                 if other is not signal
                 and _same_level(signal, other)
                 and _signal_side(other)
@@ -264,8 +281,7 @@ def evaluate_signal_lifecycle(
                 reasons.append("同级别同一确认时刻同时出现反向正式信号，结构冲突，禁止作为当前信号")
             else:
                 later_opposites = [
-                    other
-                    for other in ordered
+                    other for other in ordered
                     if _same_level(signal, other)
                     and _signal_side(other)
                     and _signal_side(other) != side
@@ -285,8 +301,7 @@ def evaluate_signal_lifecycle(
                     reasons.append("之后出现同周期同级别反向正式信号，旧信号结构失效")
                 else:
                     later_same_side = [
-                        other
-                        for other in ordered
+                        other for other in ordered
                         if _same_level(signal, other)
                         and _signal_side(other) == side
                         and _is_formal_confirmed(other, as_of=as_of)
@@ -302,7 +317,7 @@ def evaluate_signal_lifecycle(
                         )
                         stage = SignalLifecycleStage.MATURE
                         superseded_by = _signal_id(successor)
-                        reasons.append("之后出现同周期同级别同向正式信号，机会已推进到更新结构")
+                        reasons.append("之后出现同周期同级别同向正式信号，旧入口已让位于更新结构；这不等于允许加仓")
                     elif freshness is SignalFreshness.STALE:
                         stage = SignalLifecycleStage.EXPIRED
                         reasons.append(
@@ -371,10 +386,9 @@ def _buy_type_priority(record: SignalLifecycleRecord) -> int:
 
 
 def current_signal(records: Sequence[SignalLifecycleRecord], *, side: str) -> SignalLifecycleRecord | None:
-    """Newest structurally-current signal wins; buy-type priority only breaks same-time ties."""
+    """先取最新结构；买点类别优先级只处理同一确认时刻的并列。"""
     eligible = [
-        record
-        for record in records
+        record for record in records
         if record.side == side
         and record.lifecycle_eligible_as_current
         and record.confirmation_timestamp is not None
@@ -419,3 +433,106 @@ def build_signal_lifecycle_book(
             fallback_timeframe=timeframe,
         )
     return out
+
+
+_CHILDREN: dict[Timeframe, tuple[Timeframe, ...]] = {
+    Timeframe.DAILY: (Timeframe.M120, Timeframe.M30, Timeframe.M5),
+    Timeframe.M120: (Timeframe.M30, Timeframe.M5),
+    Timeframe.M30: (Timeframe.M5,),
+}
+
+
+def evaluate_lower_context(
+    results: Mapping[Any, Any],
+    lifecycle_book: Mapping[Timeframe, TimeframeSignalLifecycle],
+    *,
+    primary_timeframe: Timeframe,
+    primary_confirmation: datetime,
+    as_of: datetime,
+) -> LowerTimeframeContext:
+    """用4C“当前生命周期信号”评估低周期执行关系，不让已过期/已失效的历史卖点永久阻断。"""
+    structure_book = build_structure_book(results, as_of=as_of).by_timeframe()
+    child_states: list[tuple[Timeframe, str]] = []
+    reasons: list[str] = []
+    saw_pullback = False
+    saw_unresolved = False
+    saw_aligned = False
+    saw_mixed = False
+
+    for timeframe in _CHILDREN.get(primary_timeframe, ()):
+        snapshot = structure_book.get(timeframe)
+        lifecycle = lifecycle_book.get(timeframe)
+        if snapshot is None or lifecycle is None or snapshot.status not in {"OK", "UNRESOLVED"}:
+            child_states.append((timeframe, "UNRESOLVED"))
+            reasons.append(f"{timeframe.value}缺少可用结构/生命周期证据")
+            saw_unresolved = True
+            continue
+
+        current_buy = lifecycle.current_buy()
+        current_sell = lifecycle.current_sell()
+        buy_after = bool(
+            current_buy
+            and current_buy.confirmation_timestamp
+            and current_buy.confirmation_timestamp > primary_confirmation
+        )
+        sell_after = bool(
+            current_sell
+            and current_sell.confirmation_timestamp
+            and current_sell.confirmation_timestamp > primary_confirmation
+        )
+
+        if buy_after and sell_after:
+            child_states.append((timeframe, "MIXED:CURRENT_BUY_AND_SELL"))
+            reasons.append(f"{timeframe.value}不同级别仍同时存在当前BUY和SELL，执行关系冲突，不做单向确认")
+            saw_mixed = True
+            continue
+        if sell_after:
+            kind = "/".join(current_sell.standard_types) if current_sell else "SELL"
+            child_states.append((timeframe, f"PULLBACK:{kind}"))
+            reasons.append(f"{timeframe.value}主买点后仍存在当前有效SELL；只暂停执行，不反向失效主周期买点")
+            saw_pullback = True
+            continue
+        if buy_after:
+            kind = "/".join(current_buy.standard_types) if current_buy else "BUY"
+            if snapshot.phase in {StructurePhase.BULL_TREND, StructurePhase.BREAKOUT_UP}:
+                child_states.append((timeframe, f"ALIGNED:{kind}"))
+                saw_aligned = True
+            else:
+                child_states.append((timeframe, f"MIXED:BUY_IN_{snapshot.phase.value}"))
+                reasons.append(
+                    f"{timeframe.value}虽有主买点后的当前BUY，但当前结构仍为{snapshot.phase.value}；只能视为转折尝试"
+                )
+                saw_mixed = True
+            continue
+
+        if snapshot.phase in {StructurePhase.BEAR_TREND, StructurePhase.BREAKDOWN_DOWN, StructurePhase.REVERSAL_DOWN_FORMING}:
+            child_states.append((timeframe, f"PULLBACK:{snapshot.phase.value}"))
+            reasons.append(f"{timeframe.value}当前结构仍偏空/向下，执行继续等待")
+            saw_pullback = True
+        elif snapshot.phase in {StructurePhase.BULL_TREND, StructurePhase.BREAKOUT_UP}:
+            child_states.append((timeframe, f"ALIGNED:{snapshot.phase.value}"))
+            saw_aligned = True
+        elif snapshot.phase is StructurePhase.UNRESOLVED:
+            child_states.append((timeframe, "UNRESOLVED"))
+            saw_unresolved = True
+        else:
+            child_states.append((timeframe, f"MIXED:{snapshot.phase.value}"))
+            saw_mixed = True
+
+    if saw_pullback:
+        state = LowerTimeframeState.WAITING_PULLBACK
+    elif saw_unresolved:
+        state = LowerTimeframeState.UNRESOLVED
+    elif saw_mixed:
+        state = LowerTimeframeState.MIXED
+    elif saw_aligned:
+        state = LowerTimeframeState.ALIGNED
+    else:
+        state = LowerTimeframeState.UNRESOLVED
+
+    return LowerTimeframeContext(
+        primary_timeframe=primary_timeframe,
+        state=state,
+        child_states=tuple(child_states),
+        reasons=tuple(reasons),
+    )
