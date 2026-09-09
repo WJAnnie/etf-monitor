@@ -25,7 +25,12 @@ class Trade: id:str; symbol:str; state:TradeState; tranches:tuple[Tranche,...]; 
 @dataclass(frozen=True, slots=True)
 class Protection: tranche_id:str; level:StopLevel; price_ticks:int; source_structure_id:str; revision:int=1
 @dataclass(frozen=True, slots=True)
-class SellScope: affected_tranche_ids:tuple[str,...]; unaffected_tranche_ids:tuple[str,...]; action:Action
+class SellScope:
+    affected_tranche_ids:tuple[str,...]
+    unaffected_tranche_ids:tuple[str,...]
+    action:Action
+    # 每个仓位本次减仓比例；1.0=全部卖出该笔，0.5=减半。用于真正分批卖出。
+    reduction_fractions:tuple[tuple[str,float],...]=()
 @dataclass(frozen=True, slots=True)
 class ExitRecord: tranche_id:str; expected_exit:float; actual_exit:float; slippage:float; reason:str; realized_pnl:float
 @dataclass(frozen=True, slots=True)
@@ -55,28 +60,69 @@ def raise_protection(current:Protection|None, *, tranche_id:str, level:StopLevel
     if current and price_ticks < current.price_ticks: return current
     return Protection(tranche_id,level,price_ticks,source_structure_id,1 if current is None else current.revision+1)
 
+
+def _sell_fraction(timeframe:str, sell_class:int, role:TrancheRole) -> float:
+    """级别越高/卖点越强，影响越深；低级别不能直接否定高级别核心仓。"""
+    sell_class=max(1,min(3,int(sell_class)))
+    if timeframe=="5m":
+        table={
+            1:{TrancheRole.TEST:0.50},
+            2:{TrancheRole.TEST:1.00,TrancheRole.TACTICAL:0.50},
+            3:{TrancheRole.TEST:1.00,TrancheRole.TACTICAL:1.00},
+        }
+    elif timeframe=="30m":
+        table={
+            1:{TrancheRole.TEST:1.00,TrancheRole.TACTICAL:0.50},
+            2:{TrancheRole.TEST:1.00,TrancheRole.TACTICAL:1.00,TrancheRole.TREND_ADD:0.50},
+            3:{TrancheRole.TEST:1.00,TrancheRole.TACTICAL:1.00,TrancheRole.TREND_ADD:1.00,TrancheRole.CONFIRMATION:0.50},
+        }
+    elif timeframe=="120m":
+        table={
+            1:{TrancheRole.TEST:1.00,TrancheRole.TACTICAL:1.00,TrancheRole.TREND_ADD:0.50},
+            2:{TrancheRole.TEST:1.00,TrancheRole.TACTICAL:1.00,TrancheRole.TREND_ADD:1.00,TrancheRole.CONFIRMATION:0.50},
+            3:{TrancheRole.TEST:1.00,TrancheRole.TACTICAL:1.00,TrancheRole.TREND_ADD:1.00,TrancheRole.CONFIRMATION:1.00},
+        }
+    elif timeframe=="daily":
+        table={
+            1:{TrancheRole.TEST:1.00,TrancheRole.TACTICAL:1.00,TrancheRole.TREND_ADD:1.00,TrancheRole.CONFIRMATION:0.50},
+            2:{TrancheRole.TEST:1.00,TrancheRole.TACTICAL:1.00,TrancheRole.TREND_ADD:1.00,TrancheRole.CONFIRMATION:1.00,TrancheRole.CORE:0.50},
+            3:{r:1.00 for r in TrancheRole},
+        }
+    elif timeframe=="weekly":
+        table={
+            1:{TrancheRole.TEST:1.00,TrancheRole.TACTICAL:1.00,TrancheRole.TREND_ADD:1.00,TrancheRole.CONFIRMATION:1.00,TrancheRole.CORE:0.50},
+            2:{TrancheRole.TEST:1.00,TrancheRole.TACTICAL:1.00,TrancheRole.TREND_ADD:1.00,TrancheRole.CONFIRMATION:1.00,TrancheRole.CORE:0.75},
+            3:{r:1.00 for r in TrancheRole},
+        }
+    else:
+        return 0.0
+    return float(table[sell_class].get(role,0.0))
+
+
 def map_sell_scope(trade:Trade, *, timeframe:str, sell_class:int) -> SellScope:
+    fractions=[]
     affected=[]
     for tr in trade.tranches:
-        role=tr.thesis.role
-        if timeframe=="5m" and role in (TrancheRole.TEST,TrancheRole.TACTICAL): affected.append(tr.id)
-        elif timeframe=="30m" and role in (TrancheRole.TEST,TrancheRole.TACTICAL,TrancheRole.TREND_ADD): affected.append(tr.id)
-        elif timeframe=="120m" and role in (TrancheRole.TEST,TrancheRole.TACTICAL,TrancheRole.CONFIRMATION,TrancheRole.TREND_ADD): affected.append(tr.id)
-        elif timeframe=="daily":
-            if sell_class==1 and role in (TrancheRole.TEST,TrancheRole.TACTICAL,TrancheRole.TREND_ADD): affected.append(tr.id)
-            elif sell_class==2 and role in (TrancheRole.TEST,TrancheRole.TACTICAL,TrancheRole.CONFIRMATION,TrancheRole.TREND_ADD,TrancheRole.CORE): affected.append(tr.id)
-            elif sell_class>=3: affected.append(tr.id)
-    if timeframe=="daily" and sell_class>=3: action=Action.EXIT
-    elif timeframe=="daily" and sell_class==2: action=Action.REDUCE_CORE
-    else: action=Action.REDUCE_TACTICAL
+        fraction=_sell_fraction(timeframe,sell_class,tr.thesis.role)
+        if fraction>0:
+            affected.append(tr.id)
+            fractions.append((tr.id,fraction))
+    if (timeframe in ("daily","weekly")) and sell_class>=3:
+        action=Action.EXIT
+    elif timeframe in ("daily","weekly") and sell_class>=2:
+        action=Action.REDUCE_CORE
+    else:
+        action=Action.REDUCE_TACTICAL
     unaffected=tuple(t.id for t in trade.tranches if t.id not in affected)
-    return SellScope(tuple(affected),unaffected,action)
+    return SellScope(tuple(affected),unaffected,action,tuple(fractions))
 
 def target_exposure(trade:Trade, scope:SellScope) -> float:
-    return sum(t.value for t in trade.tranches if t.id not in scope.affected_tranche_ids)
+    fractions=dict(scope.reduction_fractions)
+    return sum(t.value*(1.0-fractions.get(t.id,0.0)) for t in trade.tranches)
 
-def execute_exit(tranche:Tranche, *, expected_exit:float, actual_exit:float, reason:str) -> ExitRecord:
-    pnl=(actual_exit-tranche.entry_price)*(tranche.value/tranche.entry_price if tranche.entry_price else 0)
+def execute_exit(tranche:Tranche, *, expected_exit:float, actual_exit:float, reason:str, fraction:float=1.0) -> ExitRecord:
+    fraction=max(0.0,min(1.0,float(fraction)))
+    pnl=(actual_exit-tranche.entry_price)*(tranche.value*fraction/tranche.entry_price if tranche.entry_price else 0)
     return ExitRecord(tranche.id,expected_exit,actual_exit,actual_exit-expected_exit,reason,pnl)
 
 def close_trade(trade:Trade) -> Trade:
