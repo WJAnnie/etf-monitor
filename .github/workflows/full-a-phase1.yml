@@ -65,6 +65,25 @@ jobs:
             --output full-a-results/fundamental_quality_latest.json \
             --strict
 
+      - name: 立即打印新版第三步摘要
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          c=Path('full-a-results/candidate_universe_latest.json')
+          f=Path('full-a-results/fundamental_quality_latest.json')
+          if c.exists():
+              p=json.loads(c.read_text(encoding='utf-8'))
+              print('候选行业补全=',p.get('candidate_industry_enrichment'))
+          if f.exists():
+              p=json.loads(f.read_text(encoding='utf-8'))
+              print('第三步AB摘要=',p.get('summary'))
+              rows=p.get('stock_assessments',[])
+              print('WATCH->PASS样本=',[(x.get('code'),x.get('name'),(x.get('phase_a_assessment') or {}).get('profile'),(x.get('specialized_evidence') or {}).get('family')) for x in rows if (x.get('phase_a_assessment') or {}).get('status')=='WATCH' and (x.get('final_decision') or {}).get('status')=='PASS'][:12])
+              print('PASS->WATCH样本=',[(x.get('code'),x.get('name'),(x.get('phase_a_assessment') or {}).get('profile'),(x.get('specialized_evidence') or {}).get('family')) for x in rows if (x.get('phase_a_assessment') or {}).get('status')=='PASS' and (x.get('final_decision') or {}).get('status')=='WATCH'][:12])
+              print('最终REJECT样本=',[(x.get('code'),x.get('name'),(x.get('final_decision') or {}).get('reasons')) for x in rows if (x.get('final_decision') or {}).get('status')=='REJECT'][:8])
+          PY
+
       # 旧V3生产链作为后续基本面/缠论重构的回归保护；K线入口已有账户权限桥。
       - name: 旧V3候选预筛回归
         run: |
