@@ -45,6 +45,7 @@ def main() -> int:
             "pass_has_priority": True,
             "low_priority_watch_never_fills_quota": True,
             "watch_may_enter_only_as_safe_research_observation": True,
+            "market_identity_is_required": True,
             "this_stage_emits_trade_signal": False,
         },
         "summary": {
@@ -72,6 +73,9 @@ def main() -> int:
             problems.append("REJECT错误进入STEP4队列")
         if any(item.tier.value == "EXCLUDE" for item in queue):
             problems.append("EXCLUDE错误进入STEP4队列")
+        if any(item.market not in {0, 1} for item in queue):
+            missing = sum(1 for item in queue if item.market not in {0, 1})
+            problems.append(f"STEP4队列缺少明确沪深market身份:{missing}")
         if not queue and (stock_rows or fund_rows):
             problems.append("有STEP3候选但深扫队列为空")
         if problems:
