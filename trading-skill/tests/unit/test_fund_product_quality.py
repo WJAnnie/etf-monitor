@@ -66,6 +66,36 @@ def test_commodity_qdii_keeps_commodity_asset_class_but_requires_premium_check()
     assert result.status is FundProductStatus.WATCH
     assert result.underlying_state is UnderlyingAssetState.NEUTRAL
     assert any("折溢价" in text for text in result.warnings)
+    assert any("底层资产专属上下文" in text for text in result.warnings)
+
+
+def test_domestic_commodity_without_asset_context_is_watch_but_can_be_deep_scanned():
+    result = assess_fund_product(
+        fund(
+            code="518880",
+            name="黄金ETF",
+            fund_category="COMMODITY",
+            fund_family="COMMODITY:黄金",
+            fund_liquidity_percentile=90.0,
+        )
+    )
+    assert result.status is FundProductStatus.WATCH
+    assert result.deep_analysis_eligible is True
+    assert any("底层资产专属上下文" in text for text in result.warnings)
+
+
+def test_commodity_can_pass_after_asset_context_is_completed():
+    result = assess_fund_product(
+        fund(
+            code="518880",
+            name="黄金ETF",
+            fund_category="COMMODITY",
+            fund_family="COMMODITY:黄金",
+            fund_liquidity_percentile=90.0,
+        ),
+        reference={"asset_context_complete": True},
+    )
+    assert result.status is FundProductStatus.PASS
 
 
 def test_fresh_extreme_premium_cannot_pass():
