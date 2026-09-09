@@ -47,10 +47,11 @@ def leg(name, direction, low, high, day):
     )
 
 
-def move(name, direction, low, high, day, completed=True):
+def move(name, direction, low, high, day, completed=True, *, end_ticks=None):
     return LowerMove(
         name, direction, 0, low, high,
         T0 + timedelta(days=day), T0 + timedelta(days=day), completed,
+        end_ticks=end_ticks,
     )
 
 
@@ -84,16 +85,23 @@ def test_m3_confirmed_top_divergence_and_first_sell():
     assert signal.side == "SELL"
 
 
-def test_m3_second_sell_is_structural_not_anchor_price_rule():
-    anchor = ReversalAnchor("ra-s", "X", Direction.DOWN, 1, 200, T0, True)
+def test_m3_second_sell_breaking_first_sell_anchor_is_invalidated():
+    anchor = ReversalAnchor("ra-s", "X", Direction.DOWN, 1, 200, T0, True, timeframe="daily")
     tracker = new_second_sell_tracker(anchor)
     tracker, signal = second_sell_step(tracker, move("down", Direction.DOWN, 150, 200, 1))
     assert signal is None and tracker.state is SecondSellTrackerState.WAIT_REBOUND
     tracker, signal = second_sell_step(tracker, move("reb", Direction.UP, 170, 205, 2))
+    assert tracker.state is SecondSellTrackerState.SECOND_SELL_INVALIDATED
+    assert signal is None
+
+
+def test_m3_second_sell_equal_anchor_is_boundary_valid_and_keeps_timeframe():
+    anchor = ReversalAnchor("ra-s-eq", "X", Direction.DOWN, 1, 200, T0, True, timeframe="daily")
+    tracker = new_second_sell_tracker(anchor)
+    tracker, _ = second_sell_step(tracker, move("down-eq", Direction.DOWN, 150, 200, 1))
+    tracker, signal = second_sell_step(tracker, move("reb-eq", Direction.UP, 170, 200, 2))
     assert tracker.state is SecondSellTrackerState.SECOND_SELL_CONFIRMED
-    assert signal.standard_types == (ChanSignalType.SECOND_SELL,)
-    assert signal.structural_price_ticks == 205
-    assert signal.side == "SELL"
+    assert signal is not None and signal.structural_price_ticks == 200 and signal.timeframe == "daily"
 
 
 def test_m3_third_sell_equal_zd_valid_one_tick_above_invalid():
@@ -110,6 +118,16 @@ def test_m3_third_sell_equal_zd_valid_one_tick_above_invalid():
     tracker2, signal2 = third_sell_step(tracker2, c, move("ret2", Direction.UP, 80, 121, 2))
     assert tracker2.state is ThirdSellTrackerState.THIRD_SELL_FAILED
     assert signal2 is None
+
+
+def test_m3_third_sell_departure_may_start_inside_center_if_endpoint_breaks_zd():
+    c = center(0, 100, 200, 120, 180)
+    tracker = new_third_sell_tracker(c)
+    tracker, _ = third_sell_step(tracker, c, move("dep-inside", Direction.DOWN, 60, 160, 1, end_ticks=100))
+    assert tracker.state is ThirdSellTrackerState.WAIT_FIRST_RETURN
+    tracker, signal = third_sell_step(tracker, c, move("ret-outside", Direction.UP, 80, 120, 2, end_ticks=120))
+    assert tracker.state is ThirdSellTrackerState.THIRD_SELL_CONFIRMED
+    assert signal is not None
 
 
 def test_m3_second_and_third_sell_can_overlap():
