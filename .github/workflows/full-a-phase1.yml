@@ -58,11 +58,18 @@ jobs:
             --input full-a-results/candidate_universe_latest.json \
             --strict
 
-      - name: STEP3 股票与ETF-LOF质量验证
+      - name: STEP3 股票与ETF-LOF基础质量验证
         run: |
           python -m scripts.collect_fundamental_quality \
             --input full-a-results/candidate_universe_latest.json \
             --output full-a-results/fundamental_quality_latest.json \
+            --strict
+
+      - name: STEP3C ETF-LOF慢变量产品参考增强
+        run: |
+          python -m scripts.enrich_fund_product_references \
+            --candidates full-a-results/candidate_universe_latest.json \
+            --quality full-a-results/fundamental_quality_latest.json \
             --strict
 
       - name: STEP3-4 深扫资格队列验证
@@ -98,18 +105,19 @@ jobs:
           if f.exists():
               p=json.loads(f.read_text(encoding='utf-8'))
               print('STEP3摘要=',p.get('summary'))
+              print('基金参考增强=',p.get('fund_reference_enrichment'))
               stocks=p.get('stock_assessments',[])
               funds=p.get('fund_product_assessments',[])
               print('WATCH->PASS股票=',[(x.get('code'),x.get('name'),(x.get('phase_a_assessment') or {}).get('profile'),(x.get('specialized_evidence') or {}).get('family')) for x in stocks if (x.get('phase_a_assessment') or {}).get('status')=='WATCH' and (x.get('final_decision') or {}).get('status')=='PASS'][:12])
               print('PASS->WATCH股票=',[(x.get('code'),x.get('name'),(x.get('phase_a_assessment') or {}).get('profile'),(x.get('specialized_evidence') or {}).get('family')) for x in stocks if (x.get('phase_a_assessment') or {}).get('status')=='PASS' and (x.get('final_decision') or {}).get('status')=='WATCH'][:12])
               print('REJECT股票=',[(x.get('code'),x.get('name'),(x.get('final_decision') or {}).get('reasons')) for x in stocks if (x.get('final_decision') or {}).get('status')=='REJECT'][:8])
-              print('PASS基金=',[(x.get('code'),x.get('name'),x.get('fund_category'),(x.get('assessment') or {}).get('underlying_theme')) for x in funds if (x.get('assessment') or {}).get('status')=='PASS'][:20])
+              print('PASS基金=',[(x.get('code'),x.get('name'),x.get('fund_category'),(x.get('assessment') or {}).get('underlying_theme'),(x.get('product_reference') or {}).get('fund_size_cny')) for x in funds if (x.get('assessment') or {}).get('status')=='PASS'][:20])
               print('WATCH基金=',[(x.get('code'),x.get('name'),x.get('fund_category'),(x.get('assessment') or {}).get('warnings')) for x in funds if (x.get('assessment') or {}).get('status')=='WATCH'][:20])
               print('REJECT基金=',[(x.get('code'),x.get('name'),(x.get('assessment') or {}).get('hard_risks')) for x in funds if (x.get('assessment') or {}).get('status')=='REJECT'][:10])
           if q.exists():
               p=json.loads(q.read_text(encoding='utf-8'))
               print('STEP3->4深扫资格=',p.get('summary'))
-              print('深扫前20=',[(x.get('code'),x.get('name'),x.get('security_type'),x.get('status'),x.get('tier'),x.get('score')) for x in p.get('candidates',[])[:20]])
+              print('深扫前20=',[(x.get('code'),x.get('name'),x.get('security_type'),x.get('status'),x.get('tier'),x.get('evidence_level'),x.get('confirmation_count')) for x in p.get('candidates',[])[:20]])
           PY
 
       - name: Upload STEP1-3 validation
