@@ -10,7 +10,7 @@ class RiskState(IntEnum): L0=0; L1=1; L2=2; L3=3; L4=4
 class Action(StrEnum):
     OBSERVE="OBSERVE"; WAIT_2B="WAIT_2B"; PREPARE_BUY="PREPARE_BUY"; BUY_TRANCHE_1="BUY_TRANCHE_1"; ADD_TRANCHE_2="ADD_TRANCHE_2"; ADD_TREND="ADD_TREND"; HOLD="HOLD"; PAUSE_ADD="PAUSE_ADD"; REDUCE_TACTICAL="REDUCE_TACTICAL"; REDUCE_CORE="REDUCE_CORE"; EXIT="EXIT"
 class Blocker(StrEnum):
-    FUNDAMENTAL_VETO="FUNDAMENTAL_VETO"; NO_CHAN_BUY="NO_CHAN_BUY"; DAILY_FIRST_BUY_WAIT_2B="DAILY_FIRST_BUY_WAIT_2B"; SIGNAL_NOT_MATURE="SIGNAL_NOT_MATURE"; STOP_UNDEFINED="STOP_UNDEFINED"; RISK_TOO_HIGH="RISK_TOO_HIGH"; TECHNICAL_EXECUTION_PAUSED="TECHNICAL_EXECUTION_PAUSED"; EXECUTION_STRUCTURE_CONFLICT="EXECUTION_STRUCTURE_CONFLICT"; PARENT_CONTEXT_INVALID="PARENT_CONTEXT_INVALID"; DATA_INCOMPLETE="DATA_INCOMPLETE"; PORTFOLIO_RISK_FULL="PORTFOLIO_RISK_FULL"; NO_NEW_STRUCTURE_FOR_ADD="NO_NEW_STRUCTURE_FOR_ADD"; REENTRY_LOCKED="REENTRY_LOCKED"
+    FUNDAMENTAL_VETO="FUNDAMENTAL_VETO"; NO_CHAN_BUY="NO_CHAN_BUY"; DAILY_FIRST_BUY_WAIT_2B="DAILY_FIRST_BUY_WAIT_2B"; SIGNAL_NOT_MATURE="SIGNAL_NOT_MATURE"; STOP_UNDEFINED="STOP_UNDEFINED"; RISK_TOO_HIGH="RISK_TOO_HIGH"; TECHNICAL_EXECUTION_PAUSED="TECHNICAL_EXECUTION_PAUSED"; EXECUTION_STRUCTURE_CONFLICT="EXECUTION_STRUCTURE_CONFLICT"; EXECUTION_CONFIRMATION_PENDING="EXECUTION_CONFIRMATION_PENDING"; PARENT_CONTEXT_INVALID="PARENT_CONTEXT_INVALID"; DATA_INCOMPLETE="DATA_INCOMPLETE"; PORTFOLIO_RISK_FULL="PORTFOLIO_RISK_FULL"; NO_NEW_STRUCTURE_FOR_ADD="NO_NEW_STRUCTURE_FOR_ADD"; REENTRY_LOCKED="REENTRY_LOCKED"
 
 @dataclass(frozen=True, slots=True)
 class OpportunityEvidence:
@@ -58,8 +58,8 @@ def risk_state(e:RiskEvidence, *, prior:RiskState=RiskState.L0, recovery_new_str
 
 def blockers_for(*, signal:ChanSignal|None, fundamental_eligible:bool, stop_defined:bool, risk:RiskState,
     technical:TechnicalBundle|None, parent_valid:bool, data_complete:bool, portfolio_permission:bool,
-    execution_structure_ok:bool=True, add_requested=False, new_structure_for_add=False,
-    reentry_locked=False, allow_daily_first_buy=False):
+    execution_structure_ok:bool=True, execution_confirmation_ready:bool|None=None,
+    add_requested=False, new_structure_for_add=False, reentry_locked=False, allow_daily_first_buy=False):
     b=[]
     if not fundamental_eligible:b.append(Blocker.FUNDAMENTAL_VETO)
     if signal is None:b.append(Blocker.NO_CHAN_BUY)
@@ -68,6 +68,7 @@ def blockers_for(*, signal:ChanSignal|None, fundamental_eligible:bool, stop_defi
     if risk>=RiskState.L2:b.append(Blocker.RISK_TOO_HIGH)
     if technical and technical.confirmation is TechnicalConfirmation.PAUSE:b.append(Blocker.TECHNICAL_EXECUTION_PAUSED)
     if not execution_structure_ok:b.append(Blocker.EXECUTION_STRUCTURE_CONFLICT)
+    elif execution_confirmation_ready is False:b.append(Blocker.EXECUTION_CONFIRMATION_PENDING)
     if not parent_valid:b.append(Blocker.PARENT_CONTEXT_INVALID)
     if not data_complete:b.append(Blocker.DATA_INCOMPLETE)
     if not portfolio_permission:b.append(Blocker.PORTFOLIO_RISK_FULL)

@@ -88,36 +88,109 @@ def test_execution_structure_conflict_is_a_real_blocker():
     assert Blocker.EXECUTION_STRUCTURE_CONFLICT in blockers
 
 
-def test_latest_child_buy_clears_older_child_sell_conflict():
+def test_execution_confirmation_pending_has_separate_blocker_taxonomy():
+    blockers = blockers_for(
+        signal=_signal(ChanSignalType.SECOND_BUY), fundamental_eligible=True, stop_defined=True,
+        risk=RiskState.L0, technical=None, parent_valid=True, data_complete=True,
+        portfolio_permission=True, execution_structure_ok=True, execution_confirmation_ready=False,
+        allow_daily_first_buy=True,
+    )
+    assert Blocker.EXECUTION_CONFIRMATION_PENDING in blockers
+    assert Blocker.EXECUTION_STRUCTURE_CONFLICT not in blockers
+
+
+def test_120m_child_buy_plus_5m_support_confirms_execution_after_older_sell():
     base_time = datetime(2026, 9, 9, 9, 30, tzinfo=timezone.utc)
-    candidate = {"timeframe": "120m", "signal_confirmation_time": base_time.isoformat()}
+    candidate = {
+        "timeframe": "120m",
+        "signal_confirmation_time": base_time.isoformat(),
+        "execution_maturity": "TRIGGERED",
+    }
     analysis = {
         "timeframes": {
             "30m": {
+                "status": "OK",
                 "signals": [
                     {"side": "SELL", "types": ["FIRST_SELL"], "confirmation_timestamp": (base_time + timedelta(minutes=30)).isoformat()},
                     {"side": "BUY", "types": ["SECOND_BUY"], "confirmation_timestamp": (base_time + timedelta(minutes=60)).isoformat()},
-                ]
+                ],
             },
-            "5m": {"signals": []},
+            "5m": {
+                "status": "OK",
+                "signals": [],
+                "technical": {"confirmation": "SUPPORT"},
+            },
         }
     }
     ok, conflicts, states = _execution_structure_ok(analysis, candidate)
     assert ok is True
     assert conflicts == []
     assert states["30m"].startswith("BUY:")
+    assert states["5m_execution"] == "CONFIRMED:TECH_SUPPORT"
+
+
+def test_no_child_sell_is_not_enough_when_5m_has_no_positive_confirmation():
+    base_time = datetime(2026, 9, 9, 9, 30, tzinfo=timezone.utc)
+    candidate = {
+        "timeframe": "30m",
+        "signal_confirmation_time": base_time.isoformat(),
+        "execution_maturity": "TRIGGERED",
+    }
+    analysis = {
+        "timeframes": {
+            "5m": {
+                "status": "OK",
+                "signals": [],
+                "technical": {"confirmation": "NEUTRAL"},
+            }
+        }
+    }
+    ok, conflicts, states = _execution_structure_ok(analysis, candidate)
+    assert ok is False
+    assert states["5m_execution"] == "WAITING_5M_CONFIRMATION"
+    assert any("未达到SUPPORT" in item for item in conflicts)
+
+
+def test_5m_formal_buy_can_confirm_execution_even_when_technical_is_neutral():
+    base_time = datetime(2026, 9, 9, 9, 30, tzinfo=timezone.utc)
+    candidate = {
+        "timeframe": "30m",
+        "signal_confirmation_time": base_time.isoformat(),
+        "execution_maturity": "PREPARE",
+    }
+    analysis = {
+        "timeframes": {
+            "5m": {
+                "status": "OK",
+                "signals": [
+                    {"side": "BUY", "types": ["SECOND_BUY"], "confirmation_timestamp": (base_time + timedelta(minutes=10)).isoformat()},
+                ],
+                "technical": {"confirmation": "NEUTRAL"},
+            }
+        }
+    }
+    ok, conflicts, states = _execution_structure_ok(analysis, candidate)
+    assert ok is True
+    assert conflicts == []
+    assert states["5m_execution"] == "CONFIRMED:FORMAL_BUY"
 
 
 def test_latest_child_sell_blocks_current_execution_but_not_parent_thesis():
     base_time = datetime(2026, 9, 9, 9, 30, tzinfo=timezone.utc)
-    candidate = {"timeframe": "30m", "signal_confirmation_time": base_time.isoformat()}
+    candidate = {
+        "timeframe": "30m",
+        "signal_confirmation_time": base_time.isoformat(),
+        "execution_maturity": "TRIGGERED",
+    }
     analysis = {
         "timeframes": {
             "5m": {
+                "status": "OK",
                 "signals": [
                     {"side": "BUY", "types": ["SECOND_BUY"], "confirmation_timestamp": (base_time + timedelta(minutes=10)).isoformat()},
                     {"side": "SELL", "types": ["FIRST_SELL"], "confirmation_timestamp": (base_time + timedelta(minutes=20)).isoformat()},
-                ]
+                ],
+                "technical": {"confirmation": "SUPPORT"},
             }
         }
     }
@@ -125,6 +198,31 @@ def test_latest_child_sell_blocks_current_execution_but_not_parent_thesis():
     assert ok is False
     assert "5分钟最新正式结构仍为卖点" in conflicts
     assert states["5m"].startswith("SELL:")
+    assert states["5m_execution"] == "CONFLICT"
+
+
+def test_execution_waits_when_price_is_outside_trigger_or_prepare_zone():
+    base_time = datetime(2026, 9, 9, 9, 30, tzinfo=timezone.utc)
+    candidate = {
+        "timeframe": "30m",
+        "signal_confirmation_time": base_time.isoformat(),
+        "execution_maturity": "WATCH",
+    }
+    analysis = {
+        "timeframes": {
+            "5m": {
+                "status": "OK",
+                "signals": [
+                    {"side": "BUY", "types": ["SECOND_BUY"], "confirmation_timestamp": (base_time + timedelta(minutes=10)).isoformat()},
+                ],
+                "technical": {"confirmation": "SUPPORT"},
+            }
+        }
+    }
+    ok, conflicts, states = _execution_structure_ok(analysis, candidate)
+    assert ok is False
+    assert states["5m_execution"] == "WAITING_PRICE"
+    assert any("WATCH" in item for item in conflicts)
 
 
 def test_strong_class2_is_only_annotation_on_standard_second_buy():

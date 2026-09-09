@@ -13,7 +13,8 @@ def _decision(**overrides):
         "risk_level": 1,
         "context_valid": True,
         "protection_not_loosened": True,
-        "price_not_below_position_cost": True,
+        "current_price_below_cost": False,
+        "mechanical_average_down_requested": False,
     }
     kwargs.update(overrides)
     return scale_in_decision(**kwargs)
@@ -59,7 +60,21 @@ def test_scale_in_never_bypasses_risk_context_or_protection():
     assert _decision(protection_not_loosened=False).allowed is False
 
 
-def test_scale_in_cannot_mechanically_average_down():
-    decision = _decision(price_not_below_position_cost=False)
+def test_mechanical_average_down_is_blocked_even_when_price_is_lower():
+    decision = _decision(current_price_below_cost=True, mechanical_average_down_requested=True)
     assert decision.allowed is False
-    assert "摊低成本" in decision.reason
+    assert "机械补仓" in decision.reason
+
+
+def test_new_confirmed_structure_may_add_below_cost_when_all_gates_pass():
+    decision = _decision(current_price_below_cost=True, mechanical_average_down_requested=False)
+    assert decision.allowed is True
+    assert decision.role is TrancheRole.CONFIRMATION
+    assert "低于持仓成本" in decision.reason
+    assert "新的同级/更高级结构" in decision.reason
+
+
+def test_lower_price_without_new_structure_is_still_blocked():
+    decision = _decision(current_price_below_cost=True, new_structure_confirmed=False)
+    assert decision.allowed is False
+    assert "价格更低也不能替代结构条件" in decision.reason

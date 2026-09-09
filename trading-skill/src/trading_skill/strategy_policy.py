@@ -158,7 +158,8 @@ def scale_in_decision(
     risk_level: int,
     context_valid: bool,
     protection_not_loosened: bool,
-    price_not_below_position_cost: bool,
+    current_price_below_cost: bool,
+    mechanical_average_down_requested: bool,
 ) -> ScaleInDecision:
     """统一决定已有仓位后是否允许增加下一笔。
 
@@ -166,7 +167,7 @@ def scale_in_decision(
     - 一买与5分钟信号都不能作为已有仓位的加仓触发；只接受新的标准二买/三买。
     - 类二买只是标准二买的扩展标签，不独立增加一笔。
     - 必须有新结构、机会至少B、风险低于L2、上下文完整、保护位不下移。
-    - 明确禁止机械摊低成本：新加仓价格不得低于当前持仓成本参考线。
+    - “价格低于成本”本身不是禁加仓条件；真正禁止的是没有新结构支撑、仅为了摊低成本的机械补仓。
     - 每类确认仓只建立一次；之后最多允许一层TREND_ADD，避免无限金字塔。
     """
     if signal_type not in {ChanSignalType.SECOND_BUY, ChanSignalType.THIRD_BUY}:
@@ -174,7 +175,7 @@ def scale_in_decision(
     if timeframe not in {Timeframe.DAILY, Timeframe.M120, Timeframe.M30}:
         return ScaleInDecision(False, None, 0.0, "周线只做战略环境，5分钟只做执行确认，均不能独立触发加仓")
     if not new_structure_confirmed:
-        return ScaleInDecision(False, None, 0.0, "没有新的确认结构，不加仓")
+        return ScaleInDecision(False, None, 0.0, "没有新的确认结构，不加仓；价格更低也不能替代结构条件")
     if str(opportunity_grade) not in {"S", "A", "B"}:
         return ScaleInDecision(False, None, 0.0, "机会等级为C，不加仓")
     if int(risk_level) >= 2:
@@ -183,8 +184,8 @@ def scale_in_decision(
         return ScaleInDecision(False, None, 0.0, "行业/基本面/历史/上级结构上下文不完整，不加仓")
     if not protection_not_loosened:
         return ScaleInDecision(False, None, 0.0, "新增仓位需要下移保护位，违反保护位只能上移或保持的规则")
-    if not price_not_below_position_cost:
-        return ScaleInDecision(False, None, 0.0, "当前价格低于持仓成本参考线，禁止以加仓方式机械摊低成本")
+    if mechanical_average_down_requested:
+        return ScaleInDecision(False, None, 0.0, "本次动作的依据只是摊低持仓成本而不是新的确认结构，属于机械补仓，禁止加仓")
 
     roles = set(existing_roles)
     if timeframe is Timeframe.M30 and TrancheRole.TACTICAL not in roles:
@@ -202,6 +203,8 @@ def scale_in_decision(
     else:
         return ScaleInDecision(False, None, 0.0, "对应确认仓和趋势加仓都已存在，不继续无限金字塔加仓")
 
+    if current_price_below_cost:
+        reason += "；当前价虽低于持仓成本，但本次由新的同级/更高级结构触发，不按机械摊低成本处理"
     return ScaleInDecision(True, role, SCALE_IN_REMAINING_FRACTION[role], reason)
 
 
@@ -294,7 +297,8 @@ def add_position_policy() -> str:
     return (
         "已有仓位后只接受新的标准二买/三买或同级以上结构升级；30分钟对应战术仓、120分钟对应确认仓、"
         "日线对应核心仓，之后最多再加一层趋势仓。加仓金额按剩余允许仓位计算；L2及以上、机会C、"
-        "上下文不完整、保护位需下移或会形成机械摊低成本时一律不加。类二买只作为标准二买加分标签。"
+        "上下文不完整、保护位需下移或仅为了摊低成本的机械补仓一律不加。价格低于持仓成本不是单独否决项；"
+        "若新的同级/更高级结构重新确认且全部风险门通过，仍可按结构加仓。类二买只作为标准二买加分标签。"
     )
 
 

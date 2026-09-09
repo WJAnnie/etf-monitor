@@ -112,14 +112,30 @@ def _latest_child_signal_after(raw: dict, confirmation) -> dict | None:
 
 
 def _execution_structure_ok(analysis: dict, candidate: dict) -> tuple[bool, list[str], dict[str, str]]:
+    """把“5分钟执行确认”落成可验证状态，而不是把“没有卖点”误当作确认。
+
+    CONFIRMED：主买点仍在触发/准备区，低级别没有更新卖点冲突，且5分钟满足：
+      1) 主买点确认后出现新的正式BUY；或
+      2) 当前5分钟技术状态为SUPPORT。
+    WAITING：没有冲突，但价格已离触发区，或5分钟仍缺少正向确认。
+    CONFLICT：主买点之后低级别最新正式结构为SELL，或5分钟技术状态PAUSE。
+    UNVERIFIABLE：缺少主买点确认时间或5分钟有效分析结果。
+
+    5分钟BUY只作为执行证据，绝不能自己升级成主买点。
+    """
     confirmation = _parse_iso(candidate.get("signal_confirmation_time"))
     if confirmation is None:
-        return True, [], {}
+        return False, ["主买点确认时间缺失，无法验证5分钟执行条件"], {"5m_execution": "UNVERIFIABLE"}
+
     conflicts: list[str] = []
     latest_states: dict[str, str] = {}
+    latest_by_child: dict[str, dict | None] = {}
+    timeframes = analysis.get("timeframes") or {}
+
     for child in _child_execution_timeframes(str(candidate.get("timeframe") or "")):
-        raw = (analysis.get("timeframes") or {}).get(child) or {}
+        raw = timeframes.get(child) or {}
         latest = _latest_child_signal_after(raw, confirmation)
+        latest_by_child[child] = latest
         if latest is None:
             latest_states[child] = "无更新正式买卖点"
             continue
@@ -128,7 +144,41 @@ def _execution_structure_ok(analysis: dict, candidate: dict) -> tuple[bool, list
         latest_states[child] = f"{side}:{'/'.join(labels) or '结构信号'}"
         if side == "SELL":
             conflicts.append(f"{TIMEFRAME_POLICY[Timeframe(child)].chinese_name}最新正式结构仍为卖点")
-    return not conflicts, conflicts, latest_states
+
+    five_raw = timeframes.get("5m") or {}
+    five_status = str(five_raw.get("status") or "")
+    five_technical = str(((five_raw.get("technical") or {}).get("confirmation") or ""))
+    latest_states["5m_technical"] = five_technical or "NONE"
+
+    if five_status not in {"OK", "UNRESOLVED"}:
+        conflicts.append("5分钟分析结果不可用，无法验证执行确认")
+        latest_states["5m_execution"] = "UNVERIFIABLE"
+        return False, conflicts, latest_states
+
+    if five_technical == "PAUSE":
+        conflicts.append("5分钟技术状态为PAUSE，当前执行暂停")
+
+    if conflicts:
+        latest_states["5m_execution"] = "CONFLICT"
+        return False, conflicts, latest_states
+
+    maturity = str(candidate.get("execution_maturity") or "NOT_READY")
+    if maturity not in {"TRIGGERED", "PREPARE"}:
+        conflicts.append(f"当前价格执行成熟度为{maturity}，不在主买点触发/准备区")
+        latest_states["5m_execution"] = "WAITING_PRICE"
+        return False, conflicts, latest_states
+
+    latest_five = latest_by_child.get("5m")
+    formal_buy = bool(latest_five and str(latest_five.get("side") or "") == "BUY")
+    technical_support = five_technical == "SUPPORT"
+    if formal_buy or technical_support:
+        source = "FORMAL_BUY" if formal_buy else "TECH_SUPPORT"
+        latest_states["5m_execution"] = f"CONFIRMED:{source}"
+        return True, [], latest_states
+
+    conflicts.append("5分钟没有主买点确认后的新正式买点，且当前技术状态未达到SUPPORT，执行确认仍在等待")
+    latest_states["5m_execution"] = "WAITING_5M_CONFIRMATION"
+    return False, conflicts, latest_states
 
 
 def _find_primary_signal_raw(analysis: dict, candidate: dict) -> dict | None:
@@ -299,13 +349,19 @@ def analyze_symbol_v3(symbol, industry_map, *, as_of, equity):
     candidate["execution_structure_ok"] = execution_ok
     candidate["execution_conflicts"] = conflicts
     candidate["execution_latest_states"] = latest_states
+    candidate["execution_confirmation_state"] = latest_states.get("5m_execution", "UNVERIFIABLE")
     if not execution_ok:
         candidate["push"] = False
         candidate["action"] = "OBSERVE"
-        candidate["recent_signal_note"] = "高周期买点仍有效，但低级别最新正式结构为卖点，等待新的执行买点/确认"
+        state = str(candidate.get("execution_confirmation_state") or "UNVERIFIABLE")
+        candidate["recent_signal_note"] = (
+            f"主买点结构仍保留，但5分钟执行状态为{state}；"
+            + ("；".join(conflicts) if conflicts else "等待新的可验证执行确认")
+        )
         blockers = list(candidate.get("blockers") or [])
-        if "EXECUTION_STRUCTURE_CONFLICT" not in blockers:
-            blockers.append("EXECUTION_STRUCTURE_CONFLICT")
+        blocker = "EXECUTION_STRUCTURE_CONFLICT" if state == "CONFLICT" else "EXECUTION_CONFIRMATION_PENDING"
+        if blocker not in blockers:
+            blockers.append(blocker)
         candidate["blockers"] = blockers
 
     industry_events = _events_for_symbol(symbol, industry_map)
@@ -351,7 +407,7 @@ def analyze_symbol_v3(symbol, industry_map, *, as_of, equity):
     candidate["pe"] = symbol.get("pe")
     candidate["pb"] = symbol.get("pb")
     candidate["stop_logic"] = f"止损跟随{candidate.get('timeframe','主结构')}买点/中枢失效；单根5分钟影线或短线卖点不能直接否定更高周期核心结构。"
-    candidate["add_plan"] = "首笔后只有出现新的同级或更高级确认买点/结构升级，且保护位能够抬高或保持，才允许第二笔/趋势加仓；禁止因为价格下跌而机械补仓。"
+    candidate["add_plan"] = "首笔后只有出现新的同级或更高级标准二买/三买或结构升级，且保护位能够抬高或保持，才允许第二笔/趋势加仓；价格低于持仓成本不自动否决，但单纯为了摊低成本的机械补仓禁止。"
     candidate["take_profit_plan"] = "不设固定盈利百分比止盈；5分钟/30分钟卖点先处理试仓和战术仓，120分钟卖点逐级降低确认仓，日线二卖开始分批减核心仓，日线三卖或周线战略结构失效退出。"
     return analysis, candidate
 
