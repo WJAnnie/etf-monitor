@@ -27,6 +27,9 @@ def validate_raw_bars(raw_bars: list[RawBar] | tuple[RawBar, ...], tick_size: De
     prev_ts = None
     symbol = sorted_bars[0].symbol
     timeframe = sorted_bars[0].timeframe
+    price_bases = {str(bar.adjustment or "unknown").lower() for bar in sorted_bars}
+    if "mixed" in price_bases or len(price_bases) > 1:
+        reasons.append("PRICE_BASIS_MIXED")
 
     for bar in sorted_bars:
         if bar.symbol != symbol:
