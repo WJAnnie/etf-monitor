@@ -64,7 +64,6 @@ def build_cross_market_candidates(all_stocks: list[dict], *, existing_codes: set
             continue
         if live_amount_available and amount < 50_000_000:
             continue
-        # 只做“值得看结构”的轻筛：既不追60日暴涨，也不要求今天必须大涨。
         if ch60 < -18 or ch60 > 32 or pct < -5.5 or pct > 7.0:
             continue
         liquidity = min(25.0, math.log10(max(amount, 1.0)) * 3.0) if live_amount_available else 12.0
@@ -126,12 +125,15 @@ def main() -> int:
 
     raw_leaders = []
     member_errors: list[dict] = []
-    for industry in selected:
-        try:
-            members = fetch_industry_members_v2(industry.code)
-            raw_leaders.extend(rank_industry_leaders(members, industry=industry, limit=args.leaders_per_industry))
-        except Exception as exc:
-            member_errors.append({"industry": industry.name, "code": industry.code, "error": str(exc)})
+    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, max(1, len(selected)))) as pool:
+        futures = {pool.submit(fetch_industry_members_v2, industry.code): industry for industry in selected}
+        for future in as_completed(futures):
+            industry = futures[future]
+            try:
+                members = future.result()
+                raw_leaders.extend(rank_industry_leaders(members, industry=industry, limit=args.leaders_per_industry))
+            except Exception as exc:
+                member_errors.append({"industry": industry.name, "code": industry.code, "error": str(exc)})
 
     dedup_leaders = {}
     for item in raw_leaders:
