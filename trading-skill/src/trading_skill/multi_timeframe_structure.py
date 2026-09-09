@@ -462,8 +462,15 @@ def evaluate_lower_context(
             saw_pullback = True
             continue
         if side == "BUY":
-            child_states.append((timeframe, f"ALIGNED:{signal_type or 'BUY'}"))
-            saw_aligned = True
+            if snapshot.phase in {StructurePhase.BULL_TREND, StructurePhase.BREAKOUT_UP}:
+                child_states.append((timeframe, f"ALIGNED:{signal_type or 'BUY'}"))
+                saw_aligned = True
+            else:
+                child_states.append((timeframe, f"MIXED:BUY_IN_{snapshot.phase.value}"))
+                reasons.append(
+                    f"{timeframe.value}虽出现新BUY，但当前结构仍为{snapshot.phase.value}；只能视为转折尝试，不能单独完成执行确认"
+                )
+                saw_neutral = True
             continue
 
         if snapshot.phase in {
