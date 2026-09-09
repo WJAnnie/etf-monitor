@@ -7,7 +7,6 @@ from typing import Any, Mapping, Sequence
 
 from trading_skill.domain.enums import ChanSignalType, SignalState, Timeframe
 from trading_skill.multi_timeframe_structure import StructurePhase, build_structure_book
-from trading_skill.strategy_policy import STANDARD_BUY_PRIORITY
 
 
 class SignalLifecycleStage(StrEnum):
@@ -35,7 +34,6 @@ class LowerTimeframeState(StrEnum):
 
 # “仍适合作为新的当前机会”的观察窗，不是4A缠论定义，也不是结构止损。
 # 用完成K线根数而不是自然日/小时，避免周末、节假日、停牌让相同结构拥有不同寿命。
-# 大致对应：周线8周、日线20个交易日、120m约10个交易日、30m约3个交易日、5m约1个交易日。
 SIGNAL_ENTRY_WINDOW_BARS: dict[Timeframe, int] = {
     Timeframe.WEEKLY: 8,
     Timeframe.DAILY: 20,
@@ -43,6 +41,14 @@ SIGNAL_ENTRY_WINDOW_BARS: dict[Timeframe, int] = {
     Timeframe.M30: 24,
     Timeframe.M5: 48,
 }
+
+# 只有“同一确认时刻”出现多个BUY时才使用这个语义顺序解并列。
+# 它不是综合分，也不参与跨周期机会排序。
+SAME_TIME_BUY_TIE_BREAK = (
+    ChanSignalType.SECOND_BUY,
+    ChanSignalType.THIRD_BUY,
+    ChanSignalType.FIRST_BUY,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -374,19 +380,17 @@ def evaluate_signal_lifecycle(
     return TimeframeSignalLifecycle(timeframe=timeframe, records=tuple(records))
 
 
-def _buy_type_priority(record: SignalLifecycleRecord) -> int:
-    priorities: list[int] = []
-    for raw in record.standard_types:
-        try:
-            kind = ChanSignalType(raw)
-        except ValueError:
-            continue
-        priorities.append(STANDARD_BUY_PRIORITY.get(kind, 0))
-    return max(priorities, default=0)
+def _same_time_buy_choice(records: Sequence[SignalLifecycleRecord]) -> SignalLifecycleRecord:
+    """同一确认时刻的BUY只按标准买点语义解并列，不制造数值分数。"""
+    for kind in SAME_TIME_BUY_TIE_BREAK:
+        matches = [record for record in records if kind.value in record.standard_types]
+        if matches:
+            return max(matches, key=lambda record: record.signal_id)
+    return max(records, key=lambda record: record.signal_id)
 
 
 def current_signal(records: Sequence[SignalLifecycleRecord], *, side: str) -> SignalLifecycleRecord | None:
-    """先取最新结构；买点类别优先级只处理同一确认时刻的并列。"""
+    """先取最新确认时刻；只有同一时刻并列BUY才按语义顺序解并列。"""
     eligible = [
         record for record in records
         if record.side == side
@@ -395,12 +399,12 @@ def current_signal(records: Sequence[SignalLifecycleRecord], *, side: str) -> Si
     ]
     if not eligible:
         return None
+
+    latest_confirmation = max(record.confirmation_timestamp for record in eligible if record.confirmation_timestamp)
+    latest = [record for record in eligible if record.confirmation_timestamp == latest_confirmation]
     if side == "BUY":
-        return max(
-            eligible,
-            key=lambda record: (record.confirmation_timestamp, _buy_type_priority(record), record.signal_id),
-        )
-    return max(eligible, key=lambda record: (record.confirmation_timestamp, record.signal_id))
+        return _same_time_buy_choice(latest)
+    return max(latest, key=lambda record: record.signal_id)
 
 
 def build_signal_lifecycle_book(
