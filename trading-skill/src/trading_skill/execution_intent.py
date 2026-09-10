@@ -37,6 +37,7 @@ class ExecutionIntent:
     market: int
     code: str
     security_type: str
+    # signal_id/timeframe remain the authority identity for compatibility.
     signal_id: str
     timeframe: str
     signal_type: str
@@ -44,6 +45,7 @@ class ExecutionIntent:
     quantity: int
     lot_size: int
     planned_entry_price: Decimal
+    # Compatibility name: initial TEST order risk uses the 5m execution stop.
     structural_stop_price: Decimal
     risk_per_unit: Decimal
     allocated_value_cny: Decimal
@@ -52,6 +54,9 @@ class ExecutionIntent:
     reservation_key: str
     state: IntentState
     reservation_id: str | None
+    authority_stop_price: Decimal
+    execution_stop_signal_id: str
+    execution_stop_timeframe: str
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -59,6 +64,7 @@ class ExecutionIntent:
         for key in (
             "planned_entry_price",
             "structural_stop_price",
+            "authority_stop_price",
             "risk_per_unit",
             "allocated_value_cny",
             "allocated_risk_cny",
@@ -162,8 +168,7 @@ def _allocated_rows(allocation_payload: Mapping[str, Any]) -> tuple[Mapping[str,
     allocated = [
         row
         for row in allocations
-        if isinstance(row, Mapping)
-        and str(row.get("state") or "") in {"ALLOCATED_FULL", "ALLOCATED_PARTIAL"}
+        if isinstance(row, Mapping) and str(row.get("state") or "") in {"ALLOCATED_FULL", "ALLOCATED_PARTIAL"}
     ]
     return plan, allocated
 
@@ -190,9 +195,12 @@ def _validate_source_pair(
 
     sizing = sizing_row.get("sizing")
     permission = sizing_row.get("permission")
-    stop = sizing_row.get("structural_stop")
-    if not isinstance(sizing, Mapping) or not isinstance(permission, Mapping) or not isinstance(stop, Mapping):
-        raise ValueError(f"{identity}:STEP5B缺少sizing/permission/structural_stop")
+    authority = sizing_row.get("authority_stop") or sizing_row.get("structural_stop")
+    execution = sizing_row.get("execution_stop")
+    if not all(isinstance(item, Mapping) for item in (sizing, permission, authority, execution)):
+        raise ValueError(f"{identity}:STEP5B缺少sizing/permission/authority_stop/execution_stop")
+    assert isinstance(sizing, Mapping) and isinstance(permission, Mapping)
+    assert isinstance(authority, Mapping) and isinstance(execution, Mapping)
     if permission.get("new_entry_allowed") is not True:
         raise ValueError(f"{identity}:STEP5C分配来源未获STEP5A新开仓许可")
 
@@ -203,10 +211,11 @@ def _validate_source_pair(
         raise ValueError(f"{identity}:STEP5C数量突破STEP5B envelope或lot_size")
 
     entry = _decimal(sizing.get("planned_entry_price"), label=f"{identity}.planned_entry_price", positive=True)
-    stop_price = _decimal(sizing.get("structural_stop_price"), label=f"{identity}.structural_stop_price", positive=True)
+    execution_stop_price = _decimal(sizing.get("structural_stop_price"), label=f"{identity}.execution_stop_price", positive=True)
+    authority_stop_price = _decimal(sizing.get("authority_stop_price"), label=f"{identity}.authority_stop_price", positive=True)
     risk_per_unit = _decimal(sizing.get("risk_per_unit"), label=f"{identity}.risk_per_unit", positive=True)
-    if entry - stop_price != risk_per_unit:
-        raise ValueError(f"{identity}:entry-stop与risk_per_unit不一致")
+    if entry - execution_stop_price != risk_per_unit:
+        raise ValueError(f"{identity}:entry-5m_execution_stop与risk_per_unit不一致")
 
     allocated_entry = _decimal(allocation.get("entry_price"), label=f"{identity}.allocation.entry_price", positive=True)
     allocated_unit_risk = _decimal(allocation.get("risk_per_unit"), label=f"{identity}.allocation.risk_per_unit", positive=True)
@@ -217,21 +226,40 @@ def _validate_source_pair(
     if allocated_value != Decimal(quantity) * entry:
         raise ValueError(f"{identity}:STEP5C allocated_value与数量×计划价不一致")
     if allocated_risk != Decimal(quantity) * risk_per_unit:
-        raise ValueError(f"{identity}:STEP5C allocated_risk与数量×结构风险不一致")
+        raise ValueError(f"{identity}:STEP5C allocated_risk与数量×5分钟执行风险不一致")
 
     timeframe = str(permission.get("selected_timeframe") or "").strip()
     signal_id = str(permission.get("signal_id") or "").strip()
     signal_type = str(permission.get("signal_type") or "").strip()
     entry_mode = str(permission.get("entry_mode") or "").strip()
-    if not timeframe or not signal_id or not signal_type or entry_mode not in {"STANDARD", "TEST"}:
-        raise ValueError(f"{identity}:STEP5A主信号身份不完整")
-    if str(stop.get("timeframe") or "") != timeframe or str(stop.get("signal_id") or "") != signal_id:
-        raise ValueError(f"{identity}:结构止损没有绑定同一signal_id/timeframe")
-    if stop.get("valid_for_new_entry") is not True:
-        raise ValueError(f"{identity}:结构止损未通过新开仓有效性验证")
-    stop_evidence_price = _decimal(stop.get("stop_price"), label=f"{identity}.stop_evidence_price", positive=True)
-    if stop_evidence_price != stop_price:
-        raise ValueError(f"{identity}:STEP5B stop_price与结构止损证据不一致")
+    if timeframe != "daily" or signal_type != "SECOND_BUY" or entry_mode != "STANDARD" or not signal_id:
+        raise ValueError(f"{identity}:STEP5A必须是日线SECOND_BUY STANDARD授权")
+
+    if (
+        authority.get("valid_for_new_entry") is not True
+        or str(authority.get("timeframe") or "") != "daily"
+        or str(authority.get("signal_id") or "") != signal_id
+    ):
+        raise ValueError(f"{identity}:authority stop没有绑定日线授权signal_id")
+    if (
+        execution.get("valid_for_new_entry") is not True
+        or str(execution.get("timeframe") or "") != "5m"
+        or str(execution.get("authority_signal_id") or "") != signal_id
+    ):
+        raise ValueError(f"{identity}:execution stop没有绑定当前日线authority")
+
+    execution_signal_id = str(execution.get("signal_id") or "").strip()
+    if not execution_signal_id or str(sizing.get("execution_stop_signal_id") or "") != execution_signal_id:
+        raise ValueError(f"{identity}:STEP5B execution stop signal_id与证据不一致")
+    if str(sizing.get("authority_signal_id") or "") != signal_id:
+        raise ValueError(f"{identity}:STEP5B authority_signal_id与permission不一致")
+
+    authority_evidence_price = _decimal(authority.get("stop_price"), label=f"{identity}.authority_evidence_price", positive=True)
+    execution_evidence_price = _decimal(execution.get("stop_price"), label=f"{identity}.execution_evidence_price", positive=True)
+    if authority_evidence_price != authority_stop_price:
+        raise ValueError(f"{identity}:STEP5B authority_stop_price与日线证据不一致")
+    if execution_evidence_price != execution_stop_price:
+        raise ValueError(f"{identity}:STEP5B execution_stop_price与5分钟证据不一致")
 
     market = sizing_row.get("market")
     assert isinstance(market, int) and not isinstance(market, bool)
@@ -241,13 +269,16 @@ def _validate_source_pair(
         "code": str(sizing_row.get("code") or ""),
         "security_type": str(sizing_row.get("security_type") or ""),
         "signal_id": signal_id,
-        "timeframe": timeframe,
-        "signal_type": signal_type,
-        "entry_mode": entry_mode,
+        "timeframe": "daily",
+        "signal_type": "SECOND_BUY",
+        "entry_mode": "STANDARD",
+        "execution_stop_signal_id": execution_signal_id,
+        "execution_stop_timeframe": "5m",
         "quantity": quantity,
         "lot_size": lot_size,
         "planned_entry_price": _decimal_text(entry),
-        "structural_stop_price": _decimal_text(stop_price),
+        "structural_stop_price": _decimal_text(execution_stop_price),
+        "authority_stop_price": _decimal_text(authority_stop_price),
         "risk_per_unit": _decimal_text(risk_per_unit),
         "allocated_value_cny": _decimal_text(allocated_value),
         "allocated_risk_cny": _decimal_text(allocated_risk),
@@ -255,11 +286,7 @@ def _validate_source_pair(
 
 
 def _canonical_plan_payload(snapshot_id: str, items: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    return {
-        "snapshot_id": snapshot_id,
-        # Preserve STEP5C allocation order: order is an explicit external decision and part of plan identity.
-        "intents": [dict(item) for item in items],
-    }
+    return {"snapshot_id": snapshot_id, "intents": [dict(item) for item in items]}
 
 
 def _reservation_key(snapshot_id: str, items: Sequence[Mapping[str, Any]]) -> str:
@@ -303,20 +330,11 @@ def build_execution_reservation_plan(
     sizing_rows: Sequence[Mapping[str, Any]],
     reservation_context: Mapping[str, Any] | None,
 ) -> ReservationPlan:
-    """STEP5D: bind a STEP5C allocation to an immutable, CAS-ready execution intent bundle.
-
-    This function deliberately does not write a ledger and does not place an order. A plan is
-    `READY_TO_RESERVE` only after an external durable store reports the same current snapshot ID.
-    It becomes `RESERVED` only when an exact durable receipt is supplied back and validated.
-    """
+    """STEP5D: bind STEP5C allocation to an immutable CAS-ready execution bundle."""
     try:
         plan, allocated = _allocated_rows(allocation_payload)
     except ValueError as exc:
-        return _context_problem(
-            ReservationPlanState.CONTRACT_INVALID,
-            ReservationBlocker.ALLOCATION_CONTRACT_INVALID,
-            str(exc),
-        )
+        return _context_problem(ReservationPlanState.CONTRACT_INVALID, ReservationBlocker.ALLOCATION_CONTRACT_INVALID, str(exc))
 
     if not allocated:
         if str(plan.get("state") or "") not in {"NO_ELIGIBLE", "ALLOCATED"}:
@@ -386,9 +404,6 @@ def build_execution_reservation_plan(
             current_snapshot_id=current_snapshot_id or None,
         )
 
-    # Idempotency lookup comes before freshness rejection. A successful CAS reservation should
-    # advance the durable snapshot. Retrying the exact same request after that advance must return
-    # the existing receipt rather than incorrectly calling the already-completed plan stale.
     receipt = existing.get(key)
     reservation_id: str | None = None
     final_state = ReservationPlanState.READY_TO_RESERVE
@@ -403,12 +418,7 @@ def build_execution_reservation_plan(
                 current_snapshot_id=current_snapshot_id,
             )
         try:
-            reservation_id = _validate_receipt(
-                receipt,
-                reservation_key=key,
-                snapshot_id=snapshot_id,
-                items=intent_specs,
-            )
+            reservation_id = _validate_receipt(receipt, reservation_key=key, snapshot_id=snapshot_id, items=intent_specs)
         except ValueError as exc:
             return _context_problem(
                 ReservationPlanState.CONTRACT_INVALID,
@@ -441,7 +451,7 @@ def build_execution_reservation_plan(
             quantity=int(item["quantity"]),
             lot_size=int(item["lot_size"]),
             planned_entry_price=_decimal(item["planned_entry_price"], label="intent.entry", positive=True),
-            structural_stop_price=_decimal(item["structural_stop_price"], label="intent.stop", positive=True),
+            structural_stop_price=_decimal(item["structural_stop_price"], label="intent.execution_stop", positive=True),
             risk_per_unit=_decimal(item["risk_per_unit"], label="intent.risk_per_unit", positive=True),
             allocated_value_cny=_decimal(item["allocated_value_cny"], label="intent.value", positive=True),
             allocated_risk_cny=_decimal(item["allocated_risk_cny"], label="intent.risk", positive=True),
@@ -449,6 +459,9 @@ def build_execution_reservation_plan(
             reservation_key=key,
             state=intent_state,
             reservation_id=reservation_id,
+            authority_stop_price=_decimal(item["authority_stop_price"], label="intent.authority_stop", positive=True),
+            execution_stop_signal_id=item["execution_stop_signal_id"],
+            execution_stop_timeframe=item["execution_stop_timeframe"],
         )
         for item in intent_specs
     )
@@ -456,7 +469,7 @@ def build_execution_reservation_plan(
     reason = (
         "外部持久化store已返回与当前计划完全一致的reservation receipt；幂等重跑复用同一reservation_id"
         if final_state is ReservationPlanState.RESERVED
-        else "snapshot仍与STEP5C一致；已生成不可变reservation bundle，等待外部store用CAS原子预留共享现金/风险容量"
+        else "snapshot仍与STEP5C一致；已生成日线authority+5分钟execution双身份的不可变reservation bundle，等待外部store用CAS原子预留共享容量"
     )
     return ReservationPlan(
         state=final_state,
