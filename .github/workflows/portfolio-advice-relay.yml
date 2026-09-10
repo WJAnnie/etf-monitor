@@ -21,12 +21,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      FEISHU_WEBHOOK: \${{ secrets.FEISHU_WEBHOOK }}
-      FEISHU_SECRET: \${{ secrets.FEISHU_SECRET }}
-      FEISHU_APP_ID: \${{ secrets.FEISHU_APP_ID }}
-      FEISHU_APP_SECRET: \${{ secrets.FEISHU_APP_SECRET }}
+      FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+      FEISHU_SECRET: ${{ secrets.FEISHU_SECRET }}
+      FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+      FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
       FEISHU_CHAT_ID: oc_9df5fff3a390da378fc2714fdb2ea541
-      SERVERCHAN_SENDKEY: \${{ secrets.SERVERCHAN_SENDKEY }}
+      SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
       PIPELINE_STATUS_PATH: data/pipeline_status.json
       MARKET_SUMMARY_PATH: data/latest_market_summary.json
 
@@ -50,7 +50,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: portfolio-pipeline-status-\${{ github.run_id }}
+          name: portfolio-pipeline-status-${{ github.run_id }}
           path: data/pipeline_status.json
           if-no-files-found: error
 
