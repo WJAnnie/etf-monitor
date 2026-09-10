@@ -30,6 +30,7 @@ _HARD_CONTEXT_BLOCKERS = {
     "PARENT_CONTEXT_INVALID",
     "DATA_INCOMPLETE",
     "INDUSTRY_MAJOR_NEGATIVE_EVENT",
+    "INDUSTRY_EVENT_CONTEXT_UNAVAILABLE",
     "INDUSTRY_CONTEXT_INCOMPLETE",
     "CORE_STRUCTURAL_STOP_UNDEFINED",
     "TECHNICAL_EXECUTION_PAUSED",
@@ -383,14 +384,22 @@ def _independent_context_blockers(
         if status not in {"OK", "UNRESOLVED"}:
             blockers.append("DATA_INCOMPLETE")
             break
-    if str(symbol.get("industry_event_risk") or "NORMAL") == "HIGH":
+
+    event_risk = str(symbol.get("industry_event_risk") or "UNKNOWN")
+    event_context_complete = symbol.get("industry_event_context_complete") is True
+    if event_risk == "HIGH":
         blockers.append("INDUSTRY_MAJOR_NEGATIVE_EVENT")
+    elif event_risk == "UNKNOWN" or not event_context_complete:
+        blockers.append("INDUSTRY_EVENT_CONTEXT_UNAVAILABLE")
+
     if symbol.get("industry_context_complete") is False:
         blockers.append("INDUSTRY_CONTEXT_INCOMPLETE")
     if signal_type == ChanSignalType.SECOND_BUY.value:
         if not authority_signal or int(authority_signal.get("structural_price_ticks") or 0) <= 0:
             blockers.append("CORE_STRUCTURAL_STOP_UNDEFINED")
-    five_technical = str(((((analysis.get("timeframes") or {}).get("5m") or {}).get("technical") or {}).get("confirmation") or ""))
+    five_technical = str(
+        (((((analysis.get("timeframes") or {}).get("5m") or {}).get("technical") or {}).get("confirmation") or ""))
+    )
     if five_technical == "PAUSE":
         blockers.append("TECHNICAL_EXECUTION_PAUSED")
     return list(dict.fromkeys(blockers))
@@ -447,6 +456,10 @@ def analyze_symbol_v2(symbol, industry_map, *, as_of, equity):
     candidate["prospect_theme"] = symbol.get("prospect_theme")
     candidate["industry_selection_reason"] = symbol.get("industry_selection_reason")
     candidate["candidate_route"] = symbol.get("candidate_route")
+    candidate["daily_priority_score"] = symbol.get("daily_priority_score")
+    candidate["actual_industry_name"] = symbol.get("actual_industry_name")
+    candidate["industry_context_complete"] = symbol.get("industry_context_complete")
+    candidate["industry_context_note"] = symbol.get("industry_context_note")
     candidate["fundamental_grade"] = prefilter.get("grade")
     candidate["industry_metric_policy"] = prefilter.get("industry_policy")
     candidate["industry_valuation_focus"] = list(prefilter.get("valuation_focus") or [])
@@ -455,6 +468,7 @@ def analyze_symbol_v2(symbol, industry_map, *, as_of, equity):
     candidate["latest_financial_report"] = (prefilter.get("latest") or {}).get("report_date")
     candidate["industry_event_risk"] = symbol.get("industry_event_risk")
     candidate["industry_event_score"] = symbol.get("industry_event_score")
+    candidate["industry_event_context_complete"] = symbol.get("industry_event_context_complete")
 
     # Keep legacy score/risk only as diagnostic observations. They do not define Chan,
     # new-entry authority or TEST size after this point.
@@ -480,9 +494,7 @@ def analyze_symbol_v2(symbol, industry_map, *, as_of, equity):
     authority_anchor = _authority_anchor(authority_signal, as_of=as_of)
     core_stop_ticks = int((authority_signal or {}).get("structural_price_ticks") or 0) or None
     candidate["authority_signal_id"] = (authority_signal or {}).get("id")
-    candidate["authority_structural_time"] = (
-        authority_anchor.isoformat() if authority_anchor else None
-    )
+    candidate["authority_structural_time"] = authority_anchor.isoformat() if authority_anchor else None
 
     structural_maturity, hierarchy_reasons, execution_evidence = _structural_execution_maturity(
         analysis,
@@ -536,6 +548,9 @@ def analyze_symbol_v2(symbol, industry_map, *, as_of, equity):
     blockers = list(dict.fromkeys(independent_blockers + hierarchy_reasons))
     candidate["blockers"] = blockers
     hard_blocked = bool(set(blockers) & _HARD_CONTEXT_BLOCKERS)
+    candidate["cautions"] = []
+    if str(symbol.get("industry_event_risk") or "UNKNOWN") == "CAUTION":
+        candidate["cautions"].append("行业近期存在重要负向事件，但尚未达到重大利空硬阻断；保留谨慎标签")
 
     if signal_type == ChanSignalType.FIRST_BUY.value:
         candidate["action"] = "WAIT_2B"
@@ -550,7 +565,7 @@ def analyze_symbol_v2(symbol, industry_map, *, as_of, equity):
     elif hard_blocked:
         candidate["action"] = "OBSERVE"
         candidate["push"] = False
-        candidate["recent_signal_note"] = "日线二买结构保留，但基本面/事件/周线/数据/技术暂停等独立门槛未通过，不允许新开仓"
+        candidate["recent_signal_note"] = "日线二买结构保留，但基本面/事件/事件数据完整性/周线/数据/技术暂停等独立门槛未通过，不允许新开仓"
         candidate["trade_permission_state"] = "BLOCKED_OR_CONTEXT_REQUIRED"
     elif final_maturity == "WATCH":
         candidate["action"] = "OBSERVE"
@@ -563,8 +578,6 @@ def analyze_symbol_v2(symbol, industry_map, *, as_of, equity):
         candidate["recent_signal_note"] = "日线二买有效，120m与30m结构已确认；等待当前日线结构内新的5分钟正式BUY触发，或等待更合适价格"
         candidate["trade_permission_state"] = "WAIT_EXECUTION_OR_CONTEXT"
     else:
-        # A completed structural chain is report-worthy, but not an actual broker order.
-        # Account permission/portfolio capacity/explicit TEST risk still belong to STEP5A/B.
         candidate["action"] = "PREPARE_BUY"
         candidate["push"] = True
         candidate["recent_signal_note"] = "日线二买授权与120m→30m→5m正式结构链已完成；结构机会成立，但真实下单仍需STEP5A/B账户与风险上下文"
