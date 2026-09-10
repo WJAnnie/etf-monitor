@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import time
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
@@ -26,6 +27,44 @@ from trading_skill.market_universe import SecurityType, TradePermissions, build_
 # 东方财富 ETF 与 LOF 是两套独立板块。MK0021~24/MK0827 属于 ETF；LOF 使用 MK0404~0407。
 ETF_FS = "b:MK0021,b:MK0022,b:MK0023,b:MK0024,b:MK0827"
 LOF_FS = "b:MK0404,b:MK0405,b:MK0406,b:MK0407"
+MIN_BATCH_PRICE_COVERAGE = 0.80
+SEMANTIC_PRICE_RETRIES = 3
+
+
+def _valid_price(value: object) -> bool:
+    if value in (None, "", "-"):
+        return False
+    try:
+        return float(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _price_coverage(rows: list[dict]) -> float:
+    if not rows:
+        return 0.0
+    return sum(1 for row in rows if _valid_price(row.get("f2"))) / len(rows)
+
+
+def fetch_paginated_price_healthy(
+    fs: str,
+    fields: str,
+    *,
+    fid: str,
+    max_pages: int | None = None,
+    min_coverage: float = MIN_BATCH_PRICE_COVERAGE,
+) -> list[dict]:
+    """HTTP成功不等于行情可用；关键价格字段必须达到批量语义健康阈值。"""
+    diagnostics: list[str] = []
+    for attempt in range(SEMANTIC_PRICE_RETRIES):
+        rows = fetch_paginated(fs, fields, fid=fid, max_pages=max_pages)
+        coverage = _price_coverage(rows)
+        if rows and coverage >= min_coverage:
+            return rows
+        diagnostics.append(f"attempt={attempt + 1},rows={len(rows)},price_coverage={coverage:.1%}")
+        if attempt + 1 < SEMANTIC_PRICE_RETRIES:
+            time.sleep(2.0 * (attempt + 1))
+    raise RuntimeError("批量行情语义不健康:" + ";".join(diagnostics))
 
 
 def fetch_raw_stock_rows() -> tuple[list[dict], str, list[str]]:
@@ -33,12 +72,12 @@ def fetch_raw_stock_rows() -> tuple[list[dict], str, list[str]]:
     errors: list[str] = []
     for fs in A_SHARE_MARKETS:
         try:
-            rows.extend(fetch_paginated(fs, STOCK_FIELDS, fid="f3"))
+            rows.extend(fetch_paginated_price_healthy(fs, STOCK_FIELDS, fid="f3"))
         except Exception as exc:
             errors.append(f"东方财富[{fs}]:{exc}")
             rows = []
             break
-    if len(rows) >= 4000:
+    if len(rows) >= 4000 and _price_coverage(rows) >= MIN_BATCH_PRICE_COVERAGE:
         return rows, "东方财富分市场原始证券", errors
 
     # 备用源只保留真实提供的字段；缺少60日/年内涨幅时必须是None，绝不伪造为0。
@@ -78,9 +117,12 @@ def fetch_raw_stock_rows() -> tuple[list[dict], str, list[str]]:
                     "f25": None,
                 }
             )
-    if len(sina_rows) >= 4000:
+    if len(sina_rows) >= 4000 and _price_coverage(sina_rows) >= MIN_BATCH_PRICE_COVERAGE:
         return sina_rows, "新浪全A原始证券兜底", errors
-    raise RuntimeError(f"股票主备数据源均不足：东财={len(rows)} 新浪={len(sina_rows)}")
+    raise RuntimeError(
+        f"股票主备数据源均不足或价格语义不健康：东财={len(rows)} 新浪={len(sina_rows)} "
+        f"新浪价格覆盖={_price_coverage(sina_rows):.1%}"
+    )
 
 
 def fetch_exchange_funds() -> tuple[list[dict], list[dict], list[str]]:
@@ -88,18 +130,18 @@ def fetch_exchange_funds() -> tuple[list[dict], list[dict], list[str]]:
     etfs: list[dict] = []
     lofs: list[dict] = []
     try:
-        etfs = fetch_paginated(ETF_FS, STOCK_FIELDS, fid="f6")
+        etfs = fetch_paginated_price_healthy(ETF_FS, STOCK_FIELDS, fid="f6")
     except Exception as exc:
         errors.append(f"ETF:{exc}")
     try:
-        lofs = fetch_paginated(LOF_FS, STOCK_FIELDS, fid="f6")
+        lofs = fetch_paginated_price_healthy(LOF_FS, STOCK_FIELDS, fid="f6")
     except Exception as exc:
         errors.append(f"LOF:{exc}")
     return etfs, lofs, errors
 
 
 def fetch_industry_members(board_code: str) -> list[dict]:
-    return fetch_paginated(f"b:{board_code} f:!50", STOCK_FIELDS, fid="f6", max_pages=4)
+    return fetch_paginated_price_healthy(f"b:{board_code} f:!50", STOCK_FIELDS, fid="f6", max_pages=4)
 
 
 def _rotation_event_map(industry_rows: list[dict], *, now: datetime) -> tuple[dict[str, list[dict]], list[str], int]:
@@ -153,6 +195,9 @@ def main() -> int:
     now = datetime.now(CN_TZ)
     stock_rows, stock_source, stock_errors = fetch_raw_stock_rows()
     etf_rows, lof_rows, fund_errors = fetch_exchange_funds()
+    stock_price_coverage = _price_coverage(stock_rows)
+    etf_price_coverage = _price_coverage(etf_rows)
+    lof_price_coverage = _price_coverage(lof_rows)
     permissions = TradePermissions(
         sh_main=True,
         sz_main=True,
@@ -215,6 +260,9 @@ def main() -> int:
             "step1": "只回答当前账户权限下哪些证券可进入扫描：沪深主板股票+ETF+LOF/其他场内基金；排除科创板、创业板、北交所个股、ST/*ST、退市和无有效行情证券。",
             "step2": "只回答哪些证券值得继续研究；股票走市场强势/刚启动/行业/事件多路线，ETF/场内基金先按资产类别同类比较；不产生基本面最终结论、缠论买点或交易建议。",
             "missing_data_is_never_zero": True,
+            "http_success_does_not_imply_quote_semantic_health": True,
+            "batch_price_coverage_is_validated_before_use": True,
+            "previous_close_is_not_used_as_fake_live_price": True,
             "industry_is_not_hard_stock_gate": True,
             "industry_quality_and_short_term_heat_are_separate": True,
             "quality_industries_rotate_periodically": True,
@@ -229,6 +277,9 @@ def main() -> int:
             "funds": "东方财富ETF(MK0021~24/MK0827)+LOF(MK0404~0407)",
             "stock_errors": stock_errors,
             "fund_errors": fund_errors,
+            "stock_price_coverage_pct": round(stock_price_coverage * 100, 2),
+            "etf_price_coverage_pct": round(etf_price_coverage * 100, 2),
+            "lof_price_coverage_pct": round(lof_price_coverage * 100, 2),
             "industry_member_errors": member_errors,
             "industry_event_errors": event_errors,
             "industry_news_rows": news_count,
@@ -250,6 +301,14 @@ def main() -> int:
         {k: v for k, v in summary["exclusions"].items() if "BOARD_NOT_ALLOWED" in k or k in {"ST", "DELISTING"}},
     )
     print("数据质量:", summary["data_quality"])
+    print(
+        "行情价格覆盖:",
+        {
+            "STOCK": round(stock_price_coverage * 100, 2),
+            "ETF": round(etf_price_coverage * 100, 2),
+            "LOF": round(lof_price_coverage * 100, 2),
+        },
+    )
     print("动态行业分层:", summary["selected_industry_pools"])
     print(
         "动态重点行业:",
@@ -282,6 +341,12 @@ def main() -> int:
             for item in candidates
             if item.security_type is SecurityType.STOCK and item.board in {"STAR", "CHINEXT", "BSE"}
         ]
+        if stock_price_coverage < MIN_BATCH_PRICE_COVERAGE:
+            problems.append(f"股票批量价格覆盖异常:{stock_price_coverage:.1%}")
+        if etf_price_coverage < MIN_BATCH_PRICE_COVERAGE:
+            problems.append(f"ETF批量价格覆盖异常:{etf_price_coverage:.1%}")
+        if lof_price_coverage < MIN_BATCH_PRICE_COVERAGE:
+            problems.append(f"LOF批量价格覆盖异常:{lof_price_coverage:.1%}")
         if raw_stock_count < 4000:
             problems.append(f"原始股票数量异常:{raw_stock_count}")
         if tradeable_stock_count < 2500:
