@@ -128,7 +128,14 @@ jobs:
             --output full-a-results/step5b_entry_sizing_latest.json \
             --strict
 
-      - name: 打印新版STEP1-5B摘要
+      - name: STEP5C 共享组合容量分配验证
+        run: |
+          python -m scripts.analyze_step5c_portfolio_allocation \
+            --sizing full-a-results/step5b_entry_sizing_latest.json \
+            --output full-a-results/step5c_portfolio_allocation_latest.json \
+            --strict
+
+      - name: 打印新版STEP1-5C摘要
         if: always()
         run: |
           python - <<'PY'
@@ -143,6 +150,7 @@ jobs:
           d4=Path('full-a-results/step4_technical_opportunity_latest.json')
           p5=Path('full-a-results/step5_trade_permission_latest.json')
           s5=Path('full-a-results/step5b_entry_sizing_latest.json')
+          a5=Path('full-a-results/step5c_portfolio_allocation_latest.json')
           if c.exists():
               p=json.loads(c.read_text(encoding='utf-8'))
               s=p.get('summary',{})
@@ -184,6 +192,9 @@ jobs:
           if s5.exists():
               p=json.loads(s5.read_text(encoding='utf-8'))
               print('STEP5B摘要=',p.get('summary'))
+          if a5.exists():
+              p=json.loads(a5.read_text(encoding='utf-8'))
+              print('STEP5C摘要=',p.get('summary'))
           PY
 
       - name: Upload new pipeline validation
