@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from decimal import Decimal
 
 from trading_skill.execution_intent import (
     ReservationBlocker,
@@ -62,7 +63,7 @@ def _allocation_payload(*, quantity: int = 1000) -> dict:
                     "industry_key": "银行",
                     "theme_keys": [],
                     "allocated_value_cny": str(quantity * 10),
-                    "allocated_risk_cny": str(quantity * 0.8),
+                    "allocated_risk_cny": str(Decimal(quantity) * Decimal("0.8")),
                     "binding_limits": [],
                     "reason": "test",
                 }
@@ -113,16 +114,16 @@ def test_matching_snapshot_builds_immutable_ready_to_reserve_bundle():
     plan = build_execution_reservation_plan(_allocation_payload(), [_sizing_row()], _reservation_context())
     assert plan.state is ReservationPlanState.READY_TO_RESERVE
     assert plan.reservation_key.startswith("entry-plan:")
-    assert plan.allocated_value_cny == 10000
-    assert plan.allocated_risk_cny == 800
+    assert plan.allocated_value_cny == Decimal("10000")
+    assert plan.allocated_risk_cny == Decimal("800")
     assert len(plan.intents) == 1
     intent = plan.intents[0]
     assert intent.identity == "1:600000:STOCK"
     assert intent.timeframe == "120m"
     assert intent.signal_id == "sig-120-2b"
     assert intent.quantity == 1000
-    assert intent.planned_entry_price == 10
-    assert intent.structural_stop_price == 9.2
+    assert intent.planned_entry_price == Decimal("10")
+    assert intent.structural_stop_price == Decimal("9.2")
     assert intent.reservation_key == plan.reservation_key
     assert intent.reservation_id is None
 
