@@ -29,6 +29,13 @@ PUSH2_HOSTS = (
     "https://73.push2.eastmoney.com/webguest/api/qt/clist/get",
     "https://push2.eastmoney.com/api/qt/clist/get",
 )
+# 东方财富不同市场列表并不总由同一节点稳定提供语义完整的行情。
+# LOF 当前官方行情页/AKShare 适配均以 88 节点作为实时行情主节点，2 节点作为代码映射节点。
+LOF_PUSH2_HOSTS = (
+    "https://88.push2.eastmoney.com/api/qt/clist/get",
+    "https://2.push2.eastmoney.com/api/qt/clist/get",
+    *PUSH2_HOSTS,
+)
 DATACENTER = "https://datacenter-web.eastmoney.com/api/data/v1/get"
 SINA_MARKET_CENTER = "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData"
 A_SHARE_MARKETS = (
@@ -76,9 +83,9 @@ def _get_json(url: str, params: dict[str, object], *, sina: bool = False) -> dic
     raise RuntimeError(f"行情请求失败: {last}")
 
 
-def _push2(params: dict[str, object]) -> dict:
+def _push2(params: dict[str, object], *, hosts: tuple[str, ...] | None = None) -> dict:
     errors: list[str] = []
-    for host in PUSH2_HOSTS:
+    for host in hosts or PUSH2_HOSTS:
         try:
             payload = _get_json(host, params)
             if payload.get("data") is not None:
@@ -88,15 +95,27 @@ def _push2(params: dict[str, object]) -> dict:
     raise RuntimeError("；".join(errors))
 
 
-def _page(params: dict[str, object], page: int) -> tuple[int, list[dict]]:
+def _page(
+    params: dict[str, object],
+    page: int,
+    *,
+    hosts: tuple[str, ...] | None = None,
+) -> tuple[int, list[dict]]:
     query = dict(params)
     query["pn"] = page
-    payload = _push2(query)
+    payload = _push2(query, hosts=hosts)
     diff = ((payload.get("data") or {}).get("diff") or [])
     return page, [row for row in diff if isinstance(row, dict)]
 
 
-def fetch_paginated(fs: str, fields: str, *, fid: str, max_pages: int | None = None) -> list[dict]:
+def fetch_paginated(
+    fs: str,
+    fields: str,
+    *,
+    fid: str,
+    max_pages: int | None = None,
+    hosts: tuple[str, ...] | None = None,
+) -> list[dict]:
     params: dict[str, object] = {
         "pn": 1,
         "pz": PAGE_SIZE,
@@ -109,7 +128,7 @@ def fetch_paginated(fs: str, fields: str, *, fid: str, max_pages: int | None = N
         "fs": fs,
         "fields": fields,
     }
-    first_payload = _push2(params)
+    first_payload = _push2(params, hosts=hosts)
     data = first_payload.get("data") or {}
     first = [row for row in (data.get("diff") or []) if isinstance(row, dict)]
     total = int(data.get("total") or len(first))
@@ -121,7 +140,10 @@ def fetch_paginated(fs: str, fields: str, *, fid: str, max_pages: int | None = N
 
     rows_by_page: dict[int, list[dict]] = {1: first}
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        futures = {pool.submit(_page, params, page): page for page in range(2, pages + 1)}
+        futures = {
+            pool.submit(_page, params, page, hosts=hosts): page
+            for page in range(2, pages + 1)
+        }
         for future in as_completed(futures):
             page, rows = future.result()
             rows_by_page[page] = rows
