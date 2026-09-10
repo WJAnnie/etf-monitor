@@ -4,9 +4,10 @@ from datetime import datetime, timedelta
 
 import scripts.run_full_a_scan as base
 from trading_skill.chan_policy_v2 import INTRADAY_CONFIRM_TYPES, validate_standard_second_buy
-from trading_skill.decision import OpportunityGrade
+from trading_skill.decision import OpportunityGrade, RiskState
 from trading_skill.domain.enums import ChanSignalType, Timeframe
 from trading_skill.position_policy_v2 import staged_position_policy, take_profit_contract
+from trading_skill.sizing import StopCandidate, StopLevel, StopType, TrancheRole, build_position_plan
 
 
 # 买点不要求“刚刚这一根K线才出现”。只要结构尚未失效且上涨幅度不大，仍保留为可执行/准备候选。
@@ -118,21 +119,38 @@ def _fresh_raw_signals(tf_raw: dict, *, timeframe: Timeframe, as_of: datetime, s
     return signals
 
 
-def _raw_has_active_buy(tf_raw: dict, *, timeframe: Timeframe, as_of: datetime) -> bool:
+def _eligible_raw_buys(tf_raw: dict, *, timeframe: Timeframe, as_of: datetime) -> list[dict]:
     buys = _fresh_raw_signals(tf_raw, timeframe=timeframe, as_of=as_of, side="BUY")
-    eligible_buys = [
-        signal
-        for signal in buys
-        if any(ChanSignalType(item) in INTRADAY_CONFIRM_TYPES for item in signal.get("types") or [])
-    ]
+    eligible = []
+    for signal in buys:
+        types = []
+        for item in signal.get("types") or []:
+            try:
+                types.append(ChanSignalType(item))
+            except ValueError:
+                continue
+        if any(kind in INTRADAY_CONFIRM_TYPES for kind in types):
+            eligible.append(signal)
+    return eligible
+
+
+def _latest_active_raw_buy(tf_raw: dict, *, timeframe: Timeframe, as_of: datetime) -> dict | None:
+    eligible_buys = _eligible_raw_buys(tf_raw, timeframe=timeframe, as_of=as_of)
     if not eligible_buys:
-        return False
-    latest_buy = max(_parse_ts(item.get("confirmation_timestamp")) for item in eligible_buys)
+        return None
+    latest_buy = max(eligible_buys, key=lambda item: str(item.get("confirmation_timestamp") or ""))
+    buy_ts = _parse_ts(latest_buy.get("confirmation_timestamp"))
     sells = _fresh_raw_signals(tf_raw, timeframe=timeframe, as_of=as_of, side="SELL")
-    if not sells:
-        return True
-    latest_sell = max(_parse_ts(item.get("confirmation_timestamp")) for item in sells)
-    return latest_sell <= latest_buy
+    if buy_ts is not None:
+        for sell in sells:
+            sell_ts = _parse_ts(sell.get("confirmation_timestamp"))
+            if sell_ts is not None and sell_ts > buy_ts:
+                return None
+    return latest_buy
+
+
+def _raw_has_active_buy(tf_raw: dict, *, timeframe: Timeframe, as_of: datetime) -> bool:
+    return _latest_active_raw_buy(tf_raw, timeframe=timeframe, as_of=as_of) is not None
 
 
 def _structural_execution_maturity(analysis: dict, *, as_of: datetime, signal_type: str) -> tuple[str, list[str]]:
@@ -173,7 +191,7 @@ def _raw_class2_annotations(
             second_candidates = matched
     if not second_candidates:
         return []
-    second = max(second_candidates, key=lambda item: _parse_ts(item.get("confirmation_timestamp")) or datetime.min)
+    second = max(second_candidates, key=lambda item: str(item.get("confirmation_timestamp") or ""))
     second_evidence = {item for item in second.get("evidence_ids") or [] if item}
     level = int(second.get("level_rank") or 0)
     extended: list[str] = []
@@ -222,6 +240,84 @@ def _staged_entry_payload(opportunity: object, *, signal_type: str) -> list[dict
         }
         for rule in policy.rules
     ]
+
+
+def _execution_stop_candidate(analysis: dict, *, as_of: datetime) -> StopCandidate | None:
+    m5 = (analysis.get("timeframes") or {}).get("5m") or {}
+    signal = _latest_active_raw_buy(m5, timeframe=Timeframe.M5, as_of=as_of)
+    if signal is None:
+        return None
+    structural_ticks = int(signal.get("structural_price_ticks") or 0)
+    stop_ticks = structural_ticks - 1
+    if stop_ticks <= 0:
+        return None
+    signal_id = str(signal.get("id") or f"m5-{signal.get('confirmation_timestamp') or 'signal'}")
+    return StopCandidate(
+        id=f"stop-execution-{signal_id}",
+        level=StopLevel.L5,
+        stop_type=StopType.EXECUTION_STRUCTURE,
+        price_ticks=stop_ticks,
+        source_structure_id=signal_id,
+        source_signal_id=signal_id,
+        is_structural=True,
+        noise_risk=False,
+    )
+
+
+def _apply_execution_sizing(
+    candidate: dict,
+    symbol: dict,
+    analysis: dict,
+    *,
+    as_of: datetime,
+    equity: float,
+    current_price: float,
+    signal_price: float,
+    final_maturity: str,
+) -> None:
+    candidate["core_structural_stop"] = candidate.get("stop")
+    candidate["execution_stop"] = None
+    candidate["sizing_basis"] = "等待5分钟执行结构"
+
+    # PREPARE/WATCH 阶段尚没有可执行的5m保护，因此不提前给出一个看似精确的股数。
+    if final_maturity != "TRIGGERED" or str(candidate.get("action")) not in {"BUY_TRANCHE_1", "PREPARE_BUY"}:
+        candidate["buy_amount"] = None
+        candidate["buy_quantity"] = None
+        return
+    stop = _execution_stop_candidate(analysis, as_of=as_of)
+    if stop is None:
+        candidate["buy_amount"] = None
+        candidate["buy_quantity"] = None
+        candidate["sizing_blocker"] = "M5_EXECUTION_STOP_UNDEFINED"
+        return
+    candidate["execution_stop"] = f"{stop.price_ticks * float(base.TICK_SIZE):.2f}元"
+    candidate["sizing_basis"] = "5分钟已确认执行结构止损"
+    if equity <= 0:
+        candidate["buy_amount"] = None
+        candidate["buy_quantity"] = None
+        return
+    try:
+        grade = OpportunityGrade(str(candidate.get("opportunity")))
+        risk_text = str(candidate.get("risk") or "L4")
+        risk = RiskState(int(risk_text.removeprefix("L")))
+    except (ValueError, TypeError):
+        candidate["buy_amount"] = None
+        candidate["buy_quantity"] = None
+        candidate["sizing_blocker"] = "SIZING_ENUM_PARSE_FAILED"
+        return
+    plan = build_position_plan(
+        equity=equity,
+        grade=grade,
+        risk=risk,
+        entry=max(current_price, signal_price),
+        stop=stop,
+        tick_size=float(base.TICK_SIZE),
+        archetype="core_leader" if int(symbol.get("leader_rank") or 99) == 1 else "quality_name",
+        role=TrancheRole.TEST,
+    )
+    candidate["buy_amount"] = plan.rounded_value if plan.rounded_quantity else None
+    candidate["buy_quantity"] = plan.rounded_quantity or None
+    candidate["sizing_blocker"] = plan.blocker
 
 
 _original_analyze_symbol = base.analyze_symbol
@@ -281,7 +377,7 @@ def analyze_symbol_v2(symbol, industry_map, *, as_of, equity):
     candidate["staged_entry_plan"] = _staged_entry_payload(candidate.get("opportunity"), signal_type=signal_type)
     candidate["take_profit_contract"] = list(take_profit_contract())
     candidate["stop_contract"] = {
-        "TEST": "5分钟执行结构只管理试仓；不得单独否定日线核心逻辑",
+        "TEST": "首笔定仓与执行止损使用5分钟已确认结构；5分钟失效只退出试仓，不单独否定日线核心逻辑",
         "CONFIRMATION": "30分钟保护位管理确认仓，必须来自已确认新结构",
         "CORE": "日线二买/中枢失效是核心仓保护依据",
         "TREND_ADD": "120分钟保护位管理趋势加仓；盈利保护只能上移",
@@ -302,8 +398,6 @@ def analyze_symbol_v2(symbol, industry_map, *, as_of, equity):
     if signal_type == ChanSignalType.FIRST_BUY.value:
         candidate["action"] = "WAIT_2B"
         candidate["push"] = False
-        candidate["buy_amount"] = None
-        candidate["buy_quantity"] = None
         candidate["recent_signal_note"] = "日线一买仅进入观察，等待日线二买/类二买"
     elif final_maturity == "WATCH":
         candidate["action"] = "OBSERVE"
@@ -323,6 +417,17 @@ def analyze_symbol_v2(symbol, industry_map, *, as_of, equity):
         candidate["action"] = base_action
         candidate["push"] = bool(candidate.get("push")) and base_action in {"PREPARE_BUY", "BUY_TRANCHE_1"}
         candidate["recent_signal_note"] = "日线二买有效，120m→30m→5m结构链完成；仍受风险、基本面与追高保护约束"
+
+    _apply_execution_sizing(
+        candidate,
+        symbol,
+        analysis,
+        as_of=as_of,
+        equity=equity,
+        current_price=current_price,
+        signal_price=signal_price,
+        final_maturity=final_maturity,
+    )
 
     tf_raw = (analysis.get("timeframes") or {}).get("daily") or {}
     for signal in reversed(tf_raw.get("signals") or []):
