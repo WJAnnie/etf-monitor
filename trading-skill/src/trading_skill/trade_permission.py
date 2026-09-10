@@ -10,6 +10,8 @@ from trading_skill.technical_opportunity import TechnicalOpportunityState
 class EntryMode(StrEnum):
     NONE = "NONE"
     STANDARD = "STANDARD"
+    # Kept only for backwards-compatible decoding of historical artifacts. New policy
+    # never creates TEST permission from a 120m first buy; TEST is a tranche role later.
     TEST = "TEST"
 
 
@@ -26,7 +28,7 @@ class TradePermissionState(StrEnum):
     BLOCKED = "BLOCKED"
     ELIGIBLE = "ELIGIBLE"
     ELIGIBLE_WITH_CAUTION = "ELIGIBLE_WITH_CAUTION"
-    TEST_ENTRY_ELIGIBLE = "TEST_ENTRY_ELIGIBLE"
+    TEST_ENTRY_ELIGIBLE = "TEST_ENTRY_ELIGIBLE"  # legacy artifact state only
 
 
 class TradePermissionBlocker(StrEnum):
@@ -56,8 +58,8 @@ CONTEXT_BLOCKERS = {
     TradePermissionBlocker.PORTFOLIO_CONTEXT_UNAVAILABLE,
 }
 
-PRIMARY_ENTRY_TIMEFRAMES = {"daily", "120m", "30m"}
-STANDARD_ENTRY_SIGNALS = {"SECOND_BUY", "THIRD_BUY"}
+PRIMARY_ENTRY_TIMEFRAMES = {"daily"}
+STANDARD_ENTRY_SIGNALS = {"SECOND_BUY"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,14 +93,9 @@ def evaluate_event_entry_state(
     *,
     data_complete: bool,
 ) -> EventEntryState:
-    """Evaluate only new-entry event risk; upstream owns freshness filtering.
-
-    A major positive event never creates permission. A major negative event blocks new entry.
-    Lesser negative events are caution. Missing event data stays UNKNOWN rather than silently CLEAR.
-    """
+    """Major positive events never create permission; major negative events may block it."""
     if not data_complete:
         return EventEntryState.UNKNOWN
-
     normalized = [dict(item) for item in events]
     if any(
         str(item.get("importance") or "") == "重大"
@@ -113,30 +110,21 @@ def evaluate_event_entry_state(
 
 def _proposed_entry(technical_row: Mapping[str, Any]) -> tuple[EntryMode, dict[str, Any] | None]:
     executable = technical_row.get("best_executable_candidate")
-    if isinstance(executable, Mapping) and executable:
-        state = str(executable.get("state") or "")
-        timeframe = str(executable.get("timeframe") or "")
-        signal_type = str(executable.get("signal_type") or "")
-        if (
-            state in {
-                TechnicalOpportunityState.READY.value,
-                TechnicalOpportunityState.READY_WITH_CAUTION.value,
-            }
-            and bool(executable.get("executable_candidate"))
-            and timeframe in PRIMARY_ENTRY_TIMEFRAMES
-            and signal_type in STANDARD_ENTRY_SIGNALS
-        ):
-            return EntryMode.STANDARD, dict(executable)
-
-    dominant = technical_row.get("dominant_current_buy")
-    if isinstance(dominant, Mapping) and dominant:
-        candidate = dict(dominant)
-        if (
-            str(candidate.get("state") or "") == TechnicalOpportunityState.PREPARE_FIRST_BUY.value
-            and str(candidate.get("timeframe") or "") == "120m"
-            and str(candidate.get("signal_type") or "") == "FIRST_BUY"
-        ):
-            return EntryMode.TEST, candidate
+    if not isinstance(executable, Mapping) or not executable:
+        return EntryMode.NONE, None
+    state = str(executable.get("state") or "")
+    timeframe = str(executable.get("timeframe") or "")
+    signal_type = str(executable.get("signal_type") or "")
+    if (
+        state in {
+            TechnicalOpportunityState.READY.value,
+            TechnicalOpportunityState.READY_WITH_CAUTION.value,
+        }
+        and bool(executable.get("executable_candidate"))
+        and timeframe in PRIMARY_ENTRY_TIMEFRAMES
+        and signal_type in STANDARD_ENTRY_SIGNALS
+    ):
+        return EntryMode.STANDARD, dict(executable)
     return EntryMode.NONE, None
 
 
@@ -152,11 +140,7 @@ def evaluate_trade_permission(
     portfolio_context_known: bool,
     portfolio_allows_new_risk: bool,
 ) -> TradePermission:
-    """STEP5A: combine facts into new-entry permission without rescoring them.
-
-    This function does not recompute Chan, quality, event matching, risk budget or position size.
-    It only preserves independent gates and reports every blocking/missing-context reason.
-    """
+    """STEP5A: combine independent gates without rescoring or inventing a buy point."""
     mode, candidate = _proposed_entry(technical_row)
     quality = str(quality_status or "UNKNOWN").upper()
 
@@ -175,15 +159,16 @@ def evaluate_trade_permission(
             event_state=event_state,
             blockers=(),
             cautions=(),
-            reasons=("当前没有标准二买/三买技术READY候选，也没有可进入风险层复核的120分钟一买试仓候选",),
+            reasons=(
+                "当前没有完成周线环境 + 日线标准二买/类二买授权 + 120分钟 + 30分钟 + 5分钟执行链的候选；"
+                "120分钟/30分钟买点、日线一买和日线三买均不能替代新开仓授权",
+            ),
         )
 
     blockers: list[TradePermissionBlocker] = []
     cautions: list[str] = []
     reasons: list[str] = []
 
-    # 只有STEP3明确给出REJECT才是硬否决。WATCH/UNKNOWN或PASS但资格字段矛盾都属于证据/上下文待复核，
-    # 不能把“数据不足”伪装成“基本面已证伪”。
     if quality == "REJECT":
         blockers.append(TradePermissionBlocker.QUALITY_REJECTED)
         reasons.append("STEP3质量层明确REJECT，后续技术信号不得覆盖")
@@ -200,9 +185,11 @@ def evaluate_trade_permission(
     elif event_state is EventEntryState.CAUTION:
         cautions.append("近期存在非硬阻断利空事件，若其他门通过也必须保留事件谨慎标签")
 
+    # This is the DAILY authority invalidation evidence. The 5m execution stop used for
+    # initial TEST sizing is resolved separately in STEP5B; the two must not be conflated.
     if not structural_stop_defined:
         blockers.append(TradePermissionBlocker.STRUCTURAL_STOP_UNDEFINED)
-        reasons.append("尚未解析到与该主买点同周期的真实结构失效位，禁止用固定百分比或成本价替代")
+        reasons.append("日线授权信号缺少真实结构失效位；禁止用固定百分比、成本价或ATR替代核心结构止损")
 
     if not account_context_known:
         blockers.append(TradePermissionBlocker.ACCOUNT_CONTEXT_UNAVAILABLE)
@@ -220,17 +207,13 @@ def evaluate_trade_permission(
 
     technical_state = str(candidate.get("state") or "")
     if technical_state == TechnicalOpportunityState.READY_WITH_CAUTION.value:
-        cautions.append("STEP4D上级结构为CAUTION；技术机会成立但高周期并非完全顺风")
-    if mode is EntryMode.TEST:
-        cautions.append("120分钟一买仅允许试仓语义，不得按标准二买/三买首仓处理")
+        cautions.append("STEP4D周线战略环境为CAUTION；执行链成立但高周期并非完全顺风")
 
     blocker_set = set(blockers)
     if blocker_set & HARD_BLOCKERS:
         state = TradePermissionState.BLOCKED
     elif blocker_set & CONTEXT_BLOCKERS:
         state = TradePermissionState.CONTEXT_REQUIRED
-    elif mode is EntryMode.TEST:
-        state = TradePermissionState.TEST_ENTRY_ELIGIBLE
     elif cautions:
         state = TradePermissionState.ELIGIBLE_WITH_CAUTION
     else:
@@ -239,10 +222,9 @@ def evaluate_trade_permission(
     allowed = state in {
         TradePermissionState.ELIGIBLE,
         TradePermissionState.ELIGIBLE_WITH_CAUTION,
-        TradePermissionState.TEST_ENTRY_ELIGIBLE,
     }
     if allowed:
-        reasons.append("技术、质量、事件、结构止损、账户权限与组合风险许可均已具备")
+        reasons.append("日线二买授权、低周期执行链、质量、事件、核心结构止损、账户权限与组合风险许可均已具备")
 
     return TradePermission(
         state=state,
