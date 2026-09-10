@@ -40,8 +40,8 @@ def _entry_plan_text(item: dict) -> str:
     return " → ".join(parts) if parts else "当前仅观察，不生成分批建仓计划"
 
 
-def _append_watch_candidates(lines: list[str], candidates: list[dict], confirmed_codes: set[str]) -> None:
-    watch = [item for item in candidates if item.get("code") not in confirmed_codes and item.get("recent_signal_note")]
+def _append_watch_candidates(lines: list[str], candidates: list[dict], structural_codes: set[str]) -> None:
+    watch = [item for item in candidates if item.get("code") not in structural_codes and item.get("recent_signal_note")]
     if not watch:
         return
     watch.sort(
@@ -75,10 +75,7 @@ def _append_industry_intelligence(lines: list[str], universe: dict) -> None:
         ),
         reverse=True,
     )
-    meaningful = [
-        item for item in ranked
-        if item.get("major_positive") or item.get("major_negative") or item.get("report_events")
-    ]
+    meaningful = [item for item in ranked if item.get("major_positive") or item.get("major_negative") or item.get("report_events")]
     if not meaningful:
         return
     lines.extend(["", "【行业重大事件 / 财报动态】"])
@@ -93,9 +90,11 @@ def _append_industry_intelligence(lines: list[str], universe: dict) -> None:
             summary.append("利空：" + "；".join(str(event.get("title") or "") for event in negatives[:2]))
         if reports:
             summary.append("财报：" + "；".join(str(event.get("title") or "") for event in reports[:2]))
-        lines.append(
-            f"- {item.get('industry_name')}｜事件净分{item.get('net_event_score', 0):+}｜" + "｜".join(summary)
-        )
+        lines.append(f"- {item.get('industry_name')}｜事件净分{item.get('net_event_score', 0):+}｜" + "｜".join(summary))
+
+
+def _universe_by_code(universe: dict) -> dict[str, dict]:
+    return {str(item.get("code") or ""): item for item in (universe.get("leader_candidates") or [])}
 
 
 def build_report(scan: dict, universe: dict, *, stage: str) -> tuple[str, str]:
@@ -106,6 +105,10 @@ def build_report(scan: dict, universe: dict, *, stage: str) -> tuple[str, str]:
     prospect_industries = [item for item in selected if item.get("prospect_theme")]
     supplement_industries = [item for item in selected if not item.get("prospect_theme")]
     quarantined = list(universe.get("quarantined_high_position_industries") or [])
+    financial_enrichment = universe.get("financial_detail_enrichment") or {}
+    financial_status = financial_enrichment.get("status_counts") or {}
+    source_by_code = _universe_by_code(universe)
+
     title = "🎯 全A结构机会扫描" if structural_candidates else "📊 全A扫描完成"
     lines = [
         f"【扫描时点】{stage}",
@@ -113,61 +116,59 @@ def build_report(scan: dict, universe: dict, *, stage: str) -> tuple[str, str]:
         "【扫描范围】",
         f"全A股票：{scan.get('total_stocks', 0)}只",
         f"行业/细分板块：{scan.get('industries_screened', 0)}个",
-        f"长期前景行业：{len(prospect_industries)}个｜市场结构补充：{len(supplement_industries)}个｜高位暂时隔离：{len(quarantined)}个",
+        f"长期前景行业：{len(prospect_industries)}个｜动态/结构补充：{len(supplement_industries)}个｜高位暂时隔离：{len(quarantined)}个",
         f"行业前五+跨行业去重候选：{universe.get('deduped_leader_candidates', scan.get('leader_candidates', 0))}只",
         f"允许长历史深扫：{universe.get('deep_scan_eligible_candidates', scan.get('fundamental_passed', 0))}只",
         f"实际五周期深扫：{scan.get('deep_scanned', 0)}只",
         f"近期出现日线正式结构：{scan.get('chan_buy_candidates', 0)}只",
         f"当前达到结构准备/触发标准：{len(structural_candidates)}只",
+        f"行业专属财务证据：{financial_status or '尚未增强/无统计'}",
         "",
-        "【行业逻辑】重点行业每日动态轮换：长期前景、新升温、重大事件与结构补充共同参与；明显高位行业暂缓，回落后重新纳入。行业重大利好/利空与新披露财报单独展示；利好不能制造买点，重大利空可以暂停新开仓。",
-        "【缠论层级】周线=战略环境与长期风险边界；日线标准二买/类二买=唯一新开仓结构授权；日线一买只WAIT_2B，日线三买用于已有仓位趋势延续；120分钟=当前日线结构确认；30分钟=执行准备；5分钟正式BUY=最终执行触发。低级别不能越级创造新仓资格。",
-        "【结构归属】120分钟、30分钟、5分钟确认必须属于当前这一次日线二买结构；旧低周期买点不能拿来确认新的日线买点。低周期确认可以早于日线二买最终确认，但不能早于该日线结构的 structural timestamp。",
-        "【指标逻辑】MACD(6,13,4)、BOLL、KDJ、量价只做辅助确认或PAUSE，不能定义一买/二买/三买，也不能替代缺失的5分钟正式BUY。其中120分钟MACD重点用于观察节奏。",
-        "【仓位逻辑】第一笔永远是TEST：按显式TEST风险预算和5分钟执行止损距离计算，不按S/A/B固定百分比建仓；新的30分钟结构最多使用剩余风险容量30%申请确认仓，新的120分钟结构最多使用剩余风险容量50%申请核心升级，新的日线趋势延续最多使用剩余风险容量25%。禁止机械摊低成本。",
-        "【双止损】日线二买结构失效位负责核心交易逻辑；当前日线结构内5分钟正式BUY失效位负责首笔TEST风险。两者是不同周期、不同signal，不得强行合成一个止损。",
-        "【卖出逻辑】不设固定盈利百分比主止盈。5m/30m/120m/日线/周线的一卖、二卖、三卖逐级影响不同仓层：120m二卖/三卖才开始小比例触及核心，日线一卖/二卖分别减核心25%/50%，周线一卖/二卖分别保留核心50%/25%，日线或周线三卖才完成相应全退出。",
-        "【下单边界】本报告的“结构准备/触发”不等于券商下单许可；真实买入数量仍需STEP5A/5B核验账户权限、组合/行业/主题剩余风险、现金、lot size与显式TEST风险预算。",
+        "【行业逻辑】重点行业每日动态轮换：长期前景、新升温、重大事件与结构补充共同参与；明显高位行业暂缓，回落后重新纳入。利好不能制造买点，重大利空可以暂停新开仓。",
+        "【基本面逻辑】不同行业真正使用不同证据：银行看PB/ROE/不良率/核心一级资本，保险看偿付能力/投资收益，券商看PB/ROE/净资本，周期资源看PB/库存/资本开支，订单制造看合同负债/在建工程，科技医药看研发强度，消费看库存与收入匹配，公用事业/地产建筑看负债率、建设投入与合同负债。行业专属证据缺失时只保留观察，不能直接新开仓。",
+        "【缠论层级】周线=战略环境；日线标准二买/类二买=唯一新开仓结构授权；日线一买只WAIT_2B，日线三买用于已有仓位趋势延续；120分钟=当前日线结构确认；30分钟=执行准备；5分钟正式BUY=最终执行触发。",
+        "【结构归属】120分钟、30分钟、5分钟确认必须属于当前这一次日线二买结构；旧低周期买点不能确认新的日线买点。",
+        "【指标逻辑】MACD(6,13,4)、BOLL、KDJ、量价只做辅助确认或PAUSE，不能定义买点，也不能替代缺失的5分钟正式BUY。",
+        "【仓位逻辑】第一笔永远是TEST：按显式TEST风险预算和5分钟执行止损距离计算；新的30分钟结构最多用剩余风险容量30%，新的120分钟结构最多50%，新的日线趋势延续最多25%；禁止机械摊低成本。",
+        "【双止损】日线二买结构失效位负责核心逻辑；当前日线结构内5分钟正式BUY失效位负责首笔TEST风险。两者必须保留为不同周期、不同signal。",
+        "【卖出逻辑】不设固定百分比主止盈。5m/30m/120m/日线/周线的一卖、二卖、三卖逐级影响不同仓层；日线/周线三卖才完成相应全退出。",
+        "【下单边界】结构准备/触发不等于券商下单许可；真实数量仍需STEP5A/5B核验账户权限、组合/行业/主题风险、现金、lot size与显式TEST风险预算。",
     ]
 
     if prospect_industries:
-        names = []
-        for item in prospect_industries[:12]:
-            theme = item.get("prospect_theme") or item.get("name")
-            names.append(f"{item.get('name')}（{theme}）")
+        names = [f"{item.get('name')}（{item.get('prospect_theme') or item.get('name')}）" for item in prospect_industries[:12]]
         lines.extend(["", "【重点前景方向】" + "、".join(names)])
-
     if quarantined:
         lines.extend(["", "【高位暂缓方向】" + "、".join(str(item.get("name") or "") for item in quarantined[:10])])
-
     _append_industry_intelligence(lines, universe)
 
     if not structural_candidates:
-        lines.extend([
-            "",
-            "【结论】本轮没有达到结构准备/触发标准的股票，不为了凑数量而降低日线二买/类二买、当前结构归属或多周期正式BUY要求。",
-        ])
+        lines.extend(["", "【结论】本轮没有达到结构准备/触发标准的股票，不为了凑数量而降低日线二买、行业财务证据或多周期正式BUY要求。"])
         _append_watch_candidates(lines, candidates, structural_codes)
         return title, "\n".join(lines)
 
     lines.extend(["", "【结构准备/触发候选】"])
     for idx, item in enumerate(structural_candidates[:15], 1):
+        source = source_by_code.get(str(item.get("code") or ""), {})
+        fp = source.get("fundamental_prefilter") or {}
         signal_label = item.get("signal_label") or item.get("signal", "暂无")
-        metric_focus = item.get("industry_metric_focus") or []
-        valuation_focus = item.get("industry_valuation_focus") or []
+        metric_focus = fp.get("metric_focus") or item.get("industry_metric_focus") or []
+        valuation_focus = fp.get("valuation_focus") or item.get("industry_valuation_focus") or []
         metric_text = "、".join(metric_focus[:6]) if isinstance(metric_focus, list) and metric_focus else "按行业口径"
         valuation_text = "、".join(valuation_focus[:4]) if isinstance(valuation_focus, list) and valuation_focus else "按行业口径"
+        evidence_reasons = list(fp.get("industry_evidence_reasons") or [])
+        evidence_text = "；".join(evidence_reasons[:4]) if evidence_reasons else "暂无额外行业专属加减分证据"
         execution_ids = item.get("execution_chain_evidence") or {}
-        chain_ids = "、".join(
-            f"{tf}:{(evidence or {}).get('signal_id', '暂无')}"
-            for tf, evidence in execution_ids.items()
-        ) or "暂无"
+        chain_ids = "、".join(f"{tf}:{(evidence or {}).get('signal_id', '暂无')}" for tf, evidence in execution_ids.items()) or "暂无"
         lines.extend([
             "",
             f"{idx}. {item.get('name', '未知')}（{item.get('code', '')}）",
             f"前景主题：{item.get('prospect_theme') or '跨行业/市场结构补充'}",
-            f"细分行业：{item.get('industry', '暂无')}｜行业节奏：{item.get('industry_state', '暂无')}｜事件风险：{item.get('industry_event_risk') or 'NORMAL'}（净分{item.get('industry_event_score', 0):+}）",
-            f"行业位置：{item.get('leader_rank', '暂无')}｜基本面：{item.get('fundamental_grade', '暂无')}级｜最新财报：{item.get('latest_financial_report') or '暂无'}",
+            f"细分行业：{source.get('industry_name') or item.get('industry', '暂无')}｜行业节奏：{item.get('industry_state', '暂无')}｜事件风险：{item.get('industry_event_risk') or 'UNKNOWN'}（净分{item.get('industry_event_score', 0) or 0:+}）",
+            f"行业位置：{item.get('leader_rank', '暂无')}｜基本面：{fp.get('grade', item.get('fundamental_grade', '暂无'))}级｜最新财报：{(fp.get('latest') or {}).get('report_date') or item.get('latest_financial_report') or '暂无'}",
+            f"行业财务证据：{fp.get('industry_evidence_status') or 'UNKNOWN'}｜直接新仓基本面许可：{'通过' if fp.get('eligible') else '未通过'}｜硬否决：{'是' if fp.get('hard_fail') else '否'}",
+            f"行业专属判断：{evidence_text}",
+            f"基本面原因：{'；'.join(list(fp.get('reasons') or [])[:4]) or '无额外否决'}",
             f"估值重点：{valuation_text}",
             f"行业财务重点：{metric_text}",
             f"日线授权：{signal_label}｜authority signal：{item.get('authority_signal_id') or '暂无'}",
@@ -185,10 +186,7 @@ def build_report(scan: dict, universe: dict, *, stage: str) -> tuple[str, str]:
             "分批止盈/减仓：5m/30m先逐步处理TEST/确认风险；120m二卖/三卖开始轻度减核心；日线一卖/二卖减核心25%/50%；周线一卖/二卖保留核心50%/25%；日线/周线三卖才完成相应全退出。",
         ])
     _append_watch_candidates(lines, candidates, structural_codes)
-    lines.extend([
-        "",
-        "说明：不因当天没有候选而放宽缠论定义。扩大的是历史覆盖、行业覆盖和有效观察窗口；日线一买只观察，日线二买/类二买才有新仓结构授权，完整低周期链也只是执行条件，不能反向创造日线买点。",
-    ])
+    lines.extend(["", "说明：不因当天没有候选而放宽缠论或基本面证据标准。扩大的是历史覆盖、行业覆盖和有效观察窗口；行业专属财务证据不足、重大利空、事件上下文缺失或低周期链不完整时，结构仍可观察，但不能直接升级为新仓。"])
     return title, "\n".join(lines)
 
 
