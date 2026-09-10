@@ -75,3 +75,39 @@ def test_partial_batch_above_health_threshold_is_allowed(monkeypatch):
 
     result = universe.fetch_paginated_price_healthy("x", "f2", fid="f6")
     assert universe._price_coverage(result) == pytest.approx(0.85)
+
+
+def test_price_healthy_batch_forwards_source_specific_hosts(monkeypatch):
+    calls = []
+    hosts = ("https://88.push2.eastmoney.com/api/qt/clist/get",)
+
+    def fake_fetch(*args, **kwargs):
+        calls.append(kwargs)
+        return _rows(100, "10")
+
+    monkeypatch.setattr(universe, "fetch_paginated", fake_fetch)
+    monkeypatch.setattr(universe.time, "sleep", lambda *_: None)
+
+    result = universe.fetch_paginated_price_healthy("x", "f2", fid="f6", hosts=hosts)
+    assert len(result) == 100
+    assert calls[0]["hosts"] == hosts
+
+
+def test_exchange_funds_routes_only_lof_through_dedicated_hosts(monkeypatch):
+    calls = []
+
+    def fake_healthy(fs, fields, **kwargs):
+        calls.append((fs, kwargs.get("hosts")))
+        return _rows(100, "10")
+
+    monkeypatch.setattr(universe, "fetch_paginated_price_healthy", fake_healthy)
+
+    etfs, lofs, errors = universe.fetch_exchange_funds()
+
+    assert len(etfs) == 100
+    assert len(lofs) == 100
+    assert errors == []
+    assert calls == [
+        (universe.ETF_FS, None),
+        (universe.LOF_FS, universe.LOF_PUSH2_HOSTS),
+    ]
