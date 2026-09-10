@@ -29,6 +29,7 @@ from trading_skill.market_universe import SecurityType, TradePermissions, build_
 ETF_FS = "b:MK0021,b:MK0022,b:MK0023,b:MK0024,b:MK0827"
 LOF_FS = "b:MK0404,b:MK0405,b:MK0406,b:MK0407"
 MIN_BATCH_PRICE_COVERAGE = 0.80
+MIN_TRADEABLE_LOF_COUNT = 20
 SEMANTIC_PRICE_RETRIES = 3
 
 
@@ -41,10 +42,14 @@ def _valid_price(value: object) -> bool:
         return False
 
 
+def _valid_price_count(rows: list[dict]) -> int:
+    return sum(1 for row in rows if _valid_price(row.get("f2")))
+
+
 def _price_coverage(rows: list[dict]) -> float:
     if not rows:
         return 0.0
-    return sum(1 for row in rows if _valid_price(row.get("f2"))) / len(rows)
+    return _valid_price_count(rows) / len(rows)
 
 
 def fetch_paginated_price_healthy(
@@ -53,17 +58,30 @@ def fetch_paginated_price_healthy(
     *,
     fid: str,
     max_pages: int | None = None,
-    min_coverage: float = MIN_BATCH_PRICE_COVERAGE,
+    min_coverage: float | None = MIN_BATCH_PRICE_COVERAGE,
+    min_valid_prices: int = 1,
     hosts: tuple[str, ...] | None = None,
 ) -> list[dict]:
-    """HTTP成功不等于行情可用；关键价格字段必须达到批量语义健康阈值。"""
+    """验证批量行情语义健康度，但允许不同市场采用不同健康合同。
+
+    股票/ETF等高流动性宽市场使用价格覆盖率；LOF列表天然包含尚无当日成交价的低流动性品种，
+    因此可改用“至少有多少只有效报价”。无有效价格的单只证券仍由STEP1逐只剔除，绝不补昨收伪装实时价。
+    """
     diagnostics: list[str] = []
     for attempt in range(SEMANTIC_PRICE_RETRIES):
         rows = fetch_paginated(fs, fields, fid=fid, max_pages=max_pages, hosts=hosts)
-        coverage = _price_coverage(rows)
-        if rows and coverage >= min_coverage:
+        valid_prices = _valid_price_count(rows)
+        coverage = (valid_prices / len(rows)) if rows else 0.0
+        healthy = (
+            bool(rows)
+            and valid_prices >= min_valid_prices
+            and (min_coverage is None or coverage >= min_coverage)
+        )
+        if healthy:
             return rows
-        diagnostics.append(f"attempt={attempt + 1},rows={len(rows)},price_coverage={coverage:.1%}")
+        diagnostics.append(
+            f"attempt={attempt + 1},rows={len(rows)},valid_prices={valid_prices},price_coverage={coverage:.1%}"
+        )
         if attempt + 1 < SEMANTIC_PRICE_RETRIES:
             time.sleep(2.0 * (attempt + 1))
     raise RuntimeError("批量行情语义不健康:" + ";".join(diagnostics))
@@ -136,12 +154,15 @@ def fetch_exchange_funds() -> tuple[list[dict], list[dict], list[str]]:
     except Exception as exc:
         errors.append(f"ETF:{exc}")
     try:
-        # LOF 当前实时列表接口与 ETF 的排序参数不同；f3 才是其稳定实时行情路径。
+        # LOF 当前实时列表接口与 ETF 的节点/排序参数不同；且列表包含大量低流动性、当日尚无成交价品种。
+        # 因此只要求达到系统既有的“可交易LOF最低数量”证据，不要求整张挂牌表80%都有当日价格。
         lofs = fetch_paginated_price_healthy(
             LOF_FS,
             STOCK_FIELDS,
             fid="f3",
             hosts=LOF_PUSH2_HOSTS,
+            min_coverage=None,
+            min_valid_prices=MIN_TRADEABLE_LOF_COUNT,
         )
     except Exception as exc:
         errors.append(f"LOF:{exc}")
@@ -270,6 +291,7 @@ def main() -> int:
             "missing_data_is_never_zero": True,
             "http_success_does_not_imply_quote_semantic_health": True,
             "batch_price_coverage_is_validated_before_use": True,
+            "lof_batch_health_uses_valid_quote_count_not_whole_listing_ratio": True,
             "previous_close_is_not_used_as_fake_live_price": True,
             "industry_is_not_hard_stock_gate": True,
             "industry_quality_and_short_term_heat_are_separate": True,
@@ -288,6 +310,7 @@ def main() -> int:
             "stock_price_coverage_pct": round(stock_price_coverage * 100, 2),
             "etf_price_coverage_pct": round(etf_price_coverage * 100, 2),
             "lof_price_coverage_pct": round(lof_price_coverage * 100, 2),
+            "lof_valid_price_count": _valid_price_count(lof_rows),
             "industry_member_errors": member_errors,
             "industry_event_errors": event_errors,
             "industry_news_rows": news_count,
@@ -315,6 +338,7 @@ def main() -> int:
             "STOCK": round(stock_price_coverage * 100, 2),
             "ETF": round(etf_price_coverage * 100, 2),
             "LOF": round(lof_price_coverage * 100, 2),
+            "LOF_VALID": _valid_price_count(lof_rows),
         },
     )
     print("动态行业分层:", summary["selected_industry_pools"])
@@ -353,15 +377,13 @@ def main() -> int:
             problems.append(f"股票批量价格覆盖异常:{stock_price_coverage:.1%}")
         if etf_price_coverage < MIN_BATCH_PRICE_COVERAGE:
             problems.append(f"ETF批量价格覆盖异常:{etf_price_coverage:.1%}")
-        if lof_price_coverage < MIN_BATCH_PRICE_COVERAGE:
-            problems.append(f"LOF批量价格覆盖异常:{lof_price_coverage:.1%}")
         if raw_stock_count < 4000:
             problems.append(f"原始股票数量异常:{raw_stock_count}")
         if tradeable_stock_count < 2500:
             problems.append(f"沪深主板可交易股票过少:{tradeable_stock_count}")
         if etf_count < 500:
             problems.append(f"ETF数量异常:{etf_count}")
-        if lof_count < 20:
+        if lof_count < MIN_TRADEABLE_LOF_COUNT:
             problems.append(f"LOF数量异常:{lof_count}")
         if fund_count < 600:
             problems.append(f"ETF/场内基金总量异常:{fund_count}")
