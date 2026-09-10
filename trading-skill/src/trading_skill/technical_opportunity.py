@@ -18,8 +18,8 @@ class TechnicalOpportunityState(StrEnum):
     PARENT_STRUCTURE_UNRESOLVED = "PARENT_STRUCTURE_UNRESOLVED"
     PARENT_SIGNAL_CONFLICT = "PARENT_SIGNAL_CONFLICT"
     WAIT_STANDARD_SECOND_BUY = "WAIT_STANDARD_SECOND_BUY"
-    PREPARE_FIRST_BUY = "PREPARE_FIRST_BUY"
     OBSERVE_FIRST_BUY = "OBSERVE_FIRST_BUY"
+    CONTINUATION_ONLY = "CONTINUATION_ONLY"
     NOT_PRIMARY_TIMEFRAME = "NOT_PRIMARY_TIMEFRAME"
     UNSUPPORTED_SIGNAL = "UNSUPPORTED_SIGNAL"
 
@@ -29,7 +29,8 @@ EXECUTABLE_STATES = {
     TechnicalOpportunityState.READY_WITH_CAUTION,
 }
 
-# 只表达结构级别，不是综合分。日线结构高于120m，120m高于30m；5m永不进入。
+# Structural reporting order only. M120/M30 are still shown so the audit/report can
+# explain what they are doing, but only DAILY may become a new-entry authority.
 STRUCTURAL_DOMINANCE_ORDER = (
     Timeframe.DAILY,
     Timeframe.M120,
@@ -96,59 +97,58 @@ def evaluate_technical_opportunity(timeframe: Timeframe, context: Mapping[str, A
         age_bars = None
 
     reasons: list[str] = []
-    if timeframe not in primary_entry_timeframes():
-        state = TechnicalOpportunityState.NOT_PRIMARY_TIMEFRAME
-        reasons.append(f"{timeframe.value}不是主交易买点周期；5分钟只能做执行确认，周线只做战略环境")
-    elif signal_type is None:
+    if signal_type is None:
         state = TechnicalOpportunityState.UNSUPPORTED_SIGNAL
         reasons.append("当前生命周期信号不是一买/标准二买/三买，不能进入技术机会判定")
+    elif timeframe not in primary_entry_timeframes():
+        state = TechnicalOpportunityState.NOT_PRIMARY_TIMEFRAME
+        reasons.append(
+            f"{timeframe.value}只承担确认/执行或加仓结构职责，不能独立创造新开仓主买点"
+        )
     elif not history_eligible:
         state = TechnicalOpportunityState.HISTORY_LIMITED
-        reasons.append(str(context.get("history_reason") or "当前买点周期历史证据不足"))
+        reasons.append(str(context.get("history_reason") or "日线授权周期历史证据不足"))
     elif parent_sell_conflict:
         state = TechnicalOpportunityState.PARENT_SIGNAL_CONFLICT
-        reasons.append("上级周期仍存在当前有效SELL；保留本周期结构观察，但不能视为可执行技术机会")
+        reasons.append("周线仍存在当前有效SELL；保留日线结构观察，但不能视为可执行新开仓机会")
     elif parent_state == "BLOCKED":
         state = TechnicalOpportunityState.PARENT_STRUCTURE_BLOCKED
-        reasons.append("上级结构明确处于空头/向下破坏状态")
+        reasons.append("周线战略环境明确处于空头/向下破坏状态")
     elif parent_state == "UNRESOLVED":
         state = TechnicalOpportunityState.PARENT_STRUCTURE_UNRESOLVED
-        reasons.append("上级结构证据缺失或不可验证，不能静默当成顺风环境")
+        reasons.append("周线战略环境证据缺失或不可验证，不能静默当成顺风环境")
     elif signal_type is ChanSignalType.FIRST_BUY:
-        if timeframe is Timeframe.DAILY:
-            state = TechnicalOpportunityState.WAIT_STANDARD_SECOND_BUY
-            reasons.append("日线一买保留为核心反转事实，但策略默认等待标准二买，不直接形成新开仓技术许可")
-        elif timeframe is Timeframe.M120:
-            state = TechnicalOpportunityState.PREPARE_FIRST_BUY
-            reasons.append("120分钟一买只进入准备/小试仓候选；是否允许实际试仓由后续风险与仓位层决定")
-        else:
-            state = TechnicalOpportunityState.OBSERVE_FIRST_BUY
-            reasons.append("30分钟一买处于反转初期，只观察并等待标准二买/三买")
-    elif signal_type in {ChanSignalType.SECOND_BUY, ChanSignalType.THIRD_BUY}:
+        state = TechnicalOpportunityState.WAIT_STANDARD_SECOND_BUY
+        reasons.append("日线一买仅记录反转事实，默认等待标准二买；不得借120m/30m/5m信号提前开仓")
+    elif signal_type is ChanSignalType.THIRD_BUY:
+        state = TechnicalOpportunityState.CONTINUATION_ONLY
+        reasons.append("日线三买用于已有仓位的趋势延续/加仓管理，不替代新开仓所需的日线二买授权")
+    elif signal_type is ChanSignalType.SECOND_BUY:
         if lower_state == "WAITING_PULLBACK":
             state = TechnicalOpportunityState.WAIT_PULLBACK
-            reasons.append("主周期标准买点仍有效，但低周期当前有有效SELL/向下结构，等待回撤结束")
+            reasons.append("日线二买仍有效，但低周期当前存在有效SELL/向下结构，等待执行回撤结束")
         elif lower_state in {"MIXED", "UNRESOLVED"}:
             state = TechnicalOpportunityState.WAIT_LOWER_CONFIRMATION
-            reasons.append("主周期标准买点有效，但低周期尚未形成一致的执行确认")
+            reasons.append("日线二买有效，但120分钟→30分钟→5分钟执行链尚未形成一致确认")
         elif lower_state == "ALIGNED":
             if parent_state == "CAUTION":
                 state = TechnicalOpportunityState.READY_WITH_CAUTION
-                reasons.append("低周期已同向确认；上级结构为CAUTION而非硬阻断，技术机会成立但必须保留高周期谨慎标签")
+                reasons.append("日线二买授权与低周期执行链均成立；周线为CAUTION，因此保留高周期谨慎标签")
             else:
                 state = TechnicalOpportunityState.READY
-                reasons.append("标准买点、历史证据、上级结构与低周期执行关系均满足技术机会条件")
+                reasons.append("日线标准二买/类二买授权、周线环境和120m→30m→5m执行链均满足")
         else:
             state = TechnicalOpportunityState.WAIT_LOWER_CONFIRMATION
             reasons.append(f"未知低周期关系{lower_state}，按未确认处理")
     else:
         state = TechnicalOpportunityState.UNSUPPORTED_SIGNAL
-        reasons.append("当前买点类型不在STEP4D技术机会合同内")
+        reasons.append("当前买点类型不在STEP4D新开仓合同内")
 
-    executable = state in EXECUTABLE_STATES and signal_type in {
-        ChanSignalType.SECOND_BUY,
-        ChanSignalType.THIRD_BUY,
-    }
+    executable = (
+        timeframe is Timeframe.DAILY
+        and signal_type is ChanSignalType.SECOND_BUY
+        and state in EXECUTABLE_STATES
+    )
     permission = entry_permission(timeframe, signal_type) if signal_type else "观察"
     return TechnicalOpportunity(
         timeframe=timeframe,
@@ -178,7 +178,7 @@ def build_technical_opportunities(current_buy_contexts: Mapping[str, Mapping[str
 
 
 def dominant_current_buy(opportunities: Sequence[TechnicalOpportunity]) -> TechnicalOpportunity | None:
-    """最高结构级别的当前买点；不代表它已经可以执行。"""
+    """Highest structural current buy for reporting; not equivalent to entry permission."""
     by_timeframe = {item.timeframe: item for item in opportunities}
     for timeframe in STRUCTURAL_DOMINANCE_ORDER:
         if timeframe in by_timeframe:
@@ -187,9 +187,8 @@ def dominant_current_buy(opportunities: Sequence[TechnicalOpportunity]) -> Techn
 
 
 def best_executable_candidate(opportunities: Sequence[TechnicalOpportunity]) -> TechnicalOpportunity | None:
-    """在已经技术READY的机会中按结构级别选一个；不涉及资金、仓位或最终下单。"""
-    executable = {item.timeframe: item for item in opportunities if item.executable_candidate}
-    for timeframe in STRUCTURAL_DOMINANCE_ORDER:
-        if timeframe in executable:
-            return executable[timeframe]
+    """Return the DAILY second-buy authority only after the nested execution chain is READY."""
+    for item in opportunities:
+        if item.timeframe is Timeframe.DAILY and item.executable_candidate:
+            return item
     return None
