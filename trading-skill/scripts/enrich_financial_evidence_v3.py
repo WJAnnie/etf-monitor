@@ -95,12 +95,12 @@ def main() -> int:
             except Exception as exc:
                 fallback = dict(item)
                 fp = dict(fallback.get("fundamental_prefilter") or {})
+                prior_deep = bool(fp.get("deep_scan_eligible"))
                 fp["eligible"] = False
-                fp["deep_scan_eligible"] = True
-                fp["hard_fail"] = False
+                fp["deep_scan_eligible"] = prior_deep
                 fp["industry_evidence_status"] = "UNAVAILABLE"
                 reasons = list(fp.get("reasons") or [])
-                reasons.append("行业专属财务增强失败，禁止直接新开仓，仅保留结构观察")
+                reasons.append("行业专属财务增强失败，禁止直接新开仓；是否保留深扫沿用增强前基础财务资格")
                 fp["reasons"] = list(dict.fromkeys(reasons))
                 fallback["fundamental_prefilter"] = fp
                 enriched_by_code[code] = fallback
@@ -124,7 +124,7 @@ def main() -> int:
     }
     payload.setdefault("guardrails", {})["industry_specific_financial_evidence_affects_permission"] = True
     payload["guardrails"]["missing_industry_financial_evidence_blocks_direct_new_entry"] = True
-    payload["guardrails"]["financial_detail_failure_preserves_observation_only"] = True
+    payload["guardrails"]["financial_detail_failure_never_upgrades_deep_scan"] = True
     atomic_json(args.universe, payload)
     print("行业专属财务增强:", f"候选={len(candidates)}", f"状态={status_counts}", f"明细警告={len(detail_errors)}", f"任务异常={len(worker_errors)}")
     return 0
