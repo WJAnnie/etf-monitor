@@ -385,15 +385,10 @@ def build_execution_reservation_plan(
             source_snapshot_id=snapshot_id,
             current_snapshot_id=current_snapshot_id or None,
         )
-    if current_snapshot_id != snapshot_id:
-        return _context_problem(
-            ReservationPlanState.STALE_SNAPSHOT,
-            ReservationBlocker.SNAPSHOT_STALE,
-            "外部账户/组合snapshot已经变化；STEP5B/5C必须基于新snapshot重新计算，禁止复用旧分配计划",
-            source_snapshot_id=snapshot_id,
-            current_snapshot_id=current_snapshot_id,
-        )
 
+    # Idempotency lookup comes before freshness rejection. A successful CAS reservation should
+    # advance the durable snapshot. Retrying the exact same request after that advance must return
+    # the existing receipt rather than incorrectly calling the already-completed plan stale.
     receipt = existing.get(key)
     reservation_id: str | None = None
     final_state = ReservationPlanState.READY_TO_RESERVE
@@ -424,6 +419,14 @@ def build_execution_reservation_plan(
             )
         final_state = ReservationPlanState.RESERVED
         intent_state = IntentState.RESERVED
+    elif current_snapshot_id != snapshot_id:
+        return _context_problem(
+            ReservationPlanState.STALE_SNAPSHOT,
+            ReservationBlocker.SNAPSHOT_STALE,
+            "外部账户/组合snapshot已经变化且不存在当前幂等键的已完成receipt；STEP5B/5C必须基于新snapshot重新计算",
+            source_snapshot_id=snapshot_id,
+            current_snapshot_id=current_snapshot_id,
+        )
 
     intents = tuple(
         ExecutionIntent(
