@@ -25,28 +25,62 @@ class ScaleInDecision:
     reason: str
 
 
+# Canonical hierarchy. A timeframe may contribute structure without being allowed to
+# create new-entry authority. In particular, DAILY itself is not "standalone": a valid
+# daily authority still needs the 120m/30m/5m execution stack before an order may exist.
 TIMEFRAME_POLICY: dict[Timeframe, TimeframePolicy] = {
     Timeframe.WEEKLY: TimeframePolicy(
-        Timeframe.WEEKLY, "周线", "战略环境/长期仓位边界", False, False, StopLevel.LW, ()
+        Timeframe.WEEKLY,
+        "周线",
+        "战略环境/长期风险边界",
+        False,
+        False,
+        StopLevel.LW,
+        (),
     ),
     Timeframe.DAILY: TimeframePolicy(
-        Timeframe.DAILY, "日线", "中期核心结构", True, True, StopLevel.LD, (Timeframe.WEEKLY,)
+        Timeframe.DAILY,
+        "日线",
+        "核心交易方向与新开仓授权",
+        True,
+        False,
+        StopLevel.LD,
+        (Timeframe.WEEKLY,),
     ),
     Timeframe.M120: TimeframePolicy(
-        Timeframe.M120, "120分钟", "主要中短线结构/首要买点周期", True, True, StopLevel.L120,
+        Timeframe.M120,
+        "120分钟",
+        "日线尾部结构确认/核心仓升级条件",
+        False,
+        False,
+        StopLevel.L120,
         (Timeframe.WEEKLY, Timeframe.DAILY),
     ),
     Timeframe.M30: TimeframePolicy(
-        Timeframe.M30, "30分钟", "战术结构/主要执行买点周期", True, True, StopLevel.L30,
+        Timeframe.M30,
+        "30分钟",
+        "执行准备/回踩结构细化/确认仓升级条件",
+        False,
+        False,
+        StopLevel.L30,
         (Timeframe.DAILY, Timeframe.M120),
     ),
     Timeframe.M5: TimeframePolicy(
-        Timeframe.M5, "5分钟", "精细入场与短线风险确认", False, False, StopLevel.L5,
+        Timeframe.M5,
+        "5分钟",
+        "最终执行触发与首笔试仓保护",
+        False,
+        False,
+        StopLevel.L5,
         (Timeframe.M30,),
     ),
 }
 
-PRIMARY_ENTRY_TIMEFRAMES = (Timeframe.DAILY, Timeframe.M120, Timeframe.M30)
+# New-position authority is intentionally narrow. THIRD_BUY is a continuation/add
+# structure, not a substitute for a fresh-core SECOND_BUY permission.
+PRIMARY_ENTRY_TIMEFRAMES = (Timeframe.DAILY,)
+NEW_ENTRY_AUTHORITY_SIGNALS = frozenset({ChanSignalType.SECOND_BUY})
+SCALE_IN_SIGNALS = frozenset({ChanSignalType.SECOND_BUY, ChanSignalType.THIRD_BUY})
 EXECUTION_TIMEFRAME = Timeframe.M5
 
 SIGNAL_CN = {
@@ -61,13 +95,22 @@ SIGNAL_CN = {
     ChanSignalType.HIGH_LEVEL_CLASS2_SELL: "高一级类二卖",
 }
 
-# 加仓不是固定金额，而是使用“风险模型算出的剩余允许仓位”的一部分。
-# 这样不会因为多次结构确认突破股票/行业/主题/总组合风险上限。
+# Additions consume a fraction of the *remaining risk-approved capacity*, never a
+# percentage of account equity. This avoids exceeding symbol/industry/theme/portfolio
+# limits after several confirmations. TEST sizing is handled by the entry sizing layer.
 SCALE_IN_REMAINING_FRACTION = {
-    TrancheRole.TACTICAL: 0.30,
-    TrancheRole.CONFIRMATION: 0.40,
-    TrancheRole.CORE: 0.50,
-    TrancheRole.TREND_ADD: 0.25,
+    TrancheRole.TACTICAL: 0.30,      # legacy compatibility only
+    TrancheRole.CONFIRMATION: 0.30,  # new independent 30m structure
+    TrancheRole.CORE: 0.50,          # new independent 120m structure, promoted to daily-core management
+    TrancheRole.TREND_ADD: 0.25,     # new daily continuation structure
+}
+
+ROLE_STOP_LEVEL = {
+    TrancheRole.TEST: StopLevel.L5,
+    TrancheRole.TACTICAL: StopLevel.L30,
+    TrancheRole.CONFIRMATION: StopLevel.L30,
+    TrancheRole.CORE: StopLevel.LD,
+    TrancheRole.TREND_ADD: StopLevel.L120,
 }
 
 
@@ -83,6 +126,10 @@ def management_stop_level(timeframe: Timeframe) -> StopLevel:
     return TIMEFRAME_POLICY[timeframe].stop_level
 
 
+def tranche_management_stop_level(role: TrancheRole) -> StopLevel:
+    return ROLE_STOP_LEVEL[role]
+
+
 def signal_label(signal) -> str:
     standard = [SIGNAL_CN.get(item, item.value) for item in signal.standard_types]
     extended = [SIGNAL_CN.get(item, item.value) for item in signal.extended_types]
@@ -92,23 +139,21 @@ def signal_label(signal) -> str:
 
 
 def entry_permission(timeframe: Timeframe, signal_type: ChanSignalType) -> str:
-    """统一交易含义；它不重新定义缠论信号，只决定信号怎么用于交易。"""
+    """Trading meaning only; canonical Chan definitions remain in chan/signals.py."""
     if timeframe is Timeframe.WEEKLY:
-        return "战略环境，不单独下单"
+        return "周线只定义战略环境和长期风险边界，不单独下单"
     if timeframe is Timeframe.M5:
-        return "仅执行确认，不单独开仓"
-    if timeframe is Timeframe.DAILY and signal_type is ChanSignalType.FIRST_BUY:
-        return "日线一买成立，但默认等待标准二买"
-    if timeframe is Timeframe.DAILY:
-        return "核心机会，可在低级别执行条件满足后分批建立核心仓"
-    if timeframe is Timeframe.M120:
-        if signal_type is ChanSignalType.FIRST_BUY:
-            return "120分钟一买只作为准备/小试仓信号，优先等待30分钟或5分钟执行条件进一步确认"
-        return "主要结构买点，可在5分钟执行条件满足后分批执行"
+        return "5分钟只负责最终执行触发和首笔试仓保护，不能独立创造新开仓资格"
     if timeframe is Timeframe.M30:
-        if signal_type is ChanSignalType.FIRST_BUY:
-            return "30分钟一买属于反转初期，只观察，不直接新开仓；优先等待标准二买/三买"
-        return "战术买点，必须有日线/120分钟上级结构支持并满足5分钟执行条件"
+        return "30分钟只负责执行准备/回踩确认；已有仓位后新的标准二买/三买可申请确认仓，不得独立新开核心仓"
+    if timeframe is Timeframe.M120:
+        return "120分钟只负责日线结构确认；已有仓位后新的标准二买/三买可申请核心仓升级，不得独立新开仓"
+    if timeframe is Timeframe.DAILY and signal_type is ChanSignalType.FIRST_BUY:
+        return "日线一买成立但只观察，默认等待标准二买/类二买"
+    if timeframe is Timeframe.DAILY and signal_type is ChanSignalType.SECOND_BUY:
+        return "日线标准二买是新开仓结构授权；类二买仅作为二买扩展标签，仍需120分钟、30分钟、5分钟执行链"
+    if timeframe is Timeframe.DAILY and signal_type is ChanSignalType.THIRD_BUY:
+        return "日线三买属于趋势延续/已有仓位加仓结构，不替代新开仓所需的日线二买授权"
     return "观察"
 
 
@@ -125,21 +170,22 @@ def scale_in_decision(
     current_price_below_cost: bool,
     mechanical_average_down_requested: bool,
 ) -> ScaleInDecision:
-    """统一决定已有仓位后是否允许增加下一笔。
+    """Decide whether an existing position may add one new structure-gated tranche.
 
-    关键约束：
-    - 一买与5分钟信号都不能作为已有仓位的加仓触发；只接受新的标准二买/三买。
-    - 类二买只是标准二买的扩展标签，不独立增加一笔。
-    - 必须有新结构、机会至少B、风险低于L2、上下文完整、保护位不下移。
-    - “价格低于成本”本身不是禁加仓条件；真正禁止的是没有新结构支撑、仅为了摊低成本的机械补仓。
-    - 每类确认仓只建立一次；之后最多允许一层TREND_ADD，避免无限金字塔。
+    Canonical ladder:
+    - initial TEST: only after DAILY 2B authority + 120m + 30m + 5m execution stack;
+    - new 30m 2B/3B: one CONFIRMATION tranche;
+    - new 120m 2B/3B: one CORE tranche, then managed by the DAILY thesis;
+    - new DAILY 2B/3B continuation: at most one TREND_ADD tranche.
+
+    A lower price never creates permission. Class-2 labels never create an extra tranche.
     """
-    if signal_type not in {ChanSignalType.SECOND_BUY, ChanSignalType.THIRD_BUY}:
+    if signal_type not in SCALE_IN_SIGNALS:
         return ScaleInDecision(False, None, 0.0, "只有新的标准二买/三买才能触发已有仓位加仓；一买和类二买标签本身不触发加仓")
     if timeframe not in {Timeframe.DAILY, Timeframe.M120, Timeframe.M30}:
         return ScaleInDecision(False, None, 0.0, "周线只做战略环境，5分钟只做执行确认，均不能独立触发加仓")
     if not new_structure_confirmed:
-        return ScaleInDecision(False, None, 0.0, "没有新的确认结构，不加仓；价格更低也不能替代结构条件")
+        return ScaleInDecision(False, None, 0.0, "没有新的确认结构，不加仓；价格更低不能替代结构条件")
     if str(opportunity_grade) not in {"S", "A", "B"}:
         return ScaleInDecision(False, None, 0.0, "机会等级为C，不加仓")
     if int(risk_level) >= 2:
@@ -149,98 +195,57 @@ def scale_in_decision(
     if not protection_not_loosened:
         return ScaleInDecision(False, None, 0.0, "新增仓位需要下移保护位，违反保护位只能上移或保持的规则")
     if mechanical_average_down_requested:
-        return ScaleInDecision(False, None, 0.0, "本次动作的依据只是摊低持仓成本而不是新的确认结构，属于机械补仓，禁止加仓")
+        return ScaleInDecision(False, None, 0.0, "本次依据只是摊低持仓成本而不是新的确认结构，属于机械补仓，禁止加仓")
 
     roles = set(existing_roles)
-    if timeframe is Timeframe.M30 and TrancheRole.TACTICAL not in roles:
-        role = TrancheRole.TACTICAL
-        reason = "新的30分钟标准二买/三买确认，可增加一层战术仓"
-    elif timeframe is Timeframe.M120 and TrancheRole.CONFIRMATION not in roles:
+    if timeframe is Timeframe.M30 and TrancheRole.CONFIRMATION not in roles:
         role = TrancheRole.CONFIRMATION
-        reason = "新的120分钟标准二买/三买确认，可增加一层确认仓"
-    elif timeframe is Timeframe.DAILY and TrancheRole.CORE not in roles:
+        reason = "新的30分钟标准二买/三买确认，可使用剩余风险容量增加一层确认仓"
+    elif timeframe is Timeframe.M120 and TrancheRole.CORE not in roles:
         role = TrancheRole.CORE
-        reason = "新的日线标准二买/三买确认，可增加一层核心仓"
-    elif TrancheRole.TREND_ADD not in roles:
+        reason = "新的120分钟标准二买/三买确认，可将一部分剩余风险容量升级为日线核心仓"
+    elif timeframe is Timeframe.DAILY and TrancheRole.TREND_ADD not in roles:
         role = TrancheRole.TREND_ADD
-        reason = "对应层级仓位已建立，新结构再次确认且保护位未放宽，最多增加一层趋势仓"
+        reason = "新的日线标准二买/三买趋势延续确认，可增加最后一层趋势仓"
     else:
-        return ScaleInDecision(False, None, 0.0, "对应确认仓和趋势加仓都已存在，不继续无限金字塔加仓")
+        return ScaleInDecision(False, None, 0.0, "该层确认仓已存在或没有对应的下一层仓位，不继续无限金字塔加仓")
 
     if current_price_below_cost:
-        reason += "；当前价虽低于持仓成本，但本次由新的同级/更高级结构触发，不按机械摊低成本处理"
+        reason += "；当前价虽低于持仓成本，但本次由新结构触发，不按机械摊低成本处理"
     return ScaleInDecision(True, role, SCALE_IN_REMAINING_FRACTION[role], reason)
 
 
 def sell_fraction(timeframe: str, sell_class: int, role: TrancheRole) -> float:
-    """唯一分级卖出表。低级别卖点不得无条件推翻高一级别核心逻辑。"""
+    """Single staged-exit matrix. Lower-level sells reduce lower-level risk first."""
     sell_class = max(1, min(3, int(sell_class)))
     if timeframe == "5m":
         table = {
             1: {TrancheRole.TEST: 0.50},
-            2: {TrancheRole.TEST: 1.00, TrancheRole.TACTICAL: 0.50},
-            3: {TrancheRole.TEST: 1.00, TrancheRole.TACTICAL: 1.00},
+            2: {TrancheRole.TEST: 1.00},
+            3: {TrancheRole.TEST: 1.00, TrancheRole.TACTICAL: 0.50},
         }
     elif timeframe == "30m":
         table = {
-            1: {TrancheRole.TEST: 1.00, TrancheRole.TACTICAL: 0.50},
-            2: {TrancheRole.TEST: 1.00, TrancheRole.TACTICAL: 1.00, TrancheRole.TREND_ADD: 0.50},
-            3: {
-                TrancheRole.TEST: 1.00,
-                TrancheRole.TACTICAL: 1.00,
-                TrancheRole.TREND_ADD: 1.00,
-                TrancheRole.CONFIRMATION: 0.50,
-            },
+            1: {TrancheRole.TEST: 1.00, TrancheRole.TACTICAL: 0.50, TrancheRole.CONFIRMATION: 0.50},
+            2: {TrancheRole.TEST: 1.00, TrancheRole.TACTICAL: 1.00, TrancheRole.CONFIRMATION: 1.00, TrancheRole.TREND_ADD: 0.25},
+            3: {TrancheRole.TEST: 1.00, TrancheRole.TACTICAL: 1.00, TrancheRole.CONFIRMATION: 1.00, TrancheRole.TREND_ADD: 0.50},
         }
     elif timeframe == "120m":
         table = {
-            1: {TrancheRole.TEST: 1.00, TrancheRole.TACTICAL: 1.00, TrancheRole.TREND_ADD: 0.50},
-            2: {
-                TrancheRole.TEST: 1.00,
-                TrancheRole.TACTICAL: 1.00,
-                TrancheRole.TREND_ADD: 1.00,
-                TrancheRole.CONFIRMATION: 0.50,
-            },
-            3: {
-                TrancheRole.TEST: 1.00,
-                TrancheRole.TACTICAL: 1.00,
-                TrancheRole.TREND_ADD: 1.00,
-                TrancheRole.CONFIRMATION: 1.00,
-            },
+            1: {TrancheRole.TEST: 1.00, TrancheRole.TACTICAL: 1.00, TrancheRole.CONFIRMATION: 1.00, TrancheRole.TREND_ADD: 0.50},
+            2: {TrancheRole.TEST: 1.00, TrancheRole.TACTICAL: 1.00, TrancheRole.CONFIRMATION: 1.00, TrancheRole.TREND_ADD: 1.00, TrancheRole.CORE: 0.25},
+            3: {TrancheRole.TEST: 1.00, TrancheRole.TACTICAL: 1.00, TrancheRole.CONFIRMATION: 1.00, TrancheRole.TREND_ADD: 1.00, TrancheRole.CORE: 0.50},
         }
     elif timeframe == "daily":
         table = {
-            1: {
-                TrancheRole.TEST: 1.00,
-                TrancheRole.TACTICAL: 1.00,
-                TrancheRole.TREND_ADD: 1.00,
-                TrancheRole.CONFIRMATION: 0.50,
-            },
-            2: {
-                TrancheRole.TEST: 1.00,
-                TrancheRole.TACTICAL: 1.00,
-                TrancheRole.TREND_ADD: 1.00,
-                TrancheRole.CONFIRMATION: 1.00,
-                TrancheRole.CORE: 0.50,
-            },
+            1: {TrancheRole.TEST: 1.00, TrancheRole.TACTICAL: 1.00, TrancheRole.CONFIRMATION: 1.00, TrancheRole.TREND_ADD: 1.00, TrancheRole.CORE: 0.25},
+            2: {TrancheRole.TEST: 1.00, TrancheRole.TACTICAL: 1.00, TrancheRole.CONFIRMATION: 1.00, TrancheRole.TREND_ADD: 1.00, TrancheRole.CORE: 0.50},
             3: {item: 1.00 for item in TrancheRole},
         }
     elif timeframe == "weekly":
         table = {
-            1: {
-                TrancheRole.TEST: 1.00,
-                TrancheRole.TACTICAL: 1.00,
-                TrancheRole.TREND_ADD: 1.00,
-                TrancheRole.CONFIRMATION: 1.00,
-                TrancheRole.CORE: 0.50,
-            },
-            2: {
-                TrancheRole.TEST: 1.00,
-                TrancheRole.TACTICAL: 1.00,
-                TrancheRole.TREND_ADD: 1.00,
-                TrancheRole.CONFIRMATION: 1.00,
-                TrancheRole.CORE: 0.75,
-            },
+            1: {TrancheRole.TEST: 1.00, TrancheRole.TACTICAL: 1.00, TrancheRole.CONFIRMATION: 1.00, TrancheRole.TREND_ADD: 1.00, TrancheRole.CORE: 0.50},
+            2: {TrancheRole.TEST: 1.00, TrancheRole.TACTICAL: 1.00, TrancheRole.CONFIRMATION: 1.00, TrancheRole.TREND_ADD: 1.00, TrancheRole.CORE: 0.75},
             3: {item: 1.00 for item in TrancheRole},
         }
     else:
@@ -251,20 +256,23 @@ def sell_fraction(timeframe: str, sell_class: int, role: TrancheRole) -> float:
 def stop_break_policy() -> dict[str, str]:
     return {
         "wick_break": "只预警；单根影线跌破不直接清掉更高周期仓位",
-        "close_break": "按该笔仓位的管理周期执行减仓/退出",
-        "failed_reclaim": "跌破后反抽无法站回，确认结构失效，退出受影响仓位",
+        "close_break": "按该笔仓位自己的管理周期执行减仓/退出",
+        "failed_reclaim": "跌破后同级别反抽无法站回，确认结构失效，退出受影响仓位",
         "protection": "保护位只能上移或保持，不能因为亏损向下放宽",
     }
 
 
 def add_position_policy() -> str:
     return (
-        "已有仓位后只接受新的标准二买/三买或同级以上结构升级；30分钟对应战术仓、120分钟对应确认仓、"
-        "日线对应核心仓，之后最多再加一层趋势仓。加仓金额按剩余允许仓位计算；L2及以上、机会C、"
-        "上下文不完整、保护位需下移或仅为了摊低成本的机械补仓一律不加。价格低于持仓成本不是单独否决项；"
-        "若新的同级/更高级结构重新确认且全部风险门通过，仍可按结构加仓。类二买只作为标准二买加分标签。"
+        "首笔试仓必须先有日线标准二买/类二买授权，再完成120分钟确认、30分钟执行准备和5分钟触发；"
+        "已有仓位后，新的30分钟标准二买/三买对应确认仓，新的120分钟标准二买/三买对应核心仓升级，"
+        "新的日线二买/三买趋势延续最多再增加一层趋势仓。所有加仓都使用剩余风险容量；L2及以上、机会C、"
+        "上下文不完整、保护位需下移或仅为摊低成本的机械补仓一律禁止。"
     )
 
 
 def take_profit_policy() -> str:
-    return "不设固定百分比止盈；按5分钟、30分钟、120分钟、日线、周线卖点分层减仓，并随新结构抬高保护位。"
+    return (
+        "不设固定百分比止盈；按5分钟、30分钟、120分钟、日线、周线的一卖/二卖/三卖逐层减仓，"
+        "并只允许在新确认结构出现后上移保护位。"
+    )
