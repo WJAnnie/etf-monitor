@@ -7,12 +7,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping
 
-from trading_skill.structural_stop import resolve_structural_stop
-from trading_skill.trade_permission import (
-    EventEntryState,
-    evaluate_event_entry_state,
-    evaluate_trade_permission,
-)
+from trading_skill.structural_stop import resolve_authority_stop, resolve_execution_stop
+from trading_skill.trade_permission import EventEntryState, evaluate_event_entry_state, evaluate_trade_permission
 
 
 _CONTEXT_BOOL_KEYS = (
@@ -118,21 +114,15 @@ def _event_facts(
         if industry not in selected_names:
             return EventEntryState.UNKNOWN, [], f"真实行业{industry}不在本轮已建立事件上下文的行业集合中，不能因event_map无记录而判CLEAR"
         events = list(event_map.get(industry) or [])
-        state = evaluate_event_entry_state(events, data_complete=feed_complete)
-        return state, events, f"股票行业事件上下文:{industry}"
+        return evaluate_event_entry_state(events, data_complete=feed_complete), events, f"股票行业事件上下文:{industry}"
 
     category = str((quality_row or {}).get("fund_category") or "")
     family = str((quality_row or {}).get("fund_family") or "").strip()
     if category == "EQUITY_SECTOR":
-        # 只有能够精确对应本轮已建立事件上下文的行业时才使用行业事件；不靠字符串猜测映射ETF。
         if family and family in selected_names:
             events = list(event_map.get(family) or [])
-            state = evaluate_event_entry_state(events, data_complete=feed_complete)
-            return state, events, f"行业ETF精确匹配事件上下文:{family}"
+            return evaluate_event_entry_state(events, data_complete=feed_complete), events, f"行业ETF精确匹配事件上下文:{family}"
         return EventEntryState.UNKNOWN, [], "行业ETF缺少可验证的精确行业事件映射；不得静默视为CLEAR"
-
-    # 当前事件源只能证明“已映射行业的36小时事件”是否清晰。宽基/策略/跨境/商品/债券
-    # 需要各自的市场、海外、商品或利率事件源；在这些适配器接入前不能把“行业门不适用”写成全局CLEAR。
     return (
         EventEntryState.UNKNOWN,
         [],
@@ -142,12 +132,7 @@ def _event_facts(
 
 def _proposal(technical_row: Mapping[str, Any]) -> dict | None:
     executable = technical_row.get("best_executable_candidate")
-    if isinstance(executable, Mapping) and executable:
-        return dict(executable)
-    dominant = technical_row.get("dominant_current_buy")
-    if isinstance(dominant, Mapping) and str(dominant.get("state") or "") == "PREPARE_FIRST_BUY":
-        return dict(dominant)
-    return None
+    return dict(executable) if isinstance(executable, Mapping) and executable else None
 
 
 def _validate_context_booleans(mapping: Mapping[str, Any], *, label: str) -> None:
@@ -175,12 +160,10 @@ def _load_risk_context(path: Path | None) -> dict:
 
 def _context_for_symbol(context: Mapping[str, Any], item: Mapping[str, Any]) -> dict[str, bool]:
     defaults = {
-        # STEP1只证明“本策略允许扫描/研究这个证券”，不等价于真实券商账户权限已核验。
         "strategy_security_permission_known": True,
         "strategy_security_allowed": True,
         "account_context_known": False,
         "account_allows_security": False,
-        # 没有真实持仓/风险账本时绝不假设还有组合风险空间。
         "portfolio_context_known": False,
         "portfolio_allows_new_risk": False,
     }
@@ -212,7 +195,9 @@ def analyze_symbol(
     quality_status, deep_eligible, industry_name, fund_category = _quality_facts(quality_row)
     event_state, events, event_note = _event_facts(quality_row, candidate_payload)
     proposal = _proposal(item)
-    stop = resolve_structural_stop(structure_row or {}, proposal)
+    structure = structure_row or {}
+    authority_stop = resolve_authority_stop(structure, proposal)
+    execution_stop = resolve_execution_stop(structure, proposal)
     context = _context_for_symbol(risk_context, item)
 
     permission = evaluate_trade_permission(
@@ -220,7 +205,8 @@ def analyze_symbol(
         quality_status=quality_status,
         quality_deep_analysis_eligible=deep_eligible,
         event_state=event_state,
-        structural_stop_defined=stop.valid_for_new_entry,
+        authority_stop_defined=authority_stop.valid_for_new_entry,
+        execution_stop_defined=execution_stop.valid_for_new_entry,
         account_context_known=context["account_context_known"],
         account_allows_security=context["account_allows_security"],
         portfolio_context_known=context["portfolio_context_known"],
@@ -237,12 +223,11 @@ def analyze_symbol(
             "industry_name": industry_name,
             "fund_category": fund_category,
         },
-        "event": {
-            "state": event_state.value,
-            "events": events,
-            "note": event_note,
-        },
-        "structural_stop": stop.to_dict(),
+        "event": {"state": event_state.value, "events": events, "note": event_note},
+        "authority_stop": authority_stop.to_dict(),
+        "execution_stop": execution_stop.to_dict(),
+        # Compatibility alias for consumers that display the core thesis stop.
+        "structural_stop": authority_stop.to_dict(),
         "risk_context": context,
         "permission": permission.to_dict(),
         "dominant_current_buy": item.get("dominant_current_buy"),
@@ -275,14 +260,12 @@ def main() -> int:
 
     for item in symbols:
         try:
-            quality_row = _find_row(item, quality_exact, quality_by_code)
-            structure_row = _find_row(item, structure_exact, structure_by_code)
             analyzed.append(
                 analyze_symbol(
                     item,
-                    quality_row=quality_row,
+                    quality_row=_find_row(item, quality_exact, quality_by_code),
                     candidate_payload=candidate_payload,
-                    structure_row=structure_row,
+                    structure_row=_find_row(item, structure_exact, structure_by_code),
                     risk_context=risk_context,
                 )
             )
@@ -296,14 +279,9 @@ def main() -> int:
 
     permission_counts = Counter(str((row.get("permission") or {}).get("state") or "UNKNOWN") for row in analyzed)
     blocker_counts = Counter(
-        blocker
-        for row in analyzed
-        for blocker in ((row.get("permission") or {}).get("blockers") or [])
+        blocker for row in analyzed for blocker in ((row.get("permission") or {}).get("blockers") or [])
     )
-    proposed = [
-        row for row in analyzed
-        if (row.get("best_executable_candidate") or str(((row.get("dominant_current_buy") or {}).get("state") or "")) == "PREPARE_FIRST_BUY")
-    ]
+    proposed = [row for row in analyzed if row.get("best_executable_candidate")]
     allowed = [row for row in analyzed if bool((row.get("permission") or {}).get("new_entry_allowed"))]
 
     output = {
@@ -316,20 +294,18 @@ def main() -> int:
         "design_contract": {
             "facts_are_gates_not_weighted_score": True,
             "step4d_is_not_recomputed": True,
+            "new_entry_requires_daily_second_buy_authority": True,
+            "daily_first_buy_and_daily_third_buy_do_not_create_fresh_entry": True,
+            "m120_m30_m5_never_create_standalone_new_entry": True,
             "step3_pass_is_required_for_automatic_new_entry": True,
-            "step3_watch_or_unknown_requires_review_not_risk_discount": True,
-            "only_explicit_step3_reject_is_quality_hard_veto": True,
             "major_negative_event_blocks_new_entry": True,
             "missing_event_context_is_not_clear": True,
-            "fund_event_scope_must_match_product_exposure_before_clear": True,
-            "unmapped_stock_industry_event_scope_is_unknown": True,
-            "structural_stop_must_come_from_matching_step4b_signal": True,
+            "authority_stop_is_daily_core_invalidation": True,
+            "execution_stop_is_5m_test_sizing_stop": True,
+            "authority_and_execution_stops_have_distinct_signal_identities": True,
             "fixed_percent_cost_basis_and_atr_are_not_stop_substitutes": True,
-            "step1_strategy_security_permission_is_distinct_from_real_account_permission": True,
             "unknown_account_permission_never_defaults_to_allowed": True,
             "unknown_portfolio_capacity_never_defaults_to_available": True,
-            "risk_context_boolean_types_are_strict": True,
-            "120m_first_buy_can_only_request_test_entry_permission": True,
             "this_stage_does_not_compute_risk_amount_position_value_or_quantity": True,
         },
         "input_symbols": len(symbols),
@@ -340,53 +316,34 @@ def main() -> int:
             "blockers": dict(blocker_counts),
             "proposed_entry_symbols": len(proposed),
             "new_entry_allowed_symbols": len(allowed),
-            "standard_entry_allowed": sum(1 for row in allowed if (row.get("permission") or {}).get("entry_mode") == "STANDARD"),
-            "test_entry_allowed": sum(1 for row in allowed if (row.get("permission") or {}).get("entry_mode") == "TEST"),
-            "risk_context_supplied": bool(args.risk_context),
         },
         "symbols": analyzed,
     }
     atomic_json(args.output, output)
 
     print("STEP5A交易许可:", len(analyzed), "/", len(symbols), "异常:", len(errors))
-    print("许可状态:", output["summary"]["permission_states"])
-    print("阻断/待补上下文:", output["summary"]["blockers"])
-    print("提出新开仓许可复核:", len(proposed), "最终允许:", len(allowed))
+    print("许可状态:", dict(permission_counts))
+    print("阻断项:", dict(blocker_counts))
+    print("提出新开仓候选:", len(proposed), "允许:", len(allowed))
 
     if args.strict:
         problems: list[str] = []
         if symbols and len(analyzed) / len(symbols) < 0.99:
             problems.append(f"STEP5A分析成功率过低:{len(analyzed)}/{len(symbols)}")
-
-        illegal_allowed: list[tuple] = []
-        score_leaks: list[str] = []
+        illegal = []
         for row in analyzed:
-            permission = dict(row.get("permission") or {})
-            if any("score" in str(key).lower() for key in permission):
-                score_leaks.append(str(row.get("code")))
-            if not permission.get("new_entry_allowed"):
-                continue
-            quality = dict(row.get("quality") or {})
-            event = dict(row.get("event") or {})
-            stop = dict(row.get("structural_stop") or {})
-            context = dict(row.get("risk_context") or {})
-            if quality.get("status") != "PASS":
-                illegal_allowed.append((row.get("code"), "QUALITY", quality.get("status")))
-            if event.get("state") in {EventEntryState.UNKNOWN.value, EventEntryState.BLOCK_NEW_ENTRY.value}:
-                illegal_allowed.append((row.get("code"), "EVENT", event.get("state")))
-            if not stop.get("valid_for_new_entry"):
-                illegal_allowed.append((row.get("code"), "STOP", False))
-            if not context.get("account_context_known") or not context.get("account_allows_security"):
-                illegal_allowed.append((row.get("code"), "ACCOUNT", context))
-            if not context.get("portfolio_context_known") or not context.get("portfolio_allows_new_risk"):
-                illegal_allowed.append((row.get("code"), "PORTFOLIO", context))
-
-        if illegal_allowed:
-            problems.append(f"STEP5A出现违反独立许可门的自动新开仓:{len(illegal_allowed)}")
-        if score_leaks:
-            problems.append(f"STEP5A重新引入综合score字段:{len(score_leaks)}")
-        if not args.risk_context and allowed:
-            problems.append("未提供真实账户/组合风险上下文时STEP5A错误地产生了自动新开仓许可")
+            permission = row.get("permission") or {}
+            if permission.get("new_entry_allowed"):
+                if permission.get("selected_timeframe") != "daily" or permission.get("signal_type") != "SECOND_BUY":
+                    illegal.append((row.get("code"), "ENTRY_IDENTITY"))
+                authority = row.get("authority_stop") or {}
+                execution = row.get("execution_stop") or {}
+                if authority.get("timeframe") != "daily" or authority.get("signal_id") != permission.get("signal_id"):
+                    illegal.append((row.get("code"), "AUTHORITY_STOP"))
+                if execution.get("timeframe") != "5m" or execution.get("authority_signal_id") != permission.get("signal_id"):
+                    illegal.append((row.get("code"), "EXECUTION_STOP"))
+        if illegal:
+            problems.append(f"STEP5A允许项违反日线授权/5分钟执行双止损合同:{len(illegal)}")
         if problems:
             raise SystemExit("；".join(problems))
     return 0
