@@ -165,10 +165,7 @@ def _positive_int(value: Any, *, label: str) -> int:
     return value
 
 
-def _context_required(
-    blocker: PortfolioAllocationBlocker,
-    reason: str,
-) -> PortfolioAllocationPlan:
+def _context_required(blocker: PortfolioAllocationBlocker, reason: str) -> PortfolioAllocationPlan:
     return PortfolioAllocationPlan(
         state=PortfolioAllocationState.CONTEXT_REQUIRED,
         snapshot_id=None,
@@ -292,6 +289,16 @@ def allocate_new_entries(
             reasons=("没有可进入共享容量分配的STEP5B仓位包络",),
         )
 
+    envelope_by_identity: dict[str, tuple[Mapping[str, Any], int, int, Decimal, Decimal]] = {}
+    try:
+        for row in sized:
+            identity, quantity, lot_size, entry, risk_per_unit = _validate_envelope(row)
+            if identity in envelope_by_identity:
+                raise ValueError(f"重复STEP5B证券身份:{identity}")
+            envelope_by_identity[identity] = (row, quantity, lot_size, entry, risk_per_unit)
+    except ValueError as exc:
+        return _context_required(PortfolioAllocationBlocker.ENVELOPE_CONTRACT_INVALID, str(exc))
+
     if not isinstance(context, Mapping):
         return _context_required(
             PortfolioAllocationBlocker.ALLOCATION_CONTEXT_UNAVAILABLE,
@@ -335,13 +342,6 @@ def allocate_new_entries(
         theme_risk = _read_dimension_map(context, "theme_risk_remaining_cny")
         industry_value = _read_dimension_map(context, "industry_value_remaining_cny")
         theme_value = _read_dimension_map(context, "theme_value_remaining_cny")
-
-        envelope_by_identity: dict[str, tuple[Mapping[str, Any], int, int, Decimal, Decimal]] = {}
-        for row in sized:
-            identity, quantity, lot_size, entry, risk_per_unit = _validate_envelope(row)
-            if identity in envelope_by_identity:
-                raise ValueError(f"重复STEP5B证券身份:{identity}")
-            envelope_by_identity[identity] = (row, quantity, lot_size, entry, risk_per_unit)
 
         unknown_order = [identity for identity in order if identity not in envelope_by_identity]
         if unknown_order:
@@ -475,10 +475,7 @@ def allocate_new_entries(
             continue
         sizing_state = str((row.get("sizing") or {}).get("state") or "")
         if sizing_state == "SIZED":
-            try:
-                _, quantity, lot_size, entry, risk_per_unit = _validate_envelope(row)
-            except ValueError as exc:
-                return _context_required(PortfolioAllocationBlocker.ENVELOPE_CONTRACT_INVALID, str(exc))
+            _, quantity, lot_size, entry, risk_per_unit = envelope_by_identity[identity]
             all_allocations.append(
                 CandidateAllocation(
                     identity=identity,
