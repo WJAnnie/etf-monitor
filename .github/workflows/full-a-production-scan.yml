@@ -27,7 +27,7 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: trading-skill
@@ -78,6 +78,11 @@ jobs:
             --dynamic-supplement 5 \
             --leaders-per-industry 5 \
             --strict
+
+      - name: 行业专属财务证据增强
+        run: |
+          python -m scripts.enrich_financial_evidence_v3 \
+            --universe full-a-results/universe_latest.json
 
       - name: 候选长历史五周期行情
         run: |
