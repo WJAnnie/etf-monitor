@@ -25,7 +25,7 @@ permissions:
 jobs:
   production-validation:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: trading-skill
@@ -55,6 +55,11 @@ jobs:
             --leaders-per-industry 5 \
             --cross-market-limit 20 \
             --strict
+
+      - name: 行业专属财务证据增强
+        run: |
+          python -m scripts.enrich_financial_evidence_v3 \
+            --universe full-a-results/universe_latest.json
 
       - name: 真实候选长历史五周期行情
         run: |
@@ -91,6 +96,7 @@ jobs:
               print('行业资讯覆盖=',len(intelligence),'资讯错误=',len(p.get('industry_event_errors',[])))
               print('前五原始候选=',p.get('raw_leader_rows_before_dedup'),'行业去重=',p.get('deduped_industry_candidates'),'跨行业=',p.get('cross_market_candidates'),'总候选=',p.get('deduped_leader_candidates'))
               print('严格基本面=',p.get('fundamental_eligible_candidates'),'允许深扫=',p.get('deep_scan_eligible_candidates'))
+              print('行业财务增强=',p.get('financial_detail_enrichment'))
               print('入选行业=',[(x.get('name'),x.get('prospect_theme'),x.get('heat_state'),x.get('change_60d')) for x in selected])
               print('高位隔离行业=',[(x.get('name'),x.get('change_60d'),x.get('change_ytd'),x.get('heat_state')) for x in quarantined[:20]])
               meaningful=[]
@@ -101,7 +107,7 @@ jobs:
               leaders=p.get('leader_candidates',[])
               if leaders:
                   fp=leaders[0].get('fundamental_prefilter') or {}
-                  print('样本行业财务策略=',leaders[0].get('name'),fp.get('industry_policy'),fp.get('valuation_focus'),fp.get('metric_focus'),(fp.get('latest') or {}).get('report_date'))
+                  print('样本行业财务策略=',leaders[0].get('name'),fp.get('industry_policy'),fp.get('industry_evidence_status'),fp.get('industry_evidence_reasons'),fp.get('valuation_focus'),fp.get('metric_focus'),(fp.get('latest') or {}).get('report_date'))
           if bars_path.exists():
               p=json.loads(bars_path.read_text(encoding='utf-8'))
               print('长历史候选=',p.get('candidate_count'),'成功=',p.get('loaded_count'),'异常数=',len(p.get('errors',[])))
