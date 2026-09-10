@@ -136,10 +136,11 @@ def fetch_exchange_funds() -> tuple[list[dict], list[dict], list[str]]:
     except Exception as exc:
         errors.append(f"ETF:{exc}")
     try:
+        # LOF 当前实时列表接口与 ETF 的排序参数不同；f3 才是其稳定实时行情路径。
         lofs = fetch_paginated_price_healthy(
             LOF_FS,
             STOCK_FIELDS,
-            fid="f6",
+            fid="f3",
             hosts=LOF_PUSH2_HOSTS,
         )
     except Exception as exc:
