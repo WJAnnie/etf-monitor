@@ -1,25 +1,20 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import scripts.run_full_a_scan_v2 as v2
 from trading_skill.chan_extensions import annotate_second_buy_variants
 from trading_skill.domain.enums import ChanSignalType, Timeframe
 from trading_skill.history_policy import classify_history_counts, primary_history_gate
 from trading_skill.production_chan_v3 import analyze_production_chan_v3
-from trading_skill.strategy_policy import (
-    TIMEFRAME_POLICY,
-    entry_permission,
-    parent_timeframes,
-    primary_entry_timeframes,
-)
+from trading_skill.strategy_policy import TIMEFRAME_POLICY, entry_permission, parent_timeframes
 
 
 base = v2.base
 _original_v2_analyze_symbol = base.analyze_symbol
 
-# 仅为旧V3回归兼容保留。正式STEP4C已改用完成K线根数管理生命周期，
-# 这些自然时间窗口不得再反向进入strategy_policy或新版主链。
+# Legacy scan freshness is retained only for backwards-compatible reporting. The STEP4C
+# lifecycle engine remains the canonical freshness/invalidation implementation.
 LEGACY_FRESHNESS_DAYS: dict[Timeframe, float] = {
     Timeframe.WEEKLY: 60.0,
     Timeframe.DAILY: 30.0,
@@ -27,39 +22,7 @@ LEGACY_FRESHNESS_DAYS: dict[Timeframe, float] = {
     Timeframe.M30: 5.0,
     Timeframe.M5: 4.0 / 24.0,
 }
-base.FRESHNESS = {
-    timeframe: timedelta(days=days)
-    for timeframe, days in LEGACY_FRESHNESS_DAYS.items()
-}
-
-# 旧V3选择主买点时维持原有回归顺序，但用显式类别顺序表达，
-# 不再把100/95/90等伪精确综合分污染正式策略层。
-LEGACY_PRIMARY_ORDER: tuple[tuple[Timeframe, ChanSignalType], ...] = (
-    (Timeframe.DAILY, ChanSignalType.SECOND_BUY),
-    (Timeframe.DAILY, ChanSignalType.THIRD_BUY),
-    (Timeframe.M120, ChanSignalType.SECOND_BUY),
-    (Timeframe.M120, ChanSignalType.THIRD_BUY),
-    (Timeframe.M30, ChanSignalType.SECOND_BUY),
-    (Timeframe.M30, ChanSignalType.THIRD_BUY),
-    (Timeframe.M120, ChanSignalType.FIRST_BUY),
-    (Timeframe.DAILY, ChanSignalType.FIRST_BUY),
-    (Timeframe.M30, ChanSignalType.FIRST_BUY),
-)
-
-
-def _legacy_order_index(timeframe: Timeframe, kind: ChanSignalType) -> int | None:
-    try:
-        return LEGACY_PRIMARY_ORDER.index((timeframe, kind))
-    except ValueError:
-        return None
-
-
-def _legacy_class2_tie_break(signal) -> tuple[bool, bool]:
-    extended = set(getattr(signal, "extended_types", ()) or ())
-    return (
-        ChanSignalType.STRONG_CLASS2_BUY in extended,
-        ChanSignalType.CENTER_CLASS2_BUY in extended,
-    )
+base.FRESHNESS = {timeframe: timedelta(days=days) for timeframe, days in LEGACY_FRESHNESS_DAYS.items()}
 
 
 def _analyze_with_extensions(raw_bars, *, tick_size, as_of):
@@ -69,40 +32,44 @@ def _analyze_with_extensions(raw_bars, *, tick_size, as_of):
 base.analyze_production_chan = _analyze_with_extensions
 
 
-def choose_primary_v3(results, *, as_of):
-    """旧V3兼容选择器：按显式类别顺序选主逻辑，不使用综合分。"""
-    choices = []
-    for timeframe in primary_entry_timeframes():
-        result = results.get(timeframe)
-        if result is None:
-            continue
-        for signal in base.fresh_signals(result, as_of=as_of, side="BUY"):
-            kind = base.signal_type(signal)
-            if kind not in {ChanSignalType.FIRST_BUY, ChanSignalType.SECOND_BUY, ChanSignalType.THIRD_BUY}:
-                continue
-            if v2._invalidated_by_later_sell(result, signal, as_of=as_of):
-                continue
-            order_index = _legacy_order_index(timeframe, kind)
-            if order_index is None:
-                continue
-            choices.append((order_index, timeframe, signal))
-    if not choices:
-        return None
-
-    best_order = min(item[0] for item in choices)
-    same_class = [item for item in choices if item[0] == best_order]
-    _, timeframe, signal = max(
-        same_class,
-        key=lambda item: (_legacy_class2_tie_break(item[2]), item[2].confirmation_timestamp),
+def _class2_tie_break(signal) -> tuple[bool, bool]:
+    extended = set(getattr(signal, "extended_types", ()) or ())
+    return (
+        ChanSignalType.STRONG_CLASS2_BUY in extended,
+        ChanSignalType.CENTER_CLASS2_BUY in extended,
     )
-    return timeframe, signal
+
+
+def choose_primary_v3(results, *, as_of):
+    """Legacy report selector aligned to the canonical new-entry contract.
+
+    It may return a DAILY FIRST_BUY only so the report can say WAIT_2B. It never returns
+    DAILY THIRD_BUY, 120m or 30m as a fresh-position primary. Therefore no compatibility
+    path can recreate the retired standalone-entry policy.
+    """
+    daily = results.get(Timeframe.DAILY)
+    if daily is None:
+        return None
+    fresh = []
+    for signal in base.fresh_signals(daily, as_of=as_of, side="BUY"):
+        kind = base.signal_type(signal)
+        if kind not in {ChanSignalType.SECOND_BUY, ChanSignalType.FIRST_BUY}:
+            continue
+        if v2._invalidated_by_later_sell(daily, signal, as_of=as_of):
+            continue
+        rank = 2 if kind is ChanSignalType.SECOND_BUY else 1
+        fresh.append((rank, _class2_tie_break(signal), signal.confirmation_timestamp, signal))
+    if not fresh:
+        return None
+    _, _, _, signal = max(fresh, key=lambda item: (item[0], item[1], item[2]))
+    return Timeframe.DAILY, signal
 
 
 base.choose_primary = choose_primary_v3
 
 
 def parent_valid_v3(results, timeframe, *, as_of):
-    """上级结构只看当前最新正式状态，不让已被新买点覆盖的旧卖点永久阻断下级机会。"""
+    """Higher context uses the newest current formal state; stale sells do not block forever."""
     for parent_tf in parent_timeframes(timeframe):
         parent = results.get(parent_tf)
         if parent is None or parent.status not in ("OK", "UNRESOLVED"):
@@ -120,107 +87,108 @@ def parent_valid_v3(results, timeframe, *, as_of):
 base.parent_valid = parent_valid_v3
 
 
-def _parse_iso(value: str | None):
+def _parse_iso(value: object) -> datetime | None:
     if not value:
         return None
-    from datetime import datetime
     try:
         return datetime.fromisoformat(str(value))
     except ValueError:
         return None
 
 
-def _child_execution_timeframes(primary: str) -> tuple[str, ...]:
-    if primary == "daily":
-        return ("120m", "30m", "5m")
-    if primary == "120m":
-        return ("30m", "5m")
-    if primary == "30m":
-        return ("5m",)
-    return ()
+def _formal_side(signal: dict) -> str | None:
+    side = str(signal.get("side") or "")
+    labels = set(str(item) for item in (signal.get("types") or signal.get("standard_types") or []))
+    if side == "BUY" and labels & {"FIRST_BUY", "SECOND_BUY", "THIRD_BUY"}:
+        return "BUY"
+    if side == "SELL" and labels & {"FIRST_SELL", "SECOND_SELL", "THIRD_SELL"}:
+        return "SELL"
+    return None
 
 
-def _latest_child_signal_after(raw: dict, confirmation) -> dict | None:
-    candidates = []
+def _latest_formal_signal_since(raw: dict, anchor: datetime) -> dict | None:
+    candidates: list[tuple[datetime, str, dict]] = []
     for signal in raw.get("signals") or []:
-        when = _parse_iso(signal.get("confirmation_timestamp"))
-        if when is None or when <= confirmation:
+        side = _formal_side(signal)
+        if side is None:
             continue
-        candidates.append((when, signal))
+        when = _parse_iso(signal.get("confirmation_timestamp"))
+        if when is None:
+            continue
+        if anchor.tzinfo is not None and when.tzinfo is None:
+            when = when.replace(tzinfo=anchor.tzinfo)
+        if anchor.tzinfo is not None and when.tzinfo is not None:
+            when = when.astimezone(anchor.tzinfo)
+        if when < anchor:
+            continue
+        candidates.append((when, str(signal.get("id") or ""), signal))
     if not candidates:
         return None
-    candidates.sort(key=lambda pair: pair[0])
-    return candidates[-1][1]
+    return max(candidates, key=lambda item: (item[0], item[1]))[2]
 
 
 def _execution_structure_ok(analysis: dict, candidate: dict) -> tuple[bool, list[str], dict[str, str]]:
-    """把“5分钟执行确认”落成可验证状态，而不是把“没有卖点”误当作确认。
+    """Strict legacy execution bridge: DAILY 2B -> formal 120m BUY -> formal 30m BUY -> formal 5m BUY.
 
-    CONFIRMED：主买点仍在触发/准备区，低级别没有更新卖点冲突，且5分钟满足：
-      1) 主买点确认后出现新的正式BUY；或
-      2) 当前5分钟技术状态为SUPPORT。
-    WAITING：没有冲突，但价格已离触发区，或5分钟仍缺少正向确认。
-    CONFLICT：主买点之后低级别最新正式结构为SELL，或5分钟技术状态PAUSE。
-    UNVERIFIABLE：缺少主买点确认时间或5分钟有效分析结果。
-
-    5分钟BUY只作为执行证据，绝不能自己升级成主买点。
+    Child signals are anchored to the DAILY authority structural timestamp (confirmation
+    time is only a fallback). Their confirmation order relative to each other is irrelevant.
+    A newer SELL controls that child level. Indicators may PAUSE but can never substitute
+    for a missing formal BUY. Price-distance maturity is an independent chase guard.
     """
-    confirmation = _parse_iso(candidate.get("signal_confirmation_time"))
-    if confirmation is None:
-        return False, ["主买点确认时间缺失，无法验证5分钟执行条件"], {"5m_execution": "UNVERIFIABLE"}
+    if str(candidate.get("timeframe") or "") != Timeframe.DAILY.value:
+        return False, ["只有日线授权候选可以进入新开仓执行链"], {"5m_execution": "NOT_DAILY_AUTHORITY"}
+    if str(candidate.get("signal") or "") != ChanSignalType.SECOND_BUY.value:
+        state = "WAIT_DAILY_SECOND_BUY" if str(candidate.get("signal") or "") == ChanSignalType.FIRST_BUY.value else "NO_FRESH_ENTRY"
+        return False, ["新开仓执行链要求日线标准二买/类二买授权"], {"5m_execution": state}
 
-    conflicts: list[str] = []
-    latest_states: dict[str, str] = {}
-    latest_by_child: dict[str, dict | None] = {}
+    anchor = _parse_iso(candidate.get("signal_structural_time")) or _parse_iso(candidate.get("signal_confirmation_time"))
+    if anchor is None:
+        return False, ["日线授权信号缺少结构/确认时间，无法归属低周期执行证据"], {"5m_execution": "UNVERIFIABLE"}
+
     timeframes = analysis.get("timeframes") or {}
-
-    for child in _child_execution_timeframes(str(candidate.get("timeframe") or "")):
+    conflicts: list[str] = []
+    states: dict[str, str] = {}
+    missing = False
+    for child in ("120m", "30m", "5m"):
         raw = timeframes.get(child) or {}
-        latest = _latest_child_signal_after(raw, confirmation)
-        latest_by_child[child] = latest
+        latest = _latest_formal_signal_since(raw, anchor)
         if latest is None:
-            latest_states[child] = "无更新正式买卖点"
+            states[child] = "WAITING_FORMAL_BUY"
+            conflicts.append(f"{TIMEFRAME_POLICY[Timeframe(child)].chinese_name}当前日线结构内没有正式BUY；趋势或指标不能替代")
+            missing = True
             continue
-        side = str(latest.get("side") or "")
-        labels = list(latest.get("types") or []) + list(latest.get("extended_types") or [])
-        latest_states[child] = f"{side}:{'/'.join(labels) or '结构信号'}"
+        side = _formal_side(latest)
+        labels = list(latest.get("types") or latest.get("standard_types") or [])
+        states[child] = f"{side}:{'/'.join(labels) or '结构信号'}"
         if side == "SELL":
-            conflicts.append(f"{TIMEFRAME_POLICY[Timeframe(child)].chinese_name}最新正式结构仍为卖点")
+            conflicts.append(f"{TIMEFRAME_POLICY[Timeframe(child)].chinese_name}当前日线结构内最新正式结构仍为卖点")
 
-    five_raw = timeframes.get("5m") or {}
-    five_status = str(five_raw.get("status") or "")
-    five_technical = str(((five_raw.get("technical") or {}).get("confirmation") or ""))
-    latest_states["5m_technical"] = five_technical or "NONE"
-
+    five = timeframes.get("5m") or {}
+    five_status = str(five.get("status") or "")
+    five_technical = str(((five.get("technical") or {}).get("confirmation") or ""))
+    states["5m_technical"] = five_technical or "NONE"
     if five_status not in {"OK", "UNRESOLVED"}:
-        conflicts.append("5分钟分析结果不可用，无法验证执行确认")
-        latest_states["5m_execution"] = "UNVERIFIABLE"
-        return False, conflicts, latest_states
-
+        conflicts.append("5分钟分析结果不可验证")
+        states["5m_execution"] = "UNVERIFIABLE"
+        return False, conflicts, states
     if five_technical == "PAUSE":
-        conflicts.append("5分钟技术状态为PAUSE，当前执行暂停")
+        conflicts.append("5分钟已有结构证据但技术确认层为PAUSE；指标只能暂停，不能创造或升级买点")
 
-    if conflicts:
-        latest_states["5m_execution"] = "CONFLICT"
-        return False, conflicts, latest_states
+    if any("最新正式结构仍为卖点" in item for item in conflicts) or five_technical == "PAUSE":
+        states["5m_execution"] = "CONFLICT"
+        return False, conflicts, states
+    if missing:
+        states["5m_execution"] = "WAITING_FORMAL_CHAIN"
+        return False, conflicts, states
 
     maturity = str(candidate.get("execution_maturity") or "NOT_READY")
     if maturity not in {"TRIGGERED", "PREPARE"}:
-        conflicts.append(f"当前价格执行成熟度为{maturity}，不在主买点触发/准备区")
-        latest_states["5m_execution"] = "WAITING_PRICE"
-        return False, conflicts, latest_states
+        conflicts.append(f"当前价格执行成熟度为{maturity}，不在触发/准备区")
+        states["5m_execution"] = "WAITING_PRICE"
+        return False, conflicts, states
 
-    latest_five = latest_by_child.get("5m")
-    formal_buy = bool(latest_five and str(latest_five.get("side") or "") == "BUY")
-    technical_support = five_technical == "SUPPORT"
-    if formal_buy or technical_support:
-        source = "FORMAL_BUY" if formal_buy else "TECH_SUPPORT"
-        latest_states["5m_execution"] = f"CONFIRMED:{source}"
-        return True, [], latest_states
-
-    conflicts.append("5分钟没有主买点确认后的新正式买点，且当前技术状态未达到SUPPORT，执行确认仍在等待")
-    latest_states["5m_execution"] = "WAITING_5M_CONFIRMATION"
-    return False, conflicts, latest_states
+    states["5m_execution"] = "CONFIRMED:FORMAL_120M_30M_5M_BUY"
+    return True, [], states
 
 
 def _find_primary_signal_raw(analysis: dict, candidate: dict) -> dict | None:
@@ -229,7 +197,8 @@ def _find_primary_signal_raw(analysis: dict, candidate: dict) -> dict | None:
     confirm = str(candidate.get("signal_confirmation_time") or "")
     raw = (analysis.get("timeframes") or {}).get(tf) or {}
     for signal in reversed(raw.get("signals") or []):
-        if expected in (signal.get("types") or []) and (not confirm or signal.get("confirmation_timestamp") == confirm):
+        labels = signal.get("types") or signal.get("standard_types") or []
+        if expected in labels and (not confirm or signal.get("confirmation_timestamp") == confirm):
             return signal
     return None
 
@@ -237,10 +206,8 @@ def _find_primary_signal_raw(analysis: dict, candidate: dict) -> dict | None:
 def _entry_zones(kind: str, signal_price: float) -> tuple[str, str]:
     if kind == ChanSignalType.SECOND_BUY.value:
         trigger, prepare = 0.04, 0.08
-    elif kind == ChanSignalType.FIRST_BUY.value:
-        trigger, prepare = 0.03, 0.06
     else:
-        trigger, prepare = 0.03, 0.05
+        trigger, prepare = 0.03, 0.06
     return f"{signal_price:.2f}～{signal_price*(1+trigger):.2f}元", f"不高于约{signal_price*(1+prepare):.2f}元"
 
 
@@ -284,7 +251,7 @@ def _enforce_history_policy(candidate: dict, symbol: dict) -> None:
         return
     candidate["push"] = False
     candidate["action"] = "OBSERVE"
-    candidate["recent_signal_note"] = f"缠论买点保留观察，但{reason}，不把有限历史当成完整结构证据"
+    candidate["recent_signal_note"] = f"缠论结构保留观察，但{reason}；有限历史不能冒充完整结构证据"
     blockers = list(candidate.get("blockers") or [])
     if "HISTORY_CONTEXT_INCOMPLETE" not in blockers:
         blockers.append("HISTORY_CONTEXT_INCOMPLETE")
@@ -292,60 +259,17 @@ def _enforce_history_policy(candidate: dict, symbol: dict) -> None:
 
 
 def _enforce_first_buy_permission(candidate: dict) -> None:
-    """一买权限只能降级风险，绝不能把本来不成熟/低评分/被阻断的交易重新“复活”。"""
     if str(candidate.get("signal") or "") != ChanSignalType.FIRST_BUY.value:
         return
-    blockers = set(candidate.get("blockers") or [])
-    hard_blocked = bool(blockers & HARD_ENTRY_BLOCKERS)
-    timeframe = str(candidate.get("timeframe") or "")
-    if hard_blocked:
-        candidate["push"] = False
-        candidate["action"] = "OBSERVE"
-        candidate["recent_signal_note"] = "一买结构存在，但存在基本面/风险/数据/上级结构/历史证据等硬阻断，仅保留观察"
-        return
-
-    if timeframe == Timeframe.DAILY.value:
-        candidate["action"] = "WAIT_2B"
-        candidate["push"] = False
-        candidate["recent_signal_note"] = "日线一买已成立，但按策略默认等待标准二买，不直接建立核心仓"
-        return
-
-    if timeframe == Timeframe.M30.value:
-        candidate["action"] = "OBSERVE"
-        candidate["push"] = False
-        candidate["recent_signal_note"] = "30分钟一买：反转初期，仅观察；优先等待标准二买/三买和5分钟执行条件"
-        return
-
-    if timeframe == Timeframe.M120.value:
-        grade_ok = str(candidate.get("opportunity") or "") in {"S", "A", "B"}
-        maturity = str(candidate.get("execution_maturity") or "NOT_READY")
-        maturity_ok = maturity in {"TRIGGERED", "PREPARE"}
-        unexpected_blockers = blockers - {"DAILY_FIRST_BUY_WAIT_2B"}
-        if not grade_ok:
-            candidate["action"] = "OBSERVE"
-            candidate["push"] = False
-            candidate["recent_signal_note"] = "120分钟一买结构存在，但机会等级仅C，不允许因一买权限绕过评分门槛"
-            return
-        if not maturity_ok:
-            candidate["action"] = "OBSERVE"
-            candidate["push"] = False
-            candidate["recent_signal_note"] = "120分钟一买结构存在，但当前已离买点过远或执行尚未成熟，仅观察等待新的执行条件"
-            return
-        if unexpected_blockers:
-            candidate["action"] = "OBSERVE"
-            candidate["push"] = False
-            candidate["recent_signal_note"] = "120分钟一买结构存在，但仍有交易阻断项，不能由周期权限重新激活"
-            return
-        candidate["action"] = "PREPARE_BUY"
-        candidate["push"] = True
-        candidate["recent_signal_note"] = "120分钟一买：满足机会等级、历史证据和距离门槛后仅进入准备/小试仓观察，不等同标准二买或三买"
+    candidate["action"] = "WAIT_2B"
+    candidate["push"] = False
+    candidate["buy_amount"] = None
+    candidate["buy_quantity"] = None
+    candidate["recent_signal_note"] = "日线一买仅记录反转事实，等待日线标准二买/类二买；低周期信号不得提前开仓"
 
 
 def _major_negative_events(events: list[dict] | tuple[dict, ...]) -> list[dict]:
-    return [
-        event for event in (events or [])
-        if event.get("importance") == "重大" and event.get("impact") == "利空"
-    ]
+    return [event for event in (events or []) if event.get("importance") == "重大" and event.get("impact") == "利空"]
 
 
 def _major_negative_industry_events(industry: dict) -> list[dict]:
@@ -366,6 +290,7 @@ def analyze_symbol_v3(symbol, industry_map, *, as_of, equity):
 
     raw_signal = _find_primary_signal_raw(analysis, candidate)
     if raw_signal:
+        candidate["signal_structural_time"] = raw_signal.get("structural_timestamp")
         extended = list(raw_signal.get("extended_types") or [])
         candidate["extended_signal_types"] = extended
         labels = []
@@ -394,13 +319,16 @@ def analyze_symbol_v3(symbol, industry_map, *, as_of, equity):
     candidate["execution_confirmation_state"] = latest_states.get("5m_execution", "UNVERIFIABLE")
     if not execution_ok:
         candidate["push"] = False
-        candidate["action"] = "OBSERVE"
-        state = str(candidate.get("execution_confirmation_state") or "UNVERIFIABLE")
-        candidate["recent_signal_note"] = (
-            f"主买点结构仍保留，但5分钟执行状态为{state}；"
-            + ("；".join(conflicts) if conflicts else "等待新的可验证执行确认")
-        )
+        # Preserve WAIT_2B wording for daily first buy; otherwise execution waits as OBSERVE.
+        if str(candidate.get("signal") or "") != ChanSignalType.FIRST_BUY.value:
+            candidate["action"] = "OBSERVE"
+            state = str(candidate.get("execution_confirmation_state") or "UNVERIFIABLE")
+            candidate["recent_signal_note"] = (
+                f"日线授权结构仍保留，但执行状态为{state}；"
+                + ("；".join(conflicts) if conflicts else "等待120m→30m→5m正式结构链")
+            )
         blockers = list(candidate.get("blockers") or [])
+        state = str(candidate.get("execution_confirmation_state") or "UNVERIFIABLE")
         blocker = "EXECUTION_STRUCTURE_CONFLICT" if state == "CONFLICT" else "EXECUTION_CONFIRMATION_PENDING"
         if blocker not in blockers:
             blockers.append(blocker)
@@ -412,7 +340,7 @@ def analyze_symbol_v3(symbol, industry_map, *, as_of, equity):
     if major_negative:
         candidate["push"] = False
         candidate["action"] = "OBSERVE"
-        candidate["recent_signal_note"] = "缠论结构仍保留，但真实所属行业出现36小时内重大利空，暂停新开仓并等待事件影响重新定价"
+        candidate["recent_signal_note"] = "缠论结构保留，但真实所属行业出现近期重大利空，暂停新开仓并等待事件影响重新定价"
         blockers = list(candidate.get("blockers") or [])
         if "INDUSTRY_MAJOR_NEGATIVE_EVENT" not in blockers:
             blockers.append("INDUSTRY_MAJOR_NEGATIVE_EVENT")
@@ -421,7 +349,7 @@ def analyze_symbol_v3(symbol, industry_map, *, as_of, equity):
     if symbol.get("candidate_route") == "跨行业结构补充" and symbol.get("industry_context_complete") is False:
         candidate["push"] = False
         candidate["action"] = "OBSERVE"
-        candidate["recent_signal_note"] = "缠论结构保留观察，但跨行业候选真实细分行业未成功解析，行业风险上下文不完整，禁止新开仓"
+        candidate["recent_signal_note"] = "真实细分行业未成功解析，行业风险上下文不完整；结构可观察但禁止新开仓"
         blockers = list(candidate.get("blockers") or [])
         if "INDUSTRY_CONTEXT_INCOMPLETE" not in blockers:
             blockers.append("INDUSTRY_CONTEXT_INCOMPLETE")
@@ -448,9 +376,18 @@ def analyze_symbol_v3(symbol, industry_map, *, as_of, equity):
     candidate["industry_context_note"] = symbol.get("industry_context_note")
     candidate["pe"] = symbol.get("pe")
     candidate["pb"] = symbol.get("pb")
-    candidate["stop_logic"] = f"止损跟随{candidate.get('timeframe','主结构')}买点/中枢失效；单根5分钟影线或短线卖点不能直接否定更高周期核心结构。"
-    candidate["add_plan"] = "首笔后只有出现新的同级或更高级标准二买/三买或结构升级，且保护位能够抬高或保持，才允许第二笔/趋势加仓；价格低于持仓成本不自动否决，但单纯为了摊低成本的机械补仓禁止。"
-    candidate["take_profit_plan"] = "不设固定盈利百分比止盈；5分钟/30分钟卖点先处理试仓和战术仓，120分钟卖点逐级降低确认仓，日线二卖开始分批减核心仓，日线三卖或周线战略结构失效退出。"
+    candidate["stop_logic"] = (
+        "双层保护：日线二买结构失效位定义核心交易逻辑；首笔TEST按当前日线结构内5分钟正式BUY执行止损定仓。"
+        "低周期止损只处理对应低周期仓层，不能单独否定日线核心逻辑。"
+    )
+    candidate["add_plan"] = (
+        "首笔后只有新的30分钟标准二买/三买才申请确认仓，新的120分钟标准二买/三买才申请核心仓升级，"
+        "新的日线二买/三买趋势延续最多再加一层TREND_ADD；任何机械摊低成本补仓禁止。"
+    )
+    candidate["take_profit_plan"] = (
+        "不设固定盈利百分比止盈；按5分钟、30分钟、120分钟、日线、周线的一卖/二卖/三卖分级减仓，"
+        "保护位只能随新确认结构上移或保持。"
+    )
     return analysis, candidate
 
 
