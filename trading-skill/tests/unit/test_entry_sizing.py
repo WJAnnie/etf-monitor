@@ -156,7 +156,7 @@ def test_zero_portfolio_risk_capacity_blocks_even_with_cash_available():
 
 def test_positive_risk_budget_that_cannot_cover_one_unit_reports_risk_not_value():
     decision = size_new_entry(
-        _row(stop_ticks=0 if False else 920),
+        _row(stop_ticks=920),
         _context(planned_entry_price="1000.00", standard_trade_risk_limit_cny="10", test_trade_risk_limit_cny="5"),
     )
     assert decision.state is EntrySizingState.BLOCKED
