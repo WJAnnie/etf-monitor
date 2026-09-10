@@ -9,7 +9,6 @@ from pathlib import Path
 from trading_skill.domain.enums import ChanSignalType, Timeframe
 from trading_skill.technical_opportunity import (
     EXECUTABLE_STATES,
-    TechnicalOpportunityState,
     best_executable_candidate,
     build_technical_opportunities,
     dominant_current_buy,
@@ -92,12 +91,14 @@ def main() -> int:
         "design_contract": {
             "no_weighted_or_composite_score": True,
             "dominant_current_buy_is_structural_significance_not_execution_permission": True,
-            "best_executable_candidate_is_selected_only_from_ready_states": True,
-            "daily_structure_dominates_120m_then_30m_without_numeric_score": True,
-            "m5_never_becomes_primary_opportunity": True,
-            "first_buy_permissions_are_timeframe_specific": True,
-            "class2_is_metadata_not_independent_permission": True,
-            "history_parent_structure_parent_signal_and_lower_execution_are_separate_facts": True,
+            "best_executable_candidate_is_daily_second_buy_only": True,
+            "daily_first_buy_waits_for_second_buy": True,
+            "daily_third_buy_is_continuation_not_fresh_entry": True,
+            "m120_m30_m5_never_become_standalone_new_entry": True,
+            "class2_is_metadata_on_standard_second_buy_not_independent_permission": True,
+            "execution_chain_requires_formal_m120_m30_m5_buy": True,
+            "technical_indicators_may_pause_but_never_create_buy_point": True,
+            "history_parent_structure_parent_signal_and_execution_are_separate_facts": True,
             "this_stage_does_not_size_positions_or_emit_final_order": True,
         },
         "input_symbols": len(symbols),
@@ -124,20 +125,16 @@ def main() -> int:
         if symbols and len(analyzed) / len(symbols) < 0.99:
             problems.append(f"STEP4D分析成功率过低:{len(analyzed)}/{len(symbols)}")
 
-        illegal_5m = []
         illegal_executable = []
         score_leaks = []
         for row in analyzed:
             for opportunity in row.get("opportunities") or []:
-                if opportunity.get("timeframe") == Timeframe.M5.value:
-                    illegal_5m.append(row.get("code"))
                 if opportunity.get("executable_candidate"):
                     if opportunity.get("state") not in {state.value for state in EXECUTABLE_STATES}:
                         illegal_executable.append((row.get("code"), "STATE", opportunity.get("state")))
-                    if opportunity.get("signal_type") not in {
-                        ChanSignalType.SECOND_BUY.value,
-                        ChanSignalType.THIRD_BUY.value,
-                    }:
+                    if opportunity.get("timeframe") != Timeframe.DAILY.value:
+                        illegal_executable.append((row.get("code"), "TIMEFRAME", opportunity.get("timeframe")))
+                    if opportunity.get("signal_type") != ChanSignalType.SECOND_BUY.value:
                         illegal_executable.append((row.get("code"), "SIGNAL", opportunity.get("signal_type")))
                     if not opportunity.get("history_eligible"):
                         illegal_executable.append((row.get("code"), "HISTORY", False))
@@ -147,13 +144,14 @@ def main() -> int:
                     score_leaks.append(row.get("code"))
 
             executable = row.get("best_executable_candidate")
-            if executable and not executable.get("executable_candidate"):
-                illegal_executable.append((row.get("code"), "BEST_NOT_EXECUTABLE", executable.get("state")))
+            if executable:
+                if not executable.get("executable_candidate"):
+                    illegal_executable.append((row.get("code"), "BEST_NOT_EXECUTABLE", executable.get("state")))
+                if executable.get("timeframe") != Timeframe.DAILY.value or executable.get("signal_type") != ChanSignalType.SECOND_BUY.value:
+                    illegal_executable.append((row.get("code"), "BEST_IDENTITY", executable))
 
-        if illegal_5m:
-            problems.append(f"5分钟错误进入STEP4D主技术机会:{len(illegal_5m)}")
         if illegal_executable:
-            problems.append(f"STEP4D可执行候选违反技术合同:{len(illegal_executable)}")
+            problems.append(f"STEP4D可执行候选违反日线二买授权合同:{len(illegal_executable)}")
         if score_leaks:
             problems.append(f"STEP4D重新引入综合score字段:{len(score_leaks)}")
         if problems:
