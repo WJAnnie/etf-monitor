@@ -99,14 +99,23 @@ def evaluate_protection_break(
 def map_sell_scope(trade:Trade, *, timeframe:str, sell_class:int) -> SellScope:
     fractions=[]
     affected=[]
+    affected_roles:set[TrancheRole]=set()
+    all_fully_exited=bool(trade.tranches)
     for tr in trade.tranches:
         fraction=sell_fraction(timeframe,sell_class,tr.thesis.role)
         if fraction>0:
             affected.append(tr.id)
+            affected_roles.add(tr.thesis.role)
             fractions.append((tr.id,fraction))
-    if (timeframe in ("daily","weekly")) and sell_class>=3:
+        if fraction<1.0:
+            all_fully_exited=False
+
+    # Action semantics must describe what the matrix actually does. The old shortcut
+    # inferred the label from timeframe/class and could call a weekly 1-sell
+    # REDUCE_TACTICAL even while cutting CORE by 50%.
+    if all_fully_exited:
         action=Action.EXIT
-    elif timeframe in ("daily","weekly") and sell_class>=2:
+    elif TrancheRole.CORE in affected_roles:
         action=Action.REDUCE_CORE
     else:
         action=Action.REDUCE_TACTICAL
