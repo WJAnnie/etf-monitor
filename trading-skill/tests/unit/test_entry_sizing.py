@@ -8,31 +8,38 @@ from trading_skill.entry_sizing import EntrySizingBlocker, EntrySizingState, siz
 
 def _row(
     *,
-    mode: str = "STANDARD",
     allowed: bool = True,
-    stop_ticks: int = 920,
+    authority_stop_ticks: int = 920,
+    execution_stop_ticks: int = 950,
     tick_size=0.01,
-    signal_id: str = "sig-1",
-    timeframe: str = "120m",
+    signal_id: str = "sig-daily",
+    execution_signal_id: str = "sig-5m",
 ):
-    state = "ELIGIBLE" if mode == "STANDARD" else "TEST_ENTRY_ELIGIBLE"
-    if not allowed:
-        state = "WAIT_TECHNICAL"
-        mode = "NONE"
     return {
         "permission": {
-            "state": state,
-            "entry_mode": mode,
+            "state": "ELIGIBLE" if allowed else "WAIT_TECHNICAL",
+            "entry_mode": "STANDARD" if allowed else "NONE",
             "new_entry_allowed": allowed,
             "signal_id": signal_id if allowed else None,
-            "selected_timeframe": timeframe if allowed else None,
+            "selected_timeframe": "daily" if allowed else None,
+            "signal_type": "SECOND_BUY" if allowed else None,
         },
-        "structural_stop": {
+        "authority_stop": {
             "valid_for_new_entry": True,
             "signal_id": signal_id,
-            "timeframe": timeframe,
-            "price_ticks": stop_ticks,
+            "timeframe": "daily",
+            "price_ticks": authority_stop_ticks,
             "tick_size": tick_size,
+            "stop_price": authority_stop_ticks * tick_size,
+        },
+        "execution_stop": {
+            "valid_for_new_entry": True,
+            "signal_id": execution_signal_id,
+            "authority_signal_id": signal_id,
+            "timeframe": "5m",
+            "price_ticks": execution_stop_ticks,
+            "tick_size": tick_size,
+            "stop_price": execution_stop_ticks * tick_size,
         },
     }
 
@@ -63,56 +70,67 @@ def test_noneligible_permission_never_requires_sizing_context():
     assert decision.blockers == ()
 
 
-def test_standard_entry_is_sized_by_risk_and_value_caps_then_lot_rounding():
+def test_daily_standard_authority_starts_as_test_tranche_sized_from_5m_execution_stop():
     decision = size_new_entry(_row(), _context())
+    payload = decision.to_dict()
     assert decision.state is EntrySizingState.SIZED
-    assert decision.quantity == 1000
-    assert decision.to_dict()["structural_stop_price"] == "9.2"
-    assert decision.to_dict()["risk_per_unit"] == "0.8"
-    assert decision.to_dict()["effective_risk_budget_cny"] == "1000"
-    assert decision.to_dict()["planned_value_cny"] == "10000"
-    assert decision.to_dict()["planned_risk_cny"] == "800"
-    assert decision.risk_binding_limits == ("TRADE_RISK",)
-    assert decision.quantity_binding_limits == ("CASH",)
+    assert decision.quantity == 600
+    assert payload["structural_stop_price"] == "9.5"  # legacy field = execution stop
+    assert payload["authority_stop_price"] == "9.2"
+    assert payload["risk_per_unit"] == "0.5"
+    assert payload["effective_risk_budget_cny"] == "300"
+    assert payload["planned_value_cny"] == "6000"
+    assert payload["planned_risk_cny"] == "300"
+    assert decision.risk_binding_limits == ("TEST_TRADE_RISK",)
+    assert payload["authority_signal_id"] == "sig-daily"
+    assert payload["execution_stop_signal_id"] == "sig-5m"
+    assert payload["execution_stop_timeframe"] == "5m"
 
 
-def test_industry_risk_cap_can_be_the_binding_risk_without_score_multiplier():
-    decision = size_new_entry(_row(), _context(industry_risk_remaining_cny="600"))
+def test_industry_risk_cap_can_bind_initial_test_tranche_without_score_multiplier():
+    decision = size_new_entry(_row(), _context(industry_risk_remaining_cny="225"))
     assert decision.state is EntrySizingState.SIZED
-    assert decision.to_dict()["effective_risk_budget_cny"] == "600"
-    assert decision.quantity_before_lot_rounding == 750
-    assert decision.quantity == 700
+    assert decision.to_dict()["effective_risk_budget_cny"] == "225"
+    assert decision.quantity_before_lot_rounding == 450
+    assert decision.quantity == 400
     assert decision.risk_binding_limits == ("INDUSTRY_RISK",)
     assert "LOT_ROUNDING" in decision.quantity_binding_limits
 
 
-def test_test_entry_uses_explicit_test_risk_limit_not_fraction_of_standard():
-    decision = size_new_entry(_row(mode="TEST"), _context())
-    assert decision.state is EntrySizingState.SIZED
-    assert decision.to_dict()["effective_risk_budget_cny"] == "300"
-    assert decision.quantity_before_lot_rounding == 375
-    assert decision.quantity == 300
-
-
-def test_permission_state_and_entry_mode_must_be_consistent():
-    row = _row(mode="STANDARD")
+def test_legacy_test_entry_mode_is_no_longer_a_valid_new_position_permission():
+    row = _row()
+    row["permission"]["entry_mode"] = "TEST"
     row["permission"]["state"] = "TEST_ENTRY_ELIGIBLE"
     decision = size_new_entry(row, _context())
     assert decision.state is EntrySizingState.CONTEXT_REQUIRED
     assert decision.blockers == (EntrySizingBlocker.SIZING_CONTEXT_INVALID,)
 
 
-def test_structural_stop_must_match_selected_signal_and_timeframe():
+def test_authority_stop_must_match_daily_permission_signal():
     row = _row()
-    row["structural_stop"]["signal_id"] = "other-signal"
+    row["authority_stop"]["signal_id"] = "other-signal"
     decision = size_new_entry(row, _context())
     assert decision.state is EntrySizingState.BLOCKED
     assert decision.blockers == (EntrySizingBlocker.STRUCTURAL_STOP_UNAVAILABLE,)
 
 
+def test_execution_stop_must_be_5m_and_bound_to_same_daily_authority():
+    row = _row()
+    row["execution_stop"]["authority_signal_id"] = "other-daily"
+    decision = size_new_entry(row, _context())
+    assert decision.state is EntrySizingState.BLOCKED
+    assert decision.blockers == (EntrySizingBlocker.EXECUTION_STOP_UNAVAILABLE,)
+
+    row = _row()
+    row["execution_stop"]["timeframe"] = "30m"
+    decision = size_new_entry(row, _context())
+    assert decision.state is EntrySizingState.BLOCKED
+    assert decision.blockers == (EntrySizingBlocker.EXECUTION_STOP_UNAVAILABLE,)
+
+
 def test_test_risk_limit_cannot_exceed_standard_risk_limit():
     decision = size_new_entry(
-        _row(mode="TEST"),
+        _row(),
         _context(standard_trade_risk_limit_cny="500", test_trade_risk_limit_cny="700"),
     )
     assert decision.state is EntrySizingState.CONTEXT_REQUIRED
@@ -141,8 +159,8 @@ def test_entry_price_must_match_tick_without_silent_rounding():
     assert decision.blockers == (EntrySizingBlocker.INVALID_ENTRY_TICK,)
 
 
-def test_stop_must_be_strictly_below_planned_entry():
-    decision = size_new_entry(_row(stop_ticks=1020), _context())
+def test_execution_stop_must_be_strictly_below_planned_entry():
+    decision = size_new_entry(_row(execution_stop_ticks=1020), _context())
     assert decision.state is EntrySizingState.BLOCKED
     assert decision.blockers == (EntrySizingBlocker.INVALID_STOP_DISTANCE,)
 
@@ -154,9 +172,9 @@ def test_zero_portfolio_risk_capacity_blocks_even_with_cash_available():
     assert "PORTFOLIO_RISK" in decision.risk_binding_limits
 
 
-def test_positive_risk_budget_that_cannot_cover_one_unit_reports_risk_not_value():
+def test_positive_test_risk_budget_that_cannot_cover_one_unit_reports_risk_not_value():
     decision = size_new_entry(
-        _row(stop_ticks=920),
+        _row(),
         _context(planned_entry_price="1000.00", standard_trade_risk_limit_cny="10", test_trade_risk_limit_cny="5"),
     )
     assert decision.state is EntrySizingState.BLOCKED
@@ -167,18 +185,23 @@ def test_positive_risk_budget_that_cannot_cover_one_unit_reports_risk_not_value(
 def test_quantity_is_never_rounded_up_to_minimum_lot():
     decision = size_new_entry(
         _row(),
-        _context(standard_trade_risk_limit_cny="10", test_trade_risk_limit_cny="5"),
+        _context(standard_trade_risk_limit_cny="25", test_trade_risk_limit_cny="25"),
     )
     assert decision.state is EntrySizingState.BLOCKED
     assert decision.blockers == (EntrySizingBlocker.NO_EXECUTION_MINIMUM_LOT,)
-    assert decision.quantity_before_lot_rounding == 12
+    assert decision.quantity_before_lot_rounding == 50
     assert decision.quantity == 0
 
 
 def test_cash_and_security_caps_are_hard_upper_bounds_after_rounding():
     decision = size_new_entry(
         _row(),
-        _context(cash_available_cny="7500", security_value_remaining_cny="6800"),
+        _context(
+            standard_trade_risk_limit_cny="1000",
+            test_trade_risk_limit_cny="1000",
+            cash_available_cny="7500",
+            security_value_remaining_cny="6800",
+        ),
     )
     assert decision.state is EntrySizingState.SIZED
     assert decision.quantity_before_lot_rounding == 680
@@ -192,13 +215,19 @@ def test_cash_and_security_caps_are_hard_upper_bounds_after_rounding():
 
 def test_decimal_price_math_does_not_leak_binary_float_artifacts():
     decision = size_new_entry(
-        _row(stop_ticks=920, tick_size=0.01),
-        _context(planned_entry_price="10.20", lot_size=1, cash_available_cny="100000"),
+        _row(authority_stop_ticks=900, execution_stop_ticks=920, tick_size=0.01),
+        _context(
+            planned_entry_price="10.20",
+            lot_size=1,
+            cash_available_cny="100000",
+            security_value_remaining_cny="100000",
+        ),
     )
     assert decision.state is EntrySizingState.SIZED
     payload = decision.to_dict()
     assert payload["planned_entry_price"] == "10.2"
     assert payload["structural_stop_price"] == "9.2"
+    assert payload["authority_stop_price"] == "9"
     assert payload["risk_per_unit"] == "1"
 
 
