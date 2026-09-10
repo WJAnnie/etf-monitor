@@ -1,4 +1,4 @@
-name: 全A正式买点扫描
+name: 全A正式策略扫描
 
 on:
   schedule:
@@ -27,7 +27,7 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: trading-skill
@@ -37,7 +37,6 @@ jobs:
       FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
       FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
       FEISHU_CHAT_ID: oc_9df5fff3a390da378fc2714fdb2ea541
-      TRADING_EQUITY: ${{ secrets.TRADING_EQUITY }}
 
     steps:
       - name: Checkout
@@ -70,8 +69,7 @@ jobs:
           echo "stage=$STAGE" >> "$GITHUB_OUTPUT"
           echo "本轮时点：$STAGE"
 
-      # 新第一/二步先独立产出并留档；后续基本面与缠论重构完成前，不强绑旧V3数据合同。
-      - name: 新版可交易池与候选发现
+      - name: STEP1-2 可交易证券池与动态候选发现
         run: |
           python -m scripts.collect_candidate_universe \
             --output full-a-results/candidate_universe_latest.json \
@@ -81,46 +79,110 @@ jobs:
             --fund-cap 100 \
             --strict
 
-      - name: 旧V3候选预筛回归
+      - name: STEP2-3 候选真实行业补全
         run: |
-          python -m scripts.collect_full_a_universe_v3 \
-            --output full-a-results/universe_latest.json \
-            --prospect-limit 20 \
-            --early-heat-limit 8 \
-            --dynamic-supplement 4 \
-            --leaders-per-industry 5 \
-            --cross-market-limit 20 \
+          python -m scripts.enrich_candidate_industries \
+            --input full-a-results/candidate_universe_latest.json \
             --strict
 
-      - name: 跨行业候选真实行业补全
+      - name: STEP3 股票行业化基本面与ETF-LOF产品质量
         run: |
-          python -m scripts.enrich_cross_industry_v3 \
-            --universe full-a-results/universe_latest.json
-
-      - name: 账户权限桥与候选长历史五周期行情
-        run: |
-          python -m scripts.collect_candidate_bars_v3 \
-            --universe full-a-results/universe_latest.json \
-            --output full-a-results/candidate_bars_latest.json \
+          python -m scripts.collect_fundamental_quality \
+            --input full-a-results/candidate_universe_latest.json \
+            --output full-a-results/fundamental_quality_latest.json \
             --strict
 
-      - name: 多周期一致性缠论深度扫描V3
+      - name: STEP3C ETF-LOF慢变量产品参考增强
         run: |
-          python -m scripts.run_full_a_scan_v3 \
-            --universe full-a-results/universe_latest.json \
-            --bars full-a-results/candidate_bars_latest.json \
-            --output full-a-results/scan_latest.json \
+          python -m scripts.enrich_fund_product_references \
+            --candidates full-a-results/candidate_universe_latest.json \
+            --quality full-a-results/fundamental_quality_latest.json \
+            --strict
+
+      - name: STEP3-4 构建正式深扫队列
+        run: |
+          python -m scripts.build_deep_scan_queue \
+            --input full-a-results/fundamental_quality_latest.json \
+            --output full-a-results/deep_scan_queue_latest.json \
+            --soft-target-min 80 \
+            --capacity-max 150 \
+            --strict
+
+      - name: STEP4 五周期真实行情
+        run: |
+          python -m scripts.collect_step4_bars \
+            --queue full-a-results/deep_scan_queue_latest.json \
+            --output full-a-results/step4_bars_latest.json \
+            --workers 6 \
+            --strict
+
+      - name: STEP4B 五周期层级结构
+        run: |
+          python -m scripts.analyze_step4_structure \
+            --bars full-a-results/step4_bars_latest.json \
+            --output full-a-results/step4_structure_latest.json \
+            --strict
+
+      - name: STEP4C 买卖点生命周期
+        run: |
+          python -m scripts.analyze_step4_signal_lifecycle \
+            --structure full-a-results/step4_structure_latest.json \
+            --bars full-a-results/step4_bars_latest.json \
+            --output full-a-results/step4_signal_lifecycle_latest.json \
+            --strict
+
+      - name: STEP4D 日线授权与120m-30m-5m执行链
+        run: |
+          python -m scripts.analyze_step4_technical_opportunity \
+            --lifecycle full-a-results/step4_signal_lifecycle_latest.json \
+            --output full-a-results/step4_technical_opportunity_latest.json \
+            --strict
+
+      - name: STEP5A 独立交易许可门
+        run: |
+          python -m scripts.analyze_step5_trade_permission \
+            --technical full-a-results/step4_technical_opportunity_latest.json \
+            --quality full-a-results/fundamental_quality_latest.json \
+            --candidates full-a-results/candidate_universe_latest.json \
+            --structure full-a-results/step4_structure_latest.json \
+            --output full-a-results/step5_trade_permission_latest.json \
+            --strict
+
+      - name: STEP5B TEST风险预算与仓位包络
+        run: |
+          python -m scripts.analyze_step5b_entry_sizing \
+            --permission full-a-results/step5_trade_permission_latest.json \
+            --output full-a-results/step5b_entry_sizing_latest.json \
+            --strict
+
+      - name: STEP5C 共享组合容量分配
+        run: |
+          python -m scripts.analyze_step5c_portfolio_allocation \
+            --sizing full-a-results/step5b_entry_sizing_latest.json \
+            --output full-a-results/step5c_portfolio_allocation_latest.json \
+            --strict
+
+      - name: STEP5D 执行意图与外部预留边界
+        run: |
+          python -m scripts.analyze_step5d_execution_intent \
+            --allocation full-a-results/step5c_portfolio_allocation_latest.json \
+            --sizing full-a-results/step5b_entry_sizing_latest.json \
+            --output full-a-results/step5d_execution_intent_latest.json \
+            --strict
+
+      - name: 飞书STEP1-5D统一策略报告
+        run: |
+          python -m scripts.send_full_a_pipeline_report \
+            --candidates full-a-results/candidate_universe_latest.json \
+            --quality full-a-results/fundamental_quality_latest.json \
+            --technical full-a-results/step4_technical_opportunity_latest.json \
+            --permission full-a-results/step5_trade_permission_latest.json \
+            --sizing full-a-results/step5b_entry_sizing_latest.json \
+            --allocation full-a-results/step5c_portfolio_allocation_latest.json \
+            --execution full-a-results/step5d_execution_intent_latest.json \
             --stage '${{ steps.stage.outputs.stage }}'
 
-      - name: 飞书中文报告V3
-        run: |
-          python -m scripts.send_full_a_report_v3 \
-            --scan full-a-results/scan_latest.json \
-            --bars full-a-results/candidate_bars_latest.json \
-            --universe full-a-results/universe_latest.json \
-            --stage '${{ steps.stage.outputs.stage }}'
-
-      - name: Upload scan result
+      - name: Upload production evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
