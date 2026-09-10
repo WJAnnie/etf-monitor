@@ -11,6 +11,7 @@ from pathlib import Path
 from scripts.collect_full_a_universe import (
     A_SHARE_MARKETS,
     CN_TZ,
+    LOF_PUSH2_HOSTS,
     MAX_WORKERS,
     STOCK_FIELDS,
     _safe_float,
@@ -53,11 +54,12 @@ def fetch_paginated_price_healthy(
     fid: str,
     max_pages: int | None = None,
     min_coverage: float = MIN_BATCH_PRICE_COVERAGE,
+    hosts: tuple[str, ...] | None = None,
 ) -> list[dict]:
     """HTTP成功不等于行情可用；关键价格字段必须达到批量语义健康阈值。"""
     diagnostics: list[str] = []
     for attempt in range(SEMANTIC_PRICE_RETRIES):
-        rows = fetch_paginated(fs, fields, fid=fid, max_pages=max_pages)
+        rows = fetch_paginated(fs, fields, fid=fid, max_pages=max_pages, hosts=hosts)
         coverage = _price_coverage(rows)
         if rows and coverage >= min_coverage:
             return rows
@@ -134,7 +136,12 @@ def fetch_exchange_funds() -> tuple[list[dict], list[dict], list[str]]:
     except Exception as exc:
         errors.append(f"ETF:{exc}")
     try:
-        lofs = fetch_paginated_price_healthy(LOF_FS, STOCK_FIELDS, fid="f6")
+        lofs = fetch_paginated_price_healthy(
+            LOF_FS,
+            STOCK_FIELDS,
+            fid="f6",
+            hosts=LOF_PUSH2_HOSTS,
+        )
     except Exception as exc:
         errors.append(f"LOF:{exc}")
     return etfs, lofs, errors
