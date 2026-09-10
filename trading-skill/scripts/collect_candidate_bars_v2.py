@@ -159,7 +159,6 @@ def aggregate_m30_to_m120(rows: list[dict]) -> list[dict]:
 
 def fetch_daily_v2(code: str, market: int) -> tuple[list[dict], str, list[str]]:
     warnings = []
-    # 优先前复权长历史，避免除权除息在长期缠论结构中制造假跳空。
     for name, fn in (
         ("东方财富前复权", lambda: eastmoney_daily(code, market, DAILY_LIMIT)),
         ("腾讯", lambda: tencent_daily(code, DAILY_LIMIT)),
@@ -194,7 +193,6 @@ def fetch_m5_v2(code: str, market: int, now: datetime) -> tuple[list[dict], str,
 
 def fetch_m30_v2(code: str, market: int, now: datetime) -> tuple[list[dict], str, list[str]]:
     warnings = []
-    # 30分钟同样优先前复权长历史；新浪/腾讯只做网络与数据源兜底。
     providers = (
         ("东方财富前复权", lambda: eastmoney_m30(code, market)),
         ("新浪", lambda: sina_m30(code)),
@@ -228,8 +226,16 @@ def collect_one(item: dict, now: datetime) -> dict:
         "market": market,
         "industry_code": item.get("industry_code"),
         "industry_name": item.get("industry_name"),
+        "actual_industry_name": item.get("actual_industry_name"),
+        "industry_context_complete": item.get("industry_context_complete"),
+        "industry_context_note": item.get("industry_context_note"),
+        "industry_event_risk": item.get("industry_event_risk"),
+        "industry_event_score": item.get("industry_event_score"),
+        "industry_event_context_complete": item.get("industry_event_context_complete"),
         "industry_selection_reason": item.get("industry_selection_reason"),
         "prospect_theme": item.get("prospect_theme"),
+        "candidate_route": item.get("candidate_route"),
+        "daily_priority_score": item.get("daily_priority_score"),
         "leader_rank": item.get("leader_rank"),
         "leader_score": item.get("leader_score"),
         "change_60d": item.get("change_60d"),
@@ -255,8 +261,16 @@ def collect_one(item: dict, now: datetime) -> dict:
             "m120_history_ok": len(m120) >= MIN_M120,
             "latest_m5": m5[-1]["time"] if m5 else None,
             "latest_m30": m30[-1]["time"] if m30 else None,
-            "covers_1345": bool(m5 and parse_cn_time(m5[-1]["time"]).date() == now.date() and parse_cn_time(m5[-1]["time"]).time() >= dt_time(13, 45)) if now.time() >= dt_time(13, 45) else True,
-            "covers_1445": bool(m5 and parse_cn_time(m5[-1]["time"]).date() == now.date() and parse_cn_time(m5[-1]["time"]).time() >= dt_time(14, 45)) if now.time() >= dt_time(14, 45) else True,
+            "covers_1345": bool(
+                m5
+                and parse_cn_time(m5[-1]["time"]).date() == now.date()
+                and parse_cn_time(m5[-1]["time"]).time() >= dt_time(13, 45)
+            ) if now.time() >= dt_time(13, 45) else True,
+            "covers_1445": bool(
+                m5
+                and parse_cn_time(m5[-1]["time"]).date() == now.date()
+                and parse_cn_time(m5[-1]["time"]).time() >= dt_time(14, 45)
+            ) if now.time() >= dt_time(14, 45) else True,
         },
     }
 
@@ -279,7 +293,10 @@ def main() -> int:
     universe = json.loads(args.universe.read_text(encoding="utf-8"))
     candidates = [
         item for item in universe.get("leader_candidates", [])
-        if (item.get("fundamental_prefilter") or {}).get("deep_scan_eligible", (item.get("fundamental_prefilter") or {}).get("eligible"))
+        if (item.get("fundamental_prefilter") or {}).get(
+            "deep_scan_eligible",
+            (item.get("fundamental_prefilter") or {}).get("eligible"),
+        )
     ]
     results = []
     errors = []
@@ -291,7 +308,17 @@ def main() -> int:
                 results.append(future.result())
             except Exception as exc:
                 errors.append({"code": item.get("code"), "name": item.get("name"), "error": str(exc)})
-    results.sort(key=lambda x: (str(x.get("prospect_theme") or "ZZZ"), str(x.get("industry_name")), int(x.get("leader_rank") or 99), str(x.get("code"))))
+
+    # Event/industry-adjusted daily research priority must survive into the actual deep
+    # scan order. Previous code recomputed a theme/name/rank order and silently discarded
+    # the event adjustment calculated in universe V3.
+    results.sort(
+        key=lambda item: (
+            -float(item.get("daily_priority_score") or 0),
+            int(item.get("leader_rank") or 99),
+            str(item.get("code") or ""),
+        )
+    )
     payload = {
         "mode": "FULL_A_CANDIDATE_LONG_HISTORY_V2",
         "generated_at": now.isoformat(),
@@ -305,6 +332,10 @@ def main() -> int:
             "120m_from_real_30m": True,
             "prefer_adjusted_long_history": True,
             "newer_stocks_can_use_shorter_daily_history": True,
+            "industry_risk_context_preserved": True,
+            "cross_market_real_industry_context_preserved": True,
+            "daily_event_adjusted_priority_preserved": True,
+            "missing_industry_event_context_preserved_as_unknown": True,
             "no_15m_to_5m": True,
             "daily_target": DAILY_LIMIT,
             "m5_target": M5_LIMIT,
@@ -314,7 +345,11 @@ def main() -> int:
     atomic_json(args.output, payload)
     print(f"允许深扫候选={len(candidates)}，长历史五周期成功={len(results)}，异常={len(errors)}")
     for item in results:
-        print(item["code"], item["name"], item["sources"], len(item["daily"]), len(item["weekly"]), len(item["120m"]), len(item["30m"]), len(item["5m"]), item["quality"]["latest_m5"])
+        print(
+            item["code"], item["name"], item["sources"], len(item["daily"]), len(item["weekly"]),
+            len(item["120m"]), len(item["30m"]), len(item["5m"]), item["quality"]["latest_m5"],
+            "priority=", item.get("daily_priority_score"), "event=", item.get("industry_event_risk"),
+        )
     if errors:
         print("异常前10:", errors[:10])
     if args.strict and candidates:
