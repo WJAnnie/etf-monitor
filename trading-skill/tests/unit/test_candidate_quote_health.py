@@ -93,11 +93,11 @@ def test_price_healthy_batch_forwards_source_specific_hosts(monkeypatch):
     assert calls[0]["hosts"] == hosts
 
 
-def test_exchange_funds_routes_only_lof_through_dedicated_hosts(monkeypatch):
+def test_exchange_funds_preserves_distinct_etf_and_lof_quote_parameters(monkeypatch):
     calls = []
 
     def fake_healthy(fs, fields, **kwargs):
-        calls.append((fs, kwargs.get("hosts")))
+        calls.append((fs, kwargs.get("fid"), kwargs.get("hosts")))
         return _rows(100, "10")
 
     monkeypatch.setattr(universe, "fetch_paginated_price_healthy", fake_healthy)
@@ -108,6 +108,6 @@ def test_exchange_funds_routes_only_lof_through_dedicated_hosts(monkeypatch):
     assert len(lofs) == 100
     assert errors == []
     assert calls == [
-        (universe.ETF_FS, None),
-        (universe.LOF_FS, universe.LOF_PUSH2_HOSTS),
+        (universe.ETF_FS, "f6", None),
+        (universe.LOF_FS, "f3", universe.LOF_PUSH2_HOSTS),
     ]
