@@ -9,12 +9,9 @@ from pathlib import Path
 
 from trading_skill.a_share_bars import CN_TZ
 from trading_skill.domain.enums import Timeframe
+from trading_skill.execution_chain import evaluate_daily_execution_chain
 from trading_skill.history_policy import primary_history_gate
-from trading_skill.signal_lifecycle import (
-    SignalLifecycleStage,
-    build_signal_lifecycle_book,
-    evaluate_lower_context,
-)
+from trading_skill.signal_lifecycle import SignalLifecycleStage, build_signal_lifecycle_book
 from trading_skill.strategy_policy import parent_timeframes, primary_entry_timeframes
 
 
@@ -117,6 +114,8 @@ def analyze_symbol(item: dict, bar_item: dict, *, as_of: datetime) -> dict:
     history_quality = dict(item.get("history_quality") or {})
     current_buy_contexts: dict[str, dict] = {}
     for timeframe in primary_entry_timeframes():
+        # Canonical policy currently permits only DAILY here. Keep the loop so policy
+        # remains the single source of truth if the strategy contract changes later.
         lifecycle = lifecycle_book.get(timeframe)
         if lifecycle is None:
             continue
@@ -124,13 +123,15 @@ def analyze_symbol(item: dict, bar_item: dict, *, as_of: datetime) -> dict:
         if current_buy is None or current_buy.confirmation_timestamp is None:
             continue
         history_ok, history_reason = primary_history_gate(timeframe.value, history_quality)
-        lower = evaluate_lower_context(
-            chan,
-            lifecycle_book,
-            primary_timeframe=timeframe,
-            primary_confirmation=current_buy.confirmation_timestamp,
-            as_of=as_of,
-        )
+        if timeframe is Timeframe.DAILY:
+            lower = evaluate_daily_execution_chain(
+                chan,
+                lifecycle_book,
+                authority=current_buy,
+                as_of=as_of,
+            )
+        else:
+            raise RuntimeError(f"UNSUPPORTED_PRIMARY_ENTRY_TIMEFRAME:{timeframe.value}")
         parent_conflicts = _parent_signal_conflicts(lifecycle_book, timeframe)
         current_buy_contexts[timeframe.value] = {
             "signal": current_buy.to_dict(),
@@ -246,10 +247,14 @@ def main() -> int:
             "newest_signal_wins_before_signal_type_priority": True,
             "signal_type_priority_only_breaks_same_confirmation_time_ties": True,
             "class2_is_metadata_not_independent_lifecycle_signal": True,
+            "daily_is_only_new_entry_authority_timeframe": True,
             "m5_has_lifecycle_but_never_becomes_primary_trade_cycle": True,
             "history_gate_is_context_not_signal_redefinition": True,
             "parent_current_sell_conflict_is_step4c_context_not_step4b_structure": True,
-            "lower_timeframe_relation_uses_current_lifecycle_signals": True,
+            "execution_chain_requires_formal_120m_30m_5m_buy": True,
+            "child_buy_must_belong_to_current_daily_structure_anchor": True,
+            "technical_support_never_substitutes_for_formal_buy": True,
+            "technical_pause_may_block_execution": True,
             "this_stage_does_not_size_positions_or_emit_final_trade_action": True,
         },
         "input_symbols": len(symbols),
@@ -299,9 +304,16 @@ def main() -> int:
                         illegal_current.append((row.get("code"), key, "UNKNOWN_BAR_AGE"))
         if illegal_current:
             problems.append(f"非当前生命周期或未知K线年龄错误成为current信号:{len(illegal_current)}")
-        leaked_m5_primary = [row for row in analyzed if "5m" in (row.get("current_buy_contexts") or {})]
-        if leaked_m5_primary:
-            problems.append(f"5分钟错误成为主交易买点周期:{len(leaked_m5_primary)}")
+
+        illegal_primary = [
+            (row.get("code"), timeframe)
+            for row in analyzed
+            for timeframe in (row.get("current_buy_contexts") or {})
+            if timeframe != Timeframe.DAILY.value
+        ]
+        if illegal_primary:
+            problems.append(f"非日线周期错误成为新开仓授权上下文:{len(illegal_primary)}")
+
         class2_as_standard = []
         for row in analyzed:
             for lifecycle in (row.get("signal_lifecycle") or {}).values():
