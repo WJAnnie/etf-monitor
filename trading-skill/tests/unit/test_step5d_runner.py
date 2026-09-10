@@ -22,15 +22,23 @@ def _sizing_payload():
                     "state": "ELIGIBLE",
                     "entry_mode": "STANDARD",
                     "new_entry_allowed": True,
-                    "selected_timeframe": "120m",
-                    "signal_id": "sig-1",
+                    "selected_timeframe": "daily",
+                    "signal_id": "sig-daily-2b",
                     "signal_type": "SECOND_BUY",
                 },
-                "structural_stop": {
+                "authority_stop": {
                     "found": True,
                     "valid_for_new_entry": True,
-                    "timeframe": "120m",
-                    "signal_id": "sig-1",
+                    "timeframe": "daily",
+                    "signal_id": "sig-daily-2b",
+                    "stop_price": 9.0,
+                },
+                "execution_stop": {
+                    "found": True,
+                    "valid_for_new_entry": True,
+                    "timeframe": "5m",
+                    "signal_id": "sig-5m-2b",
+                    "authority_signal_id": "sig-daily-2b",
                     "stop_price": 9.2,
                 },
                 "sizing": {
@@ -39,6 +47,10 @@ def _sizing_payload():
                     "lot_size": 100,
                     "planned_entry_price": "10",
                     "structural_stop_price": "9.2",
+                    "authority_stop_price": "9.0",
+                    "authority_signal_id": "sig-daily-2b",
+                    "execution_stop_signal_id": "sig-5m-2b",
+                    "execution_stop_timeframe": "5m",
                     "risk_per_unit": "0.8",
                     "planned_value_cny": "10000",
                     "planned_risk_cny": "800",
@@ -139,3 +151,10 @@ def test_runner_matching_snapshot_is_ready_not_fake_reserved(tmp_path, monkeypat
     assert payload["summary"]["reservation_key_created"] is True
     assert payload["summary"]["durable_reservation_confirmed"] is False
     assert payload["summary"]["broker_order_created"] is False
+    intent = payload["plan"]["intents"][0]
+    assert intent["timeframe"] == "daily"
+    assert intent["signal_id"] == "sig-daily-2b"
+    assert intent["execution_stop_timeframe"] == "5m"
+    assert intent["execution_stop_signal_id"] == "sig-5m-2b"
+    assert intent["authority_stop_price"] == "9"
+    assert intent["structural_stop_price"] == "9.2"
