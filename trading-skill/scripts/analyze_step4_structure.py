@@ -72,7 +72,6 @@ def _latest_completed_bar(rows: list[dict]) -> datetime | None:
 
 
 def _empty_result(timeframe: Timeframe, *, issue: str) -> dict:
-    """Keep the requested timeframe identity when short history cannot form even one bar."""
     return {
         "status": "DATA_INCOMPLETE",
         "timeframe": timeframe.value,
@@ -185,15 +184,15 @@ def main() -> int:
         "source_bars": str(args.bars),
         "design_contract": {
             "timeframes_are_hierarchical_not_voting": True,
-            "weekly_is_strategic_only": True,
-            "daily_is_core_structure": True,
-            "m120_is_primary_trading_structure": True,
-            "m30_is_tactical_structure": True,
-            "m5_is_execution_only": True,
+            "weekly_is_strategic_environment_only": True,
+            "daily_is_only_new_entry_authority_structure": True,
+            "m120_is_daily_tail_confirmation_not_standalone_entry": True,
+            "m30_is_execution_setup_not_standalone_entry": True,
+            "m5_is_final_execution_trigger_only": True,
             "step4b_does_not_choose_current_buy_or_sell_signal": True,
             "signal_freshness_and_invalidation_belong_to_step4c": True,
             "higher_caution_is_structural_context_only": True,
-            "class2_buy_is_extension_not_standard_second_buy": True,
+            "class2_buy_is_extension_not_independent_standard_signal": True,
             "security_specific_tick_size": True,
             "short_history_preserves_timeframe_identity": True,
             "this_stage_does_not_size_positions_or_decide_entry_permission": True,
@@ -233,6 +232,11 @@ def main() -> int:
         missing_history = [row for row in analyzed if not isinstance(row.get("history_quality"), dict)]
         if missing_history:
             problems.append(f"4B缺少历史证据合同:{len(missing_history)}")
+        wrong_parent_contexts = [
+            row for row in analyzed if set((row.get("parent_contexts") or {}).keys()) - {Timeframe.DAILY.value}
+        ]
+        if wrong_parent_contexts:
+            problems.append(f"4B错误为非日线新开仓周期生成primary parent context:{len(wrong_parent_contexts)}")
         if any("fresh_buy_contexts" in row for row in analyzed):
             problems.append("4B仍然泄漏当前买点选择职责")
         if problems:
