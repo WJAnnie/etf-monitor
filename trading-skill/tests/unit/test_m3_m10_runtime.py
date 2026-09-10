@@ -34,8 +34,8 @@ def center(n,dd,gg,zd,zg):
 def leg(name,direction,low,high,day):
     return StructuralLeg(name,direction,1,low,high,T0+timedelta(days=day-2),T0+timedelta(days=day),T0+timedelta(days=day))
 
-def move(name,direction,low,high,day,completed=True):
-    return LowerMove(name,direction,0,low,high,T0+timedelta(days=day),T0+timedelta(days=day),completed)
+def move(name,direction,low,high,day,completed=True,*,end_ticks=None):
+    return LowerMove(name,direction,0,low,high,T0+timedelta(days=day),T0+timedelta(days=day),completed,end_ticks=end_ticks)
 
 def signal(stype=ChanSignalType.SECOND_BUY):
     return ChanSignal("s","X",(stype,),(),"BUY",1,"daily",SignalState.CONFIRMED,100,T0,T0,("a",),("e",))
@@ -82,10 +82,16 @@ def test_m3_future_confirmation_blocked():
     d,res=evaluate_trend_divergence(t,b,c,MacdLegEvidence("b",20,8,7,6),MacdLegEvidence("c",10,5,4,4),lower_level_turn_completed=True,as_of=T0+timedelta(days=10))
     assert not res.valid and "FUTURE_LEAKAGE_BLOCKED" in d.reason_codes
 
-def test_m3_second_buy_can_be_below_anchor():
-    a=ReversalAnchor("ra","X",Direction.UP,1,100,T0,True); tr=new_second_buy_tracker(a)
+def test_m3_second_buy_breaking_first_buy_anchor_is_invalidated():
+    a=ReversalAnchor("ra","X",Direction.UP,1,100,T0,True,timeframe="120m"); tr=new_second_buy_tracker(a)
     tr,_=second_buy_step(tr,move("up",Direction.UP,100,140,1)); tr,sig=second_buy_step(tr,move("ret",Direction.DOWN,95,130,2))
-    assert tr.state is SecondBuyTrackerState.SECOND_BUY_CONFIRMED and sig.structural_price_ticks==95
+    assert tr.state is SecondBuyTrackerState.SECOND_BUY_INVALIDATED and sig is None
+
+def test_m3_second_buy_equal_anchor_is_boundary_valid_and_keeps_timeframe():
+    a=ReversalAnchor("ra-eq","X",Direction.UP,1,100,T0,True,timeframe="120m"); tr=new_second_buy_tracker(a)
+    tr,_=second_buy_step(tr,move("up-eq",Direction.UP,100,140,1)); tr,sig=second_buy_step(tr,move("ret-eq",Direction.DOWN,100,130,2))
+    assert tr.state is SecondBuyTrackerState.SECOND_BUY_CONFIRMED
+    assert sig is not None and sig.structural_price_ticks==100 and sig.timeframe=="120m"
 
 def test_m3_third_buy_equal_zg_valid_one_tick_below_invalid():
     c=center(0,100,200,120,180); tr=new_third_buy_tracker(c)
@@ -93,6 +99,13 @@ def test_m3_third_buy_equal_zg_valid_one_tick_below_invalid():
     assert tr.state is ThirdBuyTrackerState.THIRD_BUY_CONFIRMED and sig is not None
     tr2=new_third_buy_tracker(c); tr2,_=third_buy_step(tr2,c,move("dep2",Direction.UP,181,240,1)); tr2,sig2=third_buy_step(tr2,c,move("ret2",Direction.DOWN,179,230,2))
     assert tr2.state is ThirdBuyTrackerState.THIRD_BUY_FAILED and sig2 is None
+
+def test_m3_third_buy_departure_may_start_inside_center_if_endpoint_breaks_zg():
+    c=center(0,100,200,120,180); tr=new_third_buy_tracker(c)
+    tr,_=third_buy_step(tr,c,move("dep-inside",Direction.UP,150,240,1,end_ticks=220))
+    assert tr.state is ThirdBuyTrackerState.WAIT_FIRST_RETURN
+    tr,sig=third_buy_step(tr,c,move("ret-outside",Direction.DOWN,180,220,2,end_ticks=180))
+    assert tr.state is ThirdBuyTrackerState.THIRD_BUY_CONFIRMED and sig is not None
 
 def test_m3_second_third_overlap():
     a=ReversalAnchor("ra","X",Direction.UP,1,100,T0,True); tr=new_second_buy_tracker(a)

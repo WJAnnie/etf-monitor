@@ -1,6 +1,6 @@
 from __future__ import annotations
 from datetime import datetime, timedelta, timezone
-from trading_skill.chan.center import CenterMotion, classify_center_relation, extend_center, seed_center
+from trading_skill.chan.center import CenterMotion, classify_center_relation, extend_center, motion_leaves_core, seed_center
 from trading_skill.domain.enums import CenterRelationType, Direction, Timeframe
 
 BASE=datetime(2026,1,1,tzinfo=timezone.utc)
@@ -16,10 +16,18 @@ def test_gold_gs007_standard_center():
     assert (c.zd_ticks,c.zg_ticks,c.dd_ticks,c.gg_ticks)==(7,11,5,13)
 
 def test_gold_gs008_center_extension_core_does_not_drift():
-    c=seed(); e=extend_center(c,m(3,Direction.DOWN,4,12)).center
+    c=seed(); e=extend_center(c,m(3,Direction.DOWN,8,12)).center
     assert e.id==c.id
     assert (e.zd_ticks,e.zg_ticks)==(7,11)
-    assert e.dd_ticks==4
+    assert e.dd_ticks==5
+
+def test_gold_gs008b_endpoint_leave_is_not_silently_recorded_as_extension():
+    c=seed(); departure=m(3,Direction.DOWN,4,12)
+    assert motion_leaves_core(c,departure)
+    update=extend_center(c,departure)
+    assert not update.result.valid
+    assert "CENTER_STILL_LEAVING" in update.result.reason_codes
+    assert update.center==c
 
 def test_gold_gs009_center_expansion_not_independent_trend_center():
     a=seed()

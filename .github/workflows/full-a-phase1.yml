@@ -3,25 +3,25 @@ name: Full A Production Validation
 on:
   pull_request:
     paths:
-      - 'trading-skill/src/trading_skill/a_share_*.py'
-      - 'trading-skill/src/trading_skill/industry_prospects.py'
-      - 'trading-skill/src/trading_skill/production_chan.py'
+      - 'trading-skill/src/trading_skill/**.py'
       - 'trading-skill/scripts/*.py'
-      - 'trading-skill/tests/unit/test_a_share_*.py'
-      - 'trading-skill/tests/unit/test_full_a_v2.py'
-      - 'trading-skill/tests/unit/test_industry_prospects.py'
-      - 'trading-skill/tests/unit/test_production_chan.py'
+      - 'trading-skill/configs/*.yaml'
+      - 'trading-skill/tests/unit/*.py'
       - '.github/workflows/full-a-phase1.yml'
       - '.github/workflows/full-a-production-scan.yml'
   workflow_dispatch:
+
+concurrency:
+  group: full-a-production-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  production-validation:
+  new-pipeline-validation:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 55
     defaults:
       run:
         working-directory: trading-skill
@@ -42,66 +42,260 @@ jobs:
       - name: 全量回归测试
         run: python -m pytest
 
-      - name: 真实全A前景行业与前五候选预筛
+      - name: STEP1-2 可交易证券池与候选发现验证
         run: |
-          python -m scripts.collect_full_a_universe_v2 \
-            --output full-a-results/universe_latest.json \
-            --prospect-limit 20 \
-            --dynamic-supplement 5 \
-            --leaders-per-industry 5 \
-            --cross-market-limit 20 \
+          python -m scripts.collect_candidate_universe \
+            --output full-a-results/candidate_universe_latest.json \
+            --industry-limit 28 \
+            --stock-strength-cap 120 \
+            --stock-early-cap 100 \
+            --fund-cap 100 \
             --strict
 
-      - name: 真实候选长历史五周期行情
+      - name: STEP2-3 全市场候选真实行业补全
         run: |
-          python -m scripts.collect_candidate_bars_v2 \
-            --universe full-a-results/universe_latest.json \
-            --output full-a-results/candidate_bars_latest.json \
+          python -m scripts.enrich_candidate_industries \
+            --input full-a-results/candidate_universe_latest.json \
             --strict
 
-      - name: 近期买点与正式缠论深度扫描
+      - name: STEP3 股票与ETF-LOF基础质量验证
         run: |
-          python -m scripts.run_full_a_scan_v2 \
-            --universe full-a-results/universe_latest.json \
-            --bars full-a-results/candidate_bars_latest.json \
-            --output full-a-results/scan_latest.json \
-            --stage 'CI真实验证'
+          python -m scripts.collect_fundamental_quality \
+            --input full-a-results/candidate_universe_latest.json \
+            --output full-a-results/fundamental_quality_latest.json \
+            --strict
 
-      - name: 打印V2验收摘要
+      - name: STEP3C ETF-LOF慢变量产品参考增强
+        run: |
+          python -m scripts.enrich_fund_product_references \
+            --candidates full-a-results/candidate_universe_latest.json \
+            --quality full-a-results/fundamental_quality_latest.json \
+            --strict
+
+      - name: STEP3-4 深扫资格队列验证
+        run: |
+          python -m scripts.build_deep_scan_queue \
+            --input full-a-results/fundamental_quality_latest.json \
+            --output full-a-results/deep_scan_queue_latest.json \
+            --soft-target-min 80 \
+            --capacity-max 150 \
+            --strict
+
+      - name: STEP4 正式深扫队列五周期行情
+        run: |
+          python -m scripts.collect_step4_bars \
+            --queue full-a-results/deep_scan_queue_latest.json \
+            --output full-a-results/step4_bars_latest.json \
+            --workers 6 \
+            --strict
+
+      - name: STEP4B 五周期层级结构验证
+        run: |
+          python -m scripts.analyze_step4_structure \
+            --bars full-a-results/step4_bars_latest.json \
+            --output full-a-results/step4_structure_latest.json \
+            --strict
+
+      - name: STEP4C 买卖点生命周期验证
+        run: |
+          python -m scripts.analyze_step4_signal_lifecycle \
+            --structure full-a-results/step4_structure_latest.json \
+            --bars full-a-results/step4_bars_latest.json \
+            --output full-a-results/step4_signal_lifecycle_latest.json \
+            --strict
+
+      - name: STEP4D 技术机会资格验证
+        run: |
+          python -m scripts.analyze_step4_technical_opportunity \
+            --lifecycle full-a-results/step4_signal_lifecycle_latest.json \
+            --output full-a-results/step4_technical_opportunity_latest.json \
+            --strict
+
+      - name: STEP5A 新开仓交易许可验证
+        run: |
+          python -m scripts.analyze_step5_trade_permission \
+            --technical full-a-results/step4_technical_opportunity_latest.json \
+            --quality full-a-results/fundamental_quality_latest.json \
+            --candidates full-a-results/candidate_universe_latest.json \
+            --structure full-a-results/step4_structure_latest.json \
+            --output full-a-results/step5_trade_permission_latest.json \
+            --strict
+
+      - name: STEP5B 新开仓风险预算与仓位包络验证
+        run: |
+          python -m scripts.analyze_step5b_entry_sizing \
+            --permission full-a-results/step5_trade_permission_latest.json \
+            --output full-a-results/step5b_entry_sizing_latest.json \
+            --strict
+
+      - name: STEP5C 共享组合容量分配验证
+        run: |
+          python -m scripts.analyze_step5c_portfolio_allocation \
+            --sizing full-a-results/step5b_entry_sizing_latest.json \
+            --output full-a-results/step5c_portfolio_allocation_latest.json \
+            --strict
+
+      - name: STEP5D 容量预留与执行意图边界验证
+        run: |
+          python -m scripts.analyze_step5d_execution_intent \
+            --allocation full-a-results/step5c_portfolio_allocation_latest.json \
+            --sizing full-a-results/step5b_entry_sizing_latest.json \
+            --output full-a-results/step5d_execution_intent_latest.json \
+            --strict
+
+      - name: 打印新版STEP1-5D摘要
         if: always()
         run: |
           python - <<'PY'
           import json
           from pathlib import Path
-          universe_path=Path('full-a-results/universe_latest.json')
-          bars_path=Path('full-a-results/candidate_bars_latest.json')
-          scan_path=Path('full-a-results/scan_latest.json')
-          if universe_path.exists():
-              p=json.loads(universe_path.read_text(encoding='utf-8'))
-              selected=p.get('selected_industries',[])
-              print('全A加载=',p.get('all_a_stocks_loaded'),'行业=',p.get('industry_rows_loaded'))
-              print('长期前景行业=',sum(1 for x in selected if x.get('prospect_theme')),'补充行业=',sum(1 for x in selected if not x.get('prospect_theme')))
-              print('前五原始候选=',p.get('raw_leader_rows_before_dedup'),'行业去重=',p.get('deduped_industry_candidates'),'跨行业=',p.get('cross_market_candidates'),'总候选=',p.get('deduped_leader_candidates'))
-              print('严格基本面=',p.get('fundamental_eligible_candidates'),'允许深扫=',p.get('deep_scan_eligible_candidates'))
-              print('入选行业=',[(x.get('name'),x.get('prospect_theme'),x.get('heat_state')) for x in selected])
-          if bars_path.exists():
-              p=json.loads(bars_path.read_text(encoding='utf-8'))
-              print('长历史候选=',p.get('candidate_count'),'成功=',p.get('loaded_count'),'异常数=',len(p.get('errors',[])))
-              if p.get('symbols'):
-                  s=p['symbols'][0]
-                  print('样本历史长度: daily=',len(s.get('daily',[])),'weekly=',len(s.get('weekly',[])),'120m=',len(s.get('120m',[])),'30m=',len(s.get('30m',[])),'5m=',len(s.get('5m',[])))
-          if scan_path.exists():
-              p=json.loads(scan_path.read_text(encoding='utf-8'))
-              candidates=p.get('candidates',[])
-              pushed=[x for x in candidates if x.get('push')]
-              print('深扫=',p.get('deep_scanned'),'近期正式买点=',len(candidates),'达到推送=',len(pushed))
-              print('近期买点样本=',[(x.get('code'),x.get('name'),x.get('signal'),x.get('timeframe'),x.get('rise_since_signal_pct'),x.get('action')) for x in candidates[:20]])
+          c=Path('full-a-results/candidate_universe_latest.json')
+          f=Path('full-a-results/fundamental_quality_latest.json')
+          q=Path('full-a-results/deep_scan_queue_latest.json')
+          b=Path('full-a-results/step4_bars_latest.json')
+          s4=Path('full-a-results/step4_structure_latest.json')
+          l4=Path('full-a-results/step4_signal_lifecycle_latest.json')
+          d4=Path('full-a-results/step4_technical_opportunity_latest.json')
+          p5=Path('full-a-results/step5_trade_permission_latest.json')
+          s5=Path('full-a-results/step5b_entry_sizing_latest.json')
+          a5=Path('full-a-results/step5c_portfolio_allocation_latest.json')
+          e5=Path('full-a-results/step5d_execution_intent_latest.json')
+          if c.exists():
+              p=json.loads(c.read_text(encoding='utf-8'))
+              s=p.get('summary',{})
+              print('可交易池=',s.get('tradeable_by_security_type'))
+              print('权限/状态剔除=',s.get('exclusions'))
+              print('数据质量=',s.get('data_quality'))
+              print('行业分层=',s.get('selected_industry_pools'))
+              print('候选类型=',s.get('candidate_by_security_type'))
+              print('候选路线=',s.get('candidate_by_route'))
+              print('基金资产类别=',s.get('candidate_by_fund_category'))
+              print('候选行业补全=',p.get('candidate_industry_enrichment'))
+          if f.exists():
+              p=json.loads(f.read_text(encoding='utf-8'))
+              print('STEP3摘要=',p.get('summary'))
+          if q.exists():
+              p=json.loads(q.read_text(encoding='utf-8'))
+              print('STEP3->4深扫资格=',p.get('summary'))
+          if b.exists():
+              p=json.loads(b.read_text(encoding='utf-8'))
+              print('STEP4行情=',{
+                  'candidate_count':p.get('candidate_count'),
+                  'loaded_count':p.get('loaded_count'),
+                  'history_limited_count':p.get('history_limited_count'),
+                  'history_tiers':p.get('history_tiers'),
+                  'errors':len(p.get('errors',[])),
+              })
+          if s4.exists():
+              p=json.loads(s4.read_text(encoding='utf-8'))
+              print('STEP4B摘要=',p.get('summary'))
+          if l4.exists():
+              p=json.loads(l4.read_text(encoding='utf-8'))
+              print('STEP4C摘要=',p.get('summary'))
+          if d4.exists():
+              p=json.loads(d4.read_text(encoding='utf-8'))
+              print('STEP4D摘要=',p.get('summary'))
+          if p5.exists():
+              p=json.loads(p5.read_text(encoding='utf-8'))
+              print('STEP5A摘要=',p.get('summary'))
+          if s5.exists():
+              p=json.loads(s5.read_text(encoding='utf-8'))
+              print('STEP5B摘要=',p.get('summary'))
+          if a5.exists():
+              p=json.loads(a5.read_text(encoding='utf-8'))
+              print('STEP5C摘要=',p.get('summary'))
+          if e5.exists():
+              p=json.loads(e5.read_text(encoding='utf-8'))
+              print('STEP5D摘要=',p.get('summary'))
           PY
 
-      - name: Upload production validation
+      - name: Upload new pipeline validation
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: full-a-production-validation-v2
+          name: new-pipeline-production-validation
+          path: trading-skill/full-a-results/*.json
+          if-no-files-found: warn
+
+  # 旧V3仅作为迁移期回归保护。它与新版主链并行运行，失败时不会掩盖新版是哪一层出问题。
+  legacy-v3-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    defaults:
+      run:
+        working-directory: trading-skill
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install
+        run: |
+          python -m pip install -e '.[dev]'
+          python -m pip install -r ../requirements.txt
+
+      - name: 旧V3候选预筛回归
+        run: |
+          python -m scripts.collect_full_a_universe_v3 \
+            --output full-a-results/universe_latest.json \
+            --prospect-limit 20 \
+            --early-heat-limit 8 \
+            --dynamic-supplement 4 \
+            --leaders-per-industry 5 \
+            --cross-market-limit 20 \
+            --strict
+
+      - name: 跨行业候选真实行业补全
+        run: |
+          python -m scripts.enrich_cross_industry_v3 \
+            --universe full-a-results/universe_latest.json
+
+      - name: 旧链账户权限桥与长历史五周期行情
+        run: |
+          python -m scripts.collect_candidate_bars_v3 \
+            --universe full-a-results/universe_latest.json \
+            --output full-a-results/candidate_bars_latest.json \
+            --strict
+
+      - name: 多周期一致性缠论深度扫描V3
+        run: |
+          python -m scripts.run_full_a_scan_v3 \
+            --universe full-a-results/universe_latest.json \
+            --bars full-a-results/candidate_bars_latest.json \
+            --output full-a-results/scan_latest.json \
+            --stage 'CI真实验证'
+
+      - name: 打印旧V3回归摘要
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          universe=Path('full-a-results/universe_latest.json')
+          bars=Path('full-a-results/candidate_bars_latest.json')
+          scan=Path('full-a-results/scan_latest.json')
+          if universe.exists():
+              p=json.loads(universe.read_text(encoding='utf-8'))
+              print('旧V3候选=',p.get('deduped_leader_candidates'),'允许深扫=',p.get('deep_scan_eligible_candidates'))
+          if bars.exists():
+              p=json.loads(bars.read_text(encoding='utf-8'))
+              print('旧链上游候选=',p.get('upstream_candidate_count'),'权限剔除=',p.get('permission_excluded_count'))
+              print('旧链允许下载=',p.get('candidate_count'),'成功=',p.get('loaded_count'),'异常=',len(p.get('errors',[])))
+          if scan.exists():
+              p=json.loads(scan.read_text(encoding='utf-8'))
+              c=p.get('candidates',[])
+              print('旧V3深扫=',p.get('deep_scanned'),'近期买点=',len(c),'推送=',sum(1 for x in c if x.get('push')))
+              print('一买=',sum(1 for x in c if x.get('signal')=='FIRST_BUY'),'二买=',sum(1 for x in c if x.get('signal')=='SECOND_BUY'),'三买=',sum(1 for x in c if x.get('signal')=='THIRD_BUY'))
+          PY
+
+      - name: Upload legacy V3 regression
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: legacy-v3-regression
           path: trading-skill/full-a-results/*.json
           if-no-files-found: warn

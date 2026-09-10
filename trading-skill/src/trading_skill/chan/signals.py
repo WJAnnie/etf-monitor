@@ -40,6 +40,7 @@ class ReversalAnchor:
     price_ticks: int
     confirmation_timestamp: datetime
     valid: bool = True
+    timeframe: str = "recursive"
 
 @dataclass(frozen=True, slots=True)
 class LowerMove:
@@ -51,6 +52,8 @@ class LowerMove:
     structural_end_timestamp: datetime
     confirmation_timestamp: datetime
     completed: bool = True
+    start_ticks: int | None = None
+    end_ticks: int | None = None
 
 @dataclass(frozen=True, slots=True)
 class SecondBuyTracker:
@@ -100,6 +103,17 @@ class ThirdSellTracker:
     return_sequence_number: int = 0
     revision: int = 1
 
+
+def _move_end_ticks(move: LowerMove) -> int:
+    """返回运动的结构终点，而不是整段包络极值。
+
+    旧数据没有显式端点时，才按运动方向退化到 high/low；生产链会逐步传入 end_ticks。
+    """
+    if move.end_ticks is not None:
+        return move.end_ticks
+    return move.high_ticks if move.direction is Direction.UP else move.low_ticks
+
+
 def first_buy_or_sell(*, symbol: str, trend: TrendType, divergence: Divergence,
     structural_price_ticks: int, structural_timestamp: datetime) -> tuple[ChanSignal | None, ValidationResult]:
     if trend.state is not TrendState.COMPLETED or trend.final_type is None:
@@ -121,8 +135,10 @@ def first_buy_or_sell(*, symbol: str, trend: TrendType, divergence: Divergence,
         anchor_ids=(trend.id,), evidence_ids=(divergence.id,))
     return sig, ValidationResult(True)
 
+
 def new_second_buy_tracker(anchor: ReversalAnchor) -> SecondBuyTracker:
     return SecondBuyTracker(stable_id("sbtrk", anchor.symbol, anchor.id, anchor.level_rank), anchor.symbol, anchor.level_rank, anchor)
+
 
 def second_buy_step(tracker: SecondBuyTracker, move: LowerMove) -> tuple[SecondBuyTracker, ChanSignal | None]:
     if not tracker.anchor.valid:
@@ -141,27 +157,39 @@ def second_buy_step(tracker: SecondBuyTracker, move: LowerMove) -> tuple[SecondB
         seq = tracker.retracement_sequence_number + 1
         if seq != 1:
             return replace(tracker, retracement_sequence_number=seq, revision=tracker.revision + 1), None
+        # 标准二买的第一次完成回调不能跌破一买结构低点；等于锚点视为边界有效。
+        if move.low_ticks < tracker.anchor.price_ticks:
+            return replace(
+                tracker,
+                state=SecondBuyTrackerState.SECOND_BUY_INVALIDATED,
+                first_retracement=move,
+                retracement_sequence_number=1,
+                revision=tracker.revision + 1,
+            ), None
         updated = replace(tracker, state=SecondBuyTrackerState.SECOND_BUY_CONFIRMED,
             first_retracement=move, retracement_sequence_number=1, revision=tracker.revision + 1)
         sig = ChanSignal(
             id=stable_id("sig", tracker.symbol, ChanSignalType.SECOND_BUY, tracker.anchor.id, move.id),
             symbol=tracker.symbol, standard_types=(ChanSignalType.SECOND_BUY,), extended_types=(), side="BUY",
-            level_rank=tracker.level_rank, timeframe="recursive", state=SignalState.CONFIRMED,
+            level_rank=tracker.level_rank, timeframe=tracker.anchor.timeframe, state=SignalState.CONFIRMED,
             structural_price_ticks=move.low_ticks, structural_timestamp=move.structural_end_timestamp,
             confirmation_timestamp=move.confirmation_timestamp, anchor_ids=(tracker.anchor.id,),
             evidence_ids=(tracker.first_up_move.id if tracker.first_up_move else "", move.id))
         return updated, sig
     return tracker, None
 
+
 def new_third_buy_tracker(center: Center) -> ThirdBuyTracker:
     return ThirdBuyTracker(stable_id("tbtrk", center.id, center.level_rank), center.symbol, center.id, center.level_rank)
+
 
 def third_buy_step(tracker: ThirdBuyTracker, center: Center, move: LowerMove) -> tuple[ThirdBuyTracker, ChanSignal | None]:
     if tracker.state in (ThirdBuyTrackerState.WAIT_DEPARTURE, ThirdBuyTrackerState.DEPARTURE_FORMING):
         if move.direction is Direction.UP:
             if not move.completed:
                 return replace(tracker, state=ThirdBuyTrackerState.DEPARTURE_FORMING, revision=tracker.revision + 1), None
-            if move.low_ticks <= center.zg_ticks:
+            # 离开段可以从中枢内部开始；关键是结构终点已经有效站上 ZG。
+            if _move_end_ticks(move) <= center.zg_ticks:
                 return tracker, None
             return replace(tracker, state=ThirdBuyTrackerState.WAIT_FIRST_RETURN, departure=move, revision=tracker.revision + 1), None
         return tracker, None
@@ -188,8 +216,10 @@ def third_buy_step(tracker: ThirdBuyTracker, center: Center, move: LowerMove) ->
         return updated, sig
     return tracker, None
 
+
 def new_second_sell_tracker(anchor: ReversalAnchor) -> SecondSellTracker:
     return SecondSellTracker(stable_id("sstrk", anchor.symbol, anchor.id, anchor.level_rank), anchor.symbol, anchor.level_rank, anchor)
+
 
 def second_sell_step(tracker: SecondSellTracker, move: LowerMove) -> tuple[SecondSellTracker, ChanSignal | None]:
     if not tracker.anchor.valid:
@@ -208,27 +238,39 @@ def second_sell_step(tracker: SecondSellTracker, move: LowerMove) -> tuple[Secon
         seq = tracker.rebound_sequence_number + 1
         if seq != 1:
             return replace(tracker, rebound_sequence_number=seq, revision=tracker.revision + 1), None
+        # 二卖镜像：第一次完成反弹不能突破一卖结构高点；等于锚点视为边界有效。
+        if move.high_ticks > tracker.anchor.price_ticks:
+            return replace(
+                tracker,
+                state=SecondSellTrackerState.SECOND_SELL_INVALIDATED,
+                first_rebound=move,
+                rebound_sequence_number=1,
+                revision=tracker.revision + 1,
+            ), None
         updated = replace(tracker, state=SecondSellTrackerState.SECOND_SELL_CONFIRMED,
             first_rebound=move, rebound_sequence_number=1, revision=tracker.revision + 1)
         sig = ChanSignal(
             id=stable_id("sig", tracker.symbol, ChanSignalType.SECOND_SELL, tracker.anchor.id, move.id),
             symbol=tracker.symbol, standard_types=(ChanSignalType.SECOND_SELL,), extended_types=(), side="SELL",
-            level_rank=tracker.level_rank, timeframe="recursive", state=SignalState.CONFIRMED,
+            level_rank=tracker.level_rank, timeframe=tracker.anchor.timeframe, state=SignalState.CONFIRMED,
             structural_price_ticks=move.high_ticks, structural_timestamp=move.structural_end_timestamp,
             confirmation_timestamp=move.confirmation_timestamp, anchor_ids=(tracker.anchor.id,),
             evidence_ids=(tracker.first_down_move.id if tracker.first_down_move else "", move.id))
         return updated, sig
     return tracker, None
 
+
 def new_third_sell_tracker(center: Center) -> ThirdSellTracker:
     return ThirdSellTracker(stable_id("tstrk", center.id, center.level_rank), center.symbol, center.id, center.level_rank)
+
 
 def third_sell_step(tracker: ThirdSellTracker, center: Center, move: LowerMove) -> tuple[ThirdSellTracker, ChanSignal | None]:
     if tracker.state in (ThirdSellTrackerState.WAIT_DEPARTURE, ThirdSellTrackerState.DEPARTURE_FORMING):
         if move.direction is Direction.DOWN:
             if not move.completed:
                 return replace(tracker, state=ThirdSellTrackerState.DEPARTURE_FORMING, revision=tracker.revision + 1), None
-            if move.high_ticks >= center.zd_ticks:
+            # 镜像：离开段结构终点有效跌破 ZD 即可，不要求整段包络都在中枢下方。
+            if _move_end_ticks(move) >= center.zd_ticks:
                 return tracker, None
             return replace(tracker, state=ThirdSellTrackerState.WAIT_FIRST_RETURN, departure=move, revision=tracker.revision + 1), None
         return tracker, None
@@ -254,6 +296,7 @@ def third_sell_step(tracker: ThirdSellTracker, center: Center, move: LowerMove) 
             evidence_ids=(tracker.departure.id if tracker.departure else "", move.id))
         return updated, sig
     return tracker, None
+
 
 def overlap_signals(*signals: ChanSignal) -> ChanSignal:
     if not signals:

@@ -9,6 +9,8 @@ from trading_skill.chan.center import (
     build_recursive_center,
     classify_center_relation,
     extend_center,
+    motion_leaves_core,
+    motion_overlaps_core,
     register_first_return,
     register_leave,
     seed_center,
@@ -84,39 +86,56 @@ def test_forming_third_motion_blocks_confirmation():
     assert result.center.state is CenterState.FORMING
 
 
-def test_extension_keeps_fixed_core():
+def test_extension_keeps_fixed_core_when_motion_ends_inside_core():
     c = center_from()
-    updated = extend_center(c, motion(3, Direction.DOWN, 4, 12)).center
+    candidate = motion(3, Direction.DOWN, 8, 12)
+    assert motion_overlaps_core(c, candidate)
+    assert not motion_leaves_core(c, candidate)
+    updated = extend_center(c, candidate).center
     assert updated.state is CenterState.EXTENDING
     assert (updated.zd_ticks, updated.zg_ticks) == (c.zd_ticks, c.zg_ticks)
-    assert updated.dd_ticks == 4
+    assert updated.dd_ticks == 5
     assert updated.extension_count == 1
     assert updated.id == c.id
 
 
+def test_motion_can_overlap_geometry_but_structurally_leave():
+    c = center_from()
+    leaving_up = motion(3, Direction.UP, 8, 15)
+    leaving_down = motion(4, Direction.DOWN, 4, 10)
+    assert motion_overlaps_core(c, leaving_up)
+    assert motion_overlaps_core(c, leaving_down)
+    assert motion_leaves_core(c, leaving_up)
+    assert motion_leaves_core(c, leaving_down)
+    assert not extend_center(c, leaving_up).result.valid
+    assert not extend_center(c, leaving_down).result.valid
+    assert register_leave(c, leaving_up).center.state is CenterState.LEAVING_UP
+    assert register_leave(c, leaving_down).center.state is CenterState.LEAVING_DOWN
+
+
 def test_repeated_extension_never_upgrades_level():
     c = center_from()
-    c2 = extend_center(c, motion(3, Direction.DOWN, 4, 12)).center
-    c3 = extend_center(c2, motion(4, Direction.UP, 8, 15)).center
+    c2 = extend_center(c, motion(3, Direction.DOWN, 8, 12)).center
+    c3 = extend_center(c2, motion(4, Direction.UP, 8, 11)).center
     assert c3.level_rank == c.level_rank
     assert (c3.zd_ticks, c3.zg_ticks) == (7, 11)
 
 
 def test_leave_up_is_not_immediate_destruction():
     c = center_from()
-    left = register_leave(c, motion(3, Direction.UP, 12, 18)).center
+    left = register_leave(c, motion(3, Direction.UP, 8, 18)).center
     assert left.state is CenterState.LEAVING_UP
     assert left.state is not CenterState.DESTROYED
 
 
 def test_leave_down_is_not_immediate_destruction():
     c = center_from()
-    left = register_leave(c, motion(3, Direction.DOWN, 0, 6)).center
+    left = register_leave(c, motion(3, Direction.DOWN, 0, 10)).center
     assert left.state is CenterState.LEAVING_DOWN
 
 
 def test_up_leave_first_return_outside_emits_foundation_event():
-    c = register_leave(center_from(), motion(3, Direction.UP, 12, 18)).center
+    c = register_leave(center_from(), motion(3, Direction.UP, 8, 18)).center
     result = register_first_return(c, motion(4, Direction.DOWN, 12, 16))
     assert result.center.state is CenterState.DESTROYED
     assert result.center.return_sequence_number == 1
@@ -124,17 +143,27 @@ def test_up_leave_first_return_outside_emits_foundation_event():
 
 
 def test_down_leave_first_return_outside_emits_foundation_event():
-    c = register_leave(center_from(), motion(3, Direction.DOWN, 0, 6)).center
+    c = register_leave(center_from(), motion(3, Direction.DOWN, 0, 10)).center
     result = register_first_return(c, motion(4, Direction.UP, 1, 6))
     assert result.center.state is CenterState.DESTROYED
     assert result.events[0].type is CenterEventType.CENTER_DOWN_BREAK_RETURN_OUTSIDE
 
 
 def test_return_reentering_center_is_returning_not_third_buy():
-    c = register_leave(center_from(), motion(3, Direction.UP, 12, 18)).center
+    c = register_leave(center_from(), motion(3, Direction.UP, 8, 18)).center
     result = register_first_return(c, motion(4, Direction.DOWN, 9, 15))
     assert result.center.state is CenterState.RETURNING
     assert result.events == ()
+
+
+def test_returning_motion_can_cross_core_and_still_extend_original_center():
+    c = register_leave(center_from(), motion(3, Direction.UP, 8, 18)).center
+    returned = register_first_return(c, motion(4, Direction.DOWN, 4, 15)).center
+    assert returned.state is CenterState.RETURNING
+    extended = extend_center(returned, motion(4, Direction.DOWN, 4, 15))
+    assert extended.result.valid
+    assert extended.center.state is CenterState.EXTENDING
+    assert extended.center.dd_ticks == 4
 
 
 def test_independent_up_center_relation():
@@ -228,7 +257,7 @@ def test_center_stack_keeps_multiple_levels_and_timeframe():
 
 
 def test_return_direction_must_be_opposite_leave():
-    c = register_leave(center_from(), motion(3, Direction.UP, 12, 18)).center
+    c = register_leave(center_from(), motion(3, Direction.UP, 8, 18)).center
     result = register_first_return(c, motion(4, Direction.UP, 12, 20))
     assert not result.result.valid
     assert "RETURN_DIRECTION_MISMATCH" in result.result.reason_codes

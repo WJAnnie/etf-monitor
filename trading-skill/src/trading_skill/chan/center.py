@@ -27,6 +27,19 @@ class CenterMotion:
     confirmation_timestamp: datetime
     completed: bool = True
     source_object_id: str | None = None
+    structural_start_price_ticks: int | None = None
+    structural_end_price_ticks: int | None = None
+
+    @property
+    def structural_end_ticks(self) -> int:
+        """运动结构终点；优先使用线段显式 endpoint，旧对象才退化到方向极值。"""
+        if self.structural_end_price_ticks is not None:
+            return self.structural_end_price_ticks
+        if self.direction is Direction.UP:
+            return self.high_ticks
+        if self.direction is Direction.DOWN:
+            return self.low_ticks
+        return self.high_ticks
 
     @classmethod
     def from_segment(
@@ -44,6 +57,8 @@ class CenterMotion:
             confirmation_timestamp=segment.confirmation_timestamp,
             completed=True,
             source_object_id=segment.id,
+            structural_start_price_ticks=segment.structural_start_ticks,
+            structural_end_price_ticks=segment.structural_end_ticks,
         )
 
 
@@ -223,7 +238,23 @@ def _unresolved_center(motions: tuple[CenterMotion, ...], *, symbol: str, target
     )
 
 
+def motion_leaves_core(center: Center, motion: CenterMotion) -> bool:
+    """结构事实：完成运动的终点是否有效离开中枢核心区。"""
+    if not motion.completed:
+        return False
+    if motion.direction is Direction.UP:
+        return motion.structural_end_ticks > center.zg_ticks
+    if motion.direction is Direction.DOWN:
+        return motion.structural_end_ticks < center.zd_ticks
+    return False
+
+
 def motion_overlaps_core(center: Center, motion: CenterMotion) -> bool:
+    """几何事实：运动包络是否与中枢核心区有交集。
+
+    overlap 与 leave 并不互斥：一段走势可以从中枢内部出发、穿过核心区并最终离开。
+    生命周期调用者必须先判断 leave，再决定是否按 extension 处理。
+    """
     return motion.low_ticks <= center.zg_ticks and motion.high_ticks >= center.zd_ticks
 
 
@@ -235,6 +266,8 @@ def extend_center(center: Center, motion: CenterMotion) -> CenterUpdate:
     if motion.level_rank + 1 != center.level_rank:
         return CenterUpdate(center, result=ValidationResult(False, ("CENTER_LEVEL_MISMATCH",)))
     if not motion_overlaps_core(center, motion):
+        return CenterUpdate(center, result=ValidationResult(False, ("CENTER_STILL_LEAVING",)))
+    if center.state is not CenterState.RETURNING and motion_leaves_core(center, motion):
         return CenterUpdate(center, result=ValidationResult(False, ("CENTER_STILL_LEAVING",)))
     updated = replace(
         center,
@@ -258,12 +291,13 @@ def extend_center(center: Center, motion: CenterMotion) -> CenterUpdate:
 def register_leave(center: Center, motion: CenterMotion) -> CenterUpdate:
     if not motion.completed:
         return CenterUpdate(center, result=ValidationResult(False, ("LEAVE_NOT_CONFIRMED",)))
-    if motion.low_ticks > center.zg_ticks:
-        state = CenterState.LEAVING_UP
-    elif motion.high_ticks < center.zd_ticks:
-        state = CenterState.LEAVING_DOWN
-    else:
+    if motion.source_timeframe is not center.source_timeframe:
+        return CenterUpdate(center, result=ValidationResult(False, ("CENTER_TIMEFRAME_MISMATCH",)))
+    if motion.level_rank + 1 != center.level_rank:
+        return CenterUpdate(center, result=ValidationResult(False, ("CENTER_LEVEL_MISMATCH",)))
+    if not motion_leaves_core(center, motion):
         return CenterUpdate(center, result=ValidationResult(False, ("MOTION_NOT_OUTSIDE_CENTER",)))
+    state = CenterState.LEAVING_UP if motion.direction is Direction.UP else CenterState.LEAVING_DOWN
     return CenterUpdate(replace(
         center,
         state=state,

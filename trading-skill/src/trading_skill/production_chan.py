@@ -9,6 +9,7 @@ from trading_skill.chan.center import (
     Center,
     CenterMotion,
     extend_center,
+    motion_leaves_core,
     motion_overlaps_core,
     register_first_return,
     register_leave,
@@ -91,6 +92,8 @@ def _lower_move(motion: CenterMotion, *, level_rank: int | None = None) -> Lower
         structural_end_timestamp=motion.structural_end_timestamp,
         confirmation_timestamp=motion.confirmation_timestamp,
         completed=motion.completed,
+        start_ticks=motion.low_ticks if motion.direction is Direction.UP else motion.high_ticks,
+        end_ticks=motion.structural_end_ticks,
     )
 
 
@@ -131,13 +134,20 @@ def build_center_lifecycle(
             continue
 
         motion = motions[index]
-        if motion_overlaps_core(active, motion):
-            updated = extend_center(active, motion)
-            if updated.result.valid:
-                active = updated.center
-                _replace_center(centers, active)
-            else:
-                reasons.extend(updated.result.reason_codes)
+        # 一个运动可以“包络与中枢相交”同时“结构终点已经离开”。
+        # 生命周期必须先处理结构离开，不能被几何 overlap 抢先吞成 extension。
+        if not motion_leaves_core(active, motion):
+            if motion_overlaps_core(active, motion):
+                updated = extend_center(active, motion)
+                if updated.result.valid:
+                    active = updated.center
+                    _replace_center(centers, active)
+                else:
+                    reasons.extend(updated.result.reason_codes)
+                index += 1
+                continue
+            reasons.append("MOTION_NEITHER_OVERLAP_NOR_VALID_LEAVE")
+            active = None
             index += 1
             continue
 
@@ -160,7 +170,7 @@ def build_center_lifecycle(
             index += 1
             continue
 
-        # 三买/三卖必须严格来自“中枢离开 + 第一次回试”，不由技术指标创造。
+        # 三买/三卖严格来自“完成离开 + 第一次完成回试”；离开看结构终点，回试看是否重返中枢核心。
         if active.state is CenterState.LEAVING_UP:
             tracker = new_third_buy_tracker(before_leave)
             tracker, _ = third_buy_step(tracker, before_leave, _lower_move(motion))
@@ -183,6 +193,7 @@ def build_center_lifecycle(
             continue
 
         # 回到原中枢核心区，按延伸处理；ZD/ZG保持种子时固定，不重算。
+        # RETURNING 状态允许一段回试穿过中枢后继续到另一侧，只要其包络真实经过核心区。
         extended = extend_center(active, return_motion)
         if extended.result.valid:
             active = extended.center
@@ -206,18 +217,24 @@ def build_center_lifecycle(
 def _directional_leg(
     motions: tuple[CenterMotion, ...], *, direction: Direction, level_rank: int, prefix: str
 ) -> StructuralLeg | None:
+    """只接受一个明确、完成、同方向的同级运动作为 b/c 段。
+
+    旧实现会把时间窗口内所有同方向运动合并，容易把“跌-反弹-再跌”拼成一条假 c 段。
+    有多个同方向运动时宁可不确认标准背驰，等待上层形成明确可比结构。
+    """
     selected = tuple(m for m in motions if m.direction is direction and m.completed)
-    if not selected:
+    if len(selected) != 1:
         return None
+    motion = selected[0]
     return StructuralLeg(
-        id=stable_id(prefix, *(m.id for m in selected)),
+        id=stable_id(prefix, motion.id),
         direction=direction,
         level_rank=level_rank,
-        low_ticks=min(m.low_ticks for m in selected),
-        high_ticks=max(m.high_ticks for m in selected),
-        structural_start_timestamp=min(m.structural_start_timestamp for m in selected),
-        structural_end_timestamp=max(m.structural_end_timestamp for m in selected),
-        confirmation_timestamp=max(m.confirmation_timestamp for m in selected),
+        low_ticks=motion.low_ticks,
+        high_ticks=motion.high_ticks,
+        structural_start_timestamp=motion.structural_start_timestamp,
+        structural_end_timestamp=motion.structural_end_timestamp,
+        confirmation_timestamp=motion.confirmation_timestamp,
         completed=True,
     )
 
@@ -290,7 +307,9 @@ def _trend_divergence_and_first_signal(
         m for m in after_last if m.direction is opposite and m.confirmation_timestamp > c_leg.confirmation_timestamp
     )
     if opposite_after_c:
-        completion_time = max(m.confirmation_timestamp for m in opposite_after_c)
+        # 第一次完成反向运动就是完成确认；更晚行情不能回写更迟的确认时间。
+        first_opposite = min(opposite_after_c, key=lambda m: (m.confirmation_timestamp, m.id))
+        completion_time = first_opposite.confirmation_timestamp
         trend = mark_completion_candidate(trend, reason="LOWER_LEVEL_OPPOSITE_TURN", confirmation_timestamp=completion_time)
         trend = complete_trend(
             trend,
@@ -342,6 +361,7 @@ def _second_signal_from_first(
             level_rank=first_signal.level_rank,
             price_ticks=first_signal.structural_price_ticks,
             confirmation_timestamp=first_signal.confirmation_timestamp,
+            timeframe=first_signal.timeframe,
         )
         tracker = new_second_buy_tracker(anchor)
         for motion in motions:
@@ -356,6 +376,7 @@ def _second_signal_from_first(
             level_rank=first_signal.level_rank,
             price_ticks=first_signal.structural_price_ticks,
             confirmation_timestamp=first_signal.confirmation_timestamp,
+            timeframe=first_signal.timeframe,
         )
         tracker = new_second_sell_tracker(anchor)
         for motion in motions:
@@ -377,6 +398,12 @@ def analyze_production_chan(
     if not complete_raw:
         return ProductionChanResult(
             "DATA_INCOMPLETE", timeframe, len(raw_bars), 0, 0, 0, 0, 0, 0, (), None, None, None, None, (), None, None, ("NO_COMPLETED_BARS",)
+        )
+    adjustments = {str(bar.adjustment or "unknown") for bar in complete_raw}
+    if "mixed" in adjustments or len(adjustments) != 1:
+        return ProductionChanResult(
+            "DATA_INCOMPLETE", timeframe, len(raw_bars), len(complete_raw), 0, 0, 0, 0, 0, (), None, None, None, None, (), None, None,
+            ("MIXED_PRICE_BASIS",),
         )
     validated = validate_raw_bars(complete_raw, tick_size)
     if not validated.result.valid:

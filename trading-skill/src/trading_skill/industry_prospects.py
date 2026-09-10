@@ -175,3 +175,92 @@ def select_industries_v2(
             if len(dynamic) >= dynamic_supplement:
                 break
     return tuple(prospects + dynamic)
+
+
+# V3：行业池每天轮换，但“长期前景”与“短期热度”职责分离。
+# 高位判断必须体现“当前仍高”，年内涨幅高但近60日已明显冷却时允许重新进入观察。
+def industry_rotation_state(item: IndustryCandidate) -> str:
+    ytd_still_extended = item.change_ytd >= 75 and item.change_60d >= 20
+    if item.change_60d >= 48 or ytd_still_extended or (item.change_60d >= 35 and item.change_pct >= 5):
+        return "高位暂退"
+    if -5 <= item.change_60d <= 22 and item.heat_state in {"升温", "热门"}:
+        return "刚开始升温"
+    if item.heat_state == "回落" and item.change_60d <= 25:
+        return "回落观察"
+    return "持续跟踪"
+
+
+def _early_heat_candidates(material: list[Mapping[str, object]], used: set[str], limit: int) -> list[IndustryCandidate]:
+    pool = []
+    for item in screen_industries(material, limit=max(60, limit * 10)):
+        if item.code in used:
+            continue
+        state = industry_rotation_state(item)
+        if state != "刚开始升温":
+            continue
+        score = item.rank_score + item.low_position_score * 0.08 + min(item.heat_score, 80) * 0.05
+        pool.append((score, item))
+    pool.sort(key=lambda x: x[0], reverse=True)
+    out = []
+    for _, item in pool[:limit]:
+        out.append(
+            IndustryCandidate(
+                code=item.code,
+                name=item.name,
+                heat_score=item.heat_score,
+                low_position_score=item.low_position_score,
+                prospects_score=item.prospects_score,
+                rank_score=item.rank_score,
+                heat_state=item.heat_state,
+                change_pct=item.change_pct,
+                change_60d=item.change_60d,
+                change_ytd=item.change_ytd,
+                main_flow_ratio=item.main_flow_ratio,
+                breadth=item.breadth,
+                selection_reason="近期升温补充池：位置尚不过高且市场扩散/热度开始改善",
+                prospect_theme=None,
+            )
+        )
+    return out
+
+
+def select_industries_v3(
+    rows: Iterable[Mapping[str, object]], *, prospect_limit: int = 20, early_heat_limit: int = 8, dynamic_supplement: int = 4
+) -> tuple[tuple[IndustryCandidate, ...], tuple[IndustryCandidate, ...]]:
+    """返回(当前重点行业, 因高位暂退行业)。高位行业冷却后会自动重新进入。"""
+    material = list(rows)
+    all_prospects = list(prospect_industry_candidates(material))
+    paused = [item for item in all_prospects if industry_rotation_state(item) == "高位暂退"]
+    eligible_prospects = [item for item in all_prospects if industry_rotation_state(item) != "高位暂退"]
+    prospects = _diversified_prospect_selection(eligible_prospects, limit=max(1, prospect_limit), max_per_theme=2)
+    used = {item.code for item in prospects}
+
+    early = _early_heat_candidates(material, used, early_heat_limit)
+    used.update(item.code for item in early)
+
+    dynamic = []
+    if dynamic_supplement > 0:
+        for item in screen_industries(material, limit=max(40, dynamic_supplement * 8)):
+            if item.code in used or industry_rotation_state(item) == "高位暂退":
+                continue
+            dynamic.append(
+                IndustryCandidate(
+                    code=item.code,
+                    name=item.name,
+                    heat_score=item.heat_score,
+                    low_position_score=item.low_position_score,
+                    prospects_score=item.prospects_score,
+                    rank_score=item.rank_score,
+                    heat_state=item.heat_state,
+                    change_pct=item.change_pct,
+                    change_60d=item.change_60d,
+                    change_ytd=item.change_ytd,
+                    main_flow_ratio=item.main_flow_ratio,
+                    breadth=item.breadth,
+                    selection_reason="市场结构补充池：用于发现尚未进入长期前景表或刚发生结构变化的新方向",
+                    prospect_theme=None,
+                )
+            )
+            if len(dynamic) >= dynamic_supplement:
+                break
+    return tuple(prospects + early + dynamic), tuple(paused)

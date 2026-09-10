@@ -44,6 +44,7 @@ def normalize_complete_m5(rows: Iterable[dict], *, now: datetime, source: str) -
                 "amount": float(row.get("amount") or 0),
                 "_complete": True,
                 "_source": source,
+                "_adjustment": str(row.get("_adjustment") or "raw"),
             }
         except (KeyError, TypeError, ValueError):
             continue
@@ -58,6 +59,11 @@ def _session(dt: datetime) -> str | None:
     if time(13, 5) <= t <= time(15, 0):
         return "PM"
     return None
+
+
+def _common_adjustment(rows: list[dict], *, default: str = "unknown") -> str:
+    values = {str(row.get("_adjustment") or default) for row in rows}
+    return values.pop() if len(values) == 1 else "mixed"
 
 
 def aggregate_m5(rows: Iterable[dict], *, bars_per_group: int) -> list[dict]:
@@ -88,9 +94,27 @@ def aggregate_m5(rows: Iterable[dict], *, bars_per_group: int) -> list[dict]:
                     "amount": sum(float(item.get("amount") or 0) for item in items),
                     "_complete": True,
                     "_source": "aggregate_real_5m",
+                    "_adjustment": _common_adjustment(items, default="raw"),
                 }
             )
     return out
+
+
+def _weekly_complete(*, rows: list[dict], latest_dt: datetime, now: datetime, is_latest_week: bool) -> bool:
+    if any(not bool(row.get("_complete", True)) for row in rows):
+        return False
+    if not is_latest_week:
+        return True
+    now_iso = now.isocalendar()
+    latest_iso = latest_dt.isocalendar()
+    if (latest_iso.year, latest_iso.week) != (now_iso.year, now_iso.week):
+        return True
+    # 当前自然周在周五15:00前一律视为未完成，避免周五盘中确认周线分型/笔。
+    if now.weekday() < 4:
+        return False
+    if now.weekday() == 4 and now.time() < time(15, 0):
+        return False
+    return True
 
 
 def aggregate_weekly(daily_rows: Iterable[dict], *, now: datetime) -> list[dict]:
@@ -104,7 +128,12 @@ def aggregate_weekly(daily_rows: Iterable[dict], *, now: datetime) -> list[dict]
     for index, key in enumerate(keys):
         rows = sorted(groups[key], key=lambda item: str(item["time"]))
         latest_dt = parse_cn_time(str(rows[-1]["time"]))
-        complete = not (index == len(keys) - 1 and latest_dt.date() == now.date() and now.weekday() < 4)
+        complete = _weekly_complete(
+            rows=rows,
+            latest_dt=latest_dt,
+            now=now,
+            is_latest_week=index == len(keys) - 1,
+        )
         out.append(
             {
                 "time": str(rows[-1]["time"]),
@@ -116,6 +145,7 @@ def aggregate_weekly(daily_rows: Iterable[dict], *, now: datetime) -> list[dict]
                 "amount": sum(float(item.get("amount") or 0) for item in rows),
                 "_complete": complete,
                 "_source": "aggregate_daily",
+                "_adjustment": _common_adjustment(rows, default="forward"),
             }
         )
     return out
