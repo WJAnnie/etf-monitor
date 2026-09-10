@@ -121,7 +121,14 @@ jobs:
             --output full-a-results/step5_trade_permission_latest.json \
             --strict
 
-      - name: 打印新版STEP1-5A摘要
+      - name: STEP5B 新开仓风险预算与仓位包络验证
+        run: |
+          python -m scripts.analyze_step5b_entry_sizing \
+            --permission full-a-results/step5_trade_permission_latest.json \
+            --output full-a-results/step5b_entry_sizing_latest.json \
+            --strict
+
+      - name: 打印新版STEP1-5B摘要
         if: always()
         run: |
           python - <<'PY'
@@ -135,6 +142,7 @@ jobs:
           l4=Path('full-a-results/step4_signal_lifecycle_latest.json')
           d4=Path('full-a-results/step4_technical_opportunity_latest.json')
           p5=Path('full-a-results/step5_trade_permission_latest.json')
+          s5=Path('full-a-results/step5b_entry_sizing_latest.json')
           if c.exists():
               p=json.loads(c.read_text(encoding='utf-8'))
               s=p.get('summary',{})
@@ -173,6 +181,9 @@ jobs:
           if p5.exists():
               p=json.loads(p5.read_text(encoding='utf-8'))
               print('STEP5A摘要=',p.get('summary'))
+          if s5.exists():
+              p=json.loads(s5.read_text(encoding='utf-8'))
+              print('STEP5B摘要=',p.get('summary'))
           PY
 
       - name: Upload new pipeline validation
