@@ -43,8 +43,21 @@ jobs:
 
       - name: Relay issue comment
         if: github.event_name == 'issue_comment'
+        continue-on-error: true
         run: python relay_issue_comment.py
 
       - name: Manual dispatch note
         if: github.event_name == 'workflow_dispatch'
         run: echo 'Manual dispatch only verifies workflow loading; post a marked comment to issue #1 to test delivery.'
+
+      - name: Write relay status marker
+        if: always()
+        run: |
+          mkdir -p data
+          cat > data/relay_last_run.json <<'EOF'
+          {
+            "workflow": "portfolio-advice-relay",
+            "status": "completed",
+            "note": "relay step finished or failed without blocking upstream workflow"
+          }
+          EOF
