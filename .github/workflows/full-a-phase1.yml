@@ -135,7 +135,15 @@ jobs:
             --output full-a-results/step5c_portfolio_allocation_latest.json \
             --strict
 
-      - name: 打印新版STEP1-5C摘要
+      - name: STEP5D 容量预留与执行意图边界验证
+        run: |
+          python -m scripts.analyze_step5d_execution_intent \
+            --allocation full-a-results/step5c_portfolio_allocation_latest.json \
+            --sizing full-a-results/step5b_entry_sizing_latest.json \
+            --output full-a-results/step5d_execution_intent_latest.json \
+            --strict
+
+      - name: 打印新版STEP1-5D摘要
         if: always()
         run: |
           python - <<'PY'
@@ -151,6 +159,7 @@ jobs:
           p5=Path('full-a-results/step5_trade_permission_latest.json')
           s5=Path('full-a-results/step5b_entry_sizing_latest.json')
           a5=Path('full-a-results/step5c_portfolio_allocation_latest.json')
+          e5=Path('full-a-results/step5d_execution_intent_latest.json')
           if c.exists():
               p=json.loads(c.read_text(encoding='utf-8'))
               s=p.get('summary',{})
@@ -195,6 +204,9 @@ jobs:
           if a5.exists():
               p=json.loads(a5.read_text(encoding='utf-8'))
               print('STEP5C摘要=',p.get('summary'))
+          if e5.exists():
+              p=json.loads(e5.read_text(encoding='utf-8'))
+              print('STEP5D摘要=',p.get('summary'))
           PY
 
       - name: Upload new pipeline validation
