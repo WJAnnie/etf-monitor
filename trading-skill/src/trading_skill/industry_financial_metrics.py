@@ -21,9 +21,14 @@ def _ratio(numerator: float | None, denominator: float | None) -> float | None:
     return round(numerator / denominator * 100.0, 2)
 
 
-def statement_snapshot(balance: Mapping[str, object] | None, cashflow: Mapping[str, object] | None) -> dict:
+def statement_snapshot(
+    balance: Mapping[str, object] | None,
+    cashflow: Mapping[str, object] | None,
+    income: Mapping[str, object] | None = None,
+) -> dict:
     balance = balance or {}
     cashflow = cashflow or {}
+    income = income or {}
     total_assets = _num(balance, "TOTAL_ASSETS")
     total_liabilities = _num(balance, "TOTAL_LIABILITIES")
     fixed_asset = _num(balance, "FIXED_ASSET")
@@ -36,8 +41,18 @@ def statement_snapshot(balance: Mapping[str, object] | None, cashflow: Mapping[s
     long_loan = _num(balance, "LONG_LOAN")
     capex_cash = _num(cashflow, "CONSTRUCT_LONG_ASSET")
     operating_cash = _num(cashflow, "NETCASH_OPERATE")
+    revenue = _num(income, "TOTAL_OPERATE_INCOME", "TOTALOPERATEREVE")
+    research_expense = _num(income, "RESEARCH_EXPENSE")
     return {
-        "report_date": str(balance.get("REPORT_DATE") or balance.get("REPORTDATE") or cashflow.get("REPORT_DATE") or cashflow.get("REPORTDATE") or "")[:10],
+        "report_date": str(
+            balance.get("REPORT_DATE")
+            or balance.get("REPORTDATE")
+            or income.get("REPORT_DATE")
+            or income.get("REPORTDATE")
+            or cashflow.get("REPORT_DATE")
+            or cashflow.get("REPORTDATE")
+            or ""
+        )[:10],
         "total_assets": total_assets,
         "total_liabilities": total_liabilities,
         "debt_asset_ratio_pct": _ratio(total_liabilities, total_assets),
@@ -57,9 +72,13 @@ def statement_snapshot(balance: Mapping[str, object] | None, cashflow: Mapping[s
         "long_loan": long_loan,
         "construct_long_asset_cash": capex_cash,
         "operating_cash_flow": operating_cash,
+        "revenue": revenue,
+        "research_expense": research_expense,
+        "rd_intensity_pct": _ratio(research_expense, revenue),
         "notes": {
             "contract_liabilities": "合同负债可辅助观察订单/预收变化，但不能等同于真实订单量。",
             "construct_long_asset_cash": "购建固定资产、无形资产和其他长期资产支付的现金，用于观察资本开支强度。",
+            "rd_intensity_pct": "研发费用/营业收入只用于衡量会计口径研发强度，不能替代研发管线、产品验证或商业化进展。",
         },
     }
 
@@ -70,6 +89,7 @@ def compare_snapshots(current: Mapping[str, object], previous: Mapping[str, obje
     fields = (
         "fixed_asset", "construction_in_progress", "contract_liabilities", "inventory",
         "accounts_receivable", "monetary_funds", "construct_long_asset_cash", "operating_cash_flow",
+        "revenue", "research_expense",
     )
     out = {}
     for field in fields:
@@ -86,39 +106,41 @@ def compare_snapshots(current: Mapping[str, object], previous: Mapping[str, obje
 
 PROFILE_METRIC_PRIORITY: dict[str, tuple[str, ...]] = {
     "创新药/生物医药": (
-        "monetary_funds_change_pct", "operating_cash_flow_change_pct", "accounts_receivable_change_pct",
+        "research_expense_change_pct", "revenue_change_pct", "monetary_funds_change_pct",
+        "operating_cash_flow_change_pct", "accounts_receivable_change_pct",
     ),
     "造船与海工": (
         "contract_liabilities_change_pct", "construction_in_progress_change_pct", "fixed_asset_change_pct",
         "inventory_change_pct", "construct_long_asset_cash_change_pct",
     ),
     "半导体设备与材料": (
-        "construction_in_progress_change_pct", "construct_long_asset_cash_change_pct", "inventory_change_pct",
-        "contract_liabilities_change_pct", "accounts_receivable_change_pct",
+        "research_expense_change_pct", "revenue_change_pct", "construction_in_progress_change_pct",
+        "construct_long_asset_cash_change_pct", "inventory_change_pct", "contract_liabilities_change_pct",
+        "accounts_receivable_change_pct",
     ),
     "AI基础设施/通信硬件": (
-        "contract_liabilities_change_pct", "inventory_change_pct", "construction_in_progress_change_pct",
-        "accounts_receivable_change_pct", "operating_cash_flow_change_pct",
+        "research_expense_change_pct", "contract_liabilities_change_pct", "inventory_change_pct",
+        "construction_in_progress_change_pct", "accounts_receivable_change_pct", "operating_cash_flow_change_pct",
     ),
     "机器人与高端自动化": (
-        "contract_liabilities_change_pct", "construction_in_progress_change_pct", "fixed_asset_change_pct",
-        "inventory_change_pct", "accounts_receivable_change_pct",
+        "research_expense_change_pct", "contract_liabilities_change_pct", "construction_in_progress_change_pct",
+        "fixed_asset_change_pct", "inventory_change_pct", "accounts_receivable_change_pct",
     ),
     "电网设备与储能": (
         "contract_liabilities_change_pct", "accounts_receivable_change_pct", "operating_cash_flow_change_pct",
         "construction_in_progress_change_pct",
     ),
     "商业航天与军工电子": (
-        "contract_liabilities_change_pct", "inventory_change_pct", "accounts_receivable_change_pct",
-        "construction_in_progress_change_pct",
+        "research_expense_change_pct", "contract_liabilities_change_pct", "inventory_change_pct",
+        "accounts_receivable_change_pct", "construction_in_progress_change_pct",
     ),
     "智能驾驶与汽车电子": (
-        "inventory_change_pct", "accounts_receivable_change_pct", "construction_in_progress_change_pct",
-        "operating_cash_flow_change_pct",
+        "research_expense_change_pct", "inventory_change_pct", "accounts_receivable_change_pct",
+        "construction_in_progress_change_pct", "operating_cash_flow_change_pct",
     ),
     "医疗器械": (
-        "accounts_receivable_change_pct", "inventory_change_pct", "operating_cash_flow_change_pct",
-        "construction_in_progress_change_pct",
+        "research_expense_change_pct", "accounts_receivable_change_pct", "inventory_change_pct",
+        "operating_cash_flow_change_pct", "construction_in_progress_change_pct",
     ),
     "先进能源装备": (
         "contract_liabilities_change_pct", "construction_in_progress_change_pct", "fixed_asset_change_pct",
@@ -137,8 +159,8 @@ PROFILE_METRIC_PRIORITY: dict[str, tuple[str, ...]] = {
         "construct_long_asset_cash_change_pct", "operating_cash_flow_change_pct",
     ),
     "工业软件/网络安全": (
-        "contract_liabilities_change_pct", "accounts_receivable_change_pct", "operating_cash_flow_change_pct",
-        "monetary_funds_change_pct",
+        "research_expense_change_pct", "revenue_change_pct", "contract_liabilities_change_pct",
+        "accounts_receivable_change_pct", "operating_cash_flow_change_pct", "monetary_funds_change_pct",
     ),
     "影视院线/传媒": (
         "operating_cash_flow_change_pct", "accounts_receivable_change_pct", "monetary_funds_change_pct",
@@ -152,8 +174,8 @@ PROFILE_METRIC_PRIORITY: dict[str, tuple[str, ...]] = {
         "monetary_funds_change_pct",
     ),
     "家电/消费电子": (
-        "inventory_change_pct", "accounts_receivable_change_pct", "operating_cash_flow_change_pct",
-        "construct_long_asset_cash_change_pct",
+        "research_expense_change_pct", "inventory_change_pct", "accounts_receivable_change_pct",
+        "operating_cash_flow_change_pct", "construct_long_asset_cash_change_pct",
     ),
     "机械/工程机械": (
         "accounts_receivable_change_pct", "inventory_change_pct", "contract_liabilities_change_pct",
@@ -190,6 +212,8 @@ METRIC_CN = {
     "monetary_funds_change_pct": "货币资金同比",
     "construct_long_asset_cash_change_pct": "资本开支现金同比",
     "operating_cash_flow_change_pct": "经营现金流同比",
+    "revenue_change_pct": "营业收入同比",
+    "research_expense_change_pct": "研发费用同比",
 }
 
 SPECIALIZED_ONLY_PROFILES = {
@@ -206,12 +230,22 @@ def summarize_sector_metrics(profile_name: str, metrics: Mapping[str, object] | 
     if not metrics:
         return []
     changes = metrics.get("changes") if isinstance(metrics, Mapping) else None
+    current = metrics.get("current") if isinstance(metrics, Mapping) else None
     if not isinstance(changes, Mapping):
-        return []
+        changes = {}
+    if not isinstance(current, Mapping):
+        current = {}
     priority = PROFILE_METRIC_PRIORITY.get(profile_name, (
         "operating_cash_flow_change_pct", "accounts_receivable_change_pct", "inventory_change_pct",
     ))
     out: list[str] = []
+    if profile_name in {"创新药/生物医药", "半导体设备与材料", "AI基础设施/通信硬件", "机器人与高端自动化", "商业航天与军工电子", "智能驾驶与汽车电子", "医疗器械", "工业软件/网络安全", "家电/消费电子"}:
+        rd_intensity = current.get("rd_intensity_pct")
+        if rd_intensity is not None:
+            try:
+                out.append(f"研发强度{float(rd_intensity):.2f}%")
+            except (TypeError, ValueError):
+                pass
     for key in priority:
         value = changes.get(key)
         if value is None:
@@ -224,4 +258,4 @@ def summarize_sector_metrics(profile_name: str, metrics: Mapping[str, object] | 
         out.append(f"{METRIC_CN.get(key, key)}{number:+.2f}%（{direction}）")
         if len(out) >= limit:
             break
-    return out
+    return out[:limit]
