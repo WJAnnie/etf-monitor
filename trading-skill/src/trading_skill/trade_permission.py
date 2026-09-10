@@ -10,9 +10,7 @@ from trading_skill.technical_opportunity import TechnicalOpportunityState
 class EntryMode(StrEnum):
     NONE = "NONE"
     STANDARD = "STANDARD"
-    # Kept only for backwards-compatible decoding of historical artifacts. New policy
-    # never creates TEST permission from a 120m first buy; TEST is a tranche role later.
-    TEST = "TEST"
+    TEST = "TEST"  # historical artifact decoding only; new policy never emits it
 
 
 class EventEntryState(StrEnum):
@@ -37,6 +35,7 @@ class TradePermissionBlocker(StrEnum):
     EVENT_CONTEXT_UNAVAILABLE = "EVENT_CONTEXT_UNAVAILABLE"
     MAJOR_NEGATIVE_EVENT = "MAJOR_NEGATIVE_EVENT"
     STRUCTURAL_STOP_UNDEFINED = "STRUCTURAL_STOP_UNDEFINED"
+    EXECUTION_STOP_UNDEFINED = "EXECUTION_STOP_UNDEFINED"
     ACCOUNT_CONTEXT_UNAVAILABLE = "ACCOUNT_CONTEXT_UNAVAILABLE"
     ACCOUNT_SECURITY_NOT_ALLOWED = "ACCOUNT_SECURITY_NOT_ALLOWED"
     PORTFOLIO_CONTEXT_UNAVAILABLE = "PORTFOLIO_CONTEXT_UNAVAILABLE"
@@ -54,6 +53,7 @@ CONTEXT_BLOCKERS = {
     TradePermissionBlocker.QUALITY_REVIEW_REQUIRED,
     TradePermissionBlocker.EVENT_CONTEXT_UNAVAILABLE,
     TradePermissionBlocker.STRUCTURAL_STOP_UNDEFINED,
+    TradePermissionBlocker.EXECUTION_STOP_UNDEFINED,
     TradePermissionBlocker.ACCOUNT_CONTEXT_UNAVAILABLE,
     TradePermissionBlocker.PORTFOLIO_CONTEXT_UNAVAILABLE,
 }
@@ -134,7 +134,11 @@ def evaluate_trade_permission(
     quality_status: str,
     quality_deep_analysis_eligible: bool,
     event_state: EventEntryState,
-    structural_stop_defined: bool,
+    # structural_stop_defined is retained for tests/historical callers. New callers
+    # should pass authority_stop_defined + execution_stop_defined explicitly.
+    structural_stop_defined: bool | None = None,
+    authority_stop_defined: bool | None = None,
+    execution_stop_defined: bool | None = None,
     account_context_known: bool,
     account_allows_security: bool,
     portfolio_context_known: bool,
@@ -143,6 +147,16 @@ def evaluate_trade_permission(
     """STEP5A: combine independent gates without rescoring or inventing a buy point."""
     mode, candidate = _proposed_entry(technical_row)
     quality = str(quality_status or "UNKNOWN").upper()
+    authority_stop_ok = (
+        bool(authority_stop_defined)
+        if authority_stop_defined is not None
+        else bool(structural_stop_defined)
+    )
+    execution_stop_ok = (
+        bool(execution_stop_defined)
+        if execution_stop_defined is not None
+        else bool(structural_stop_defined)
+    )
 
     if candidate is None:
         dominant = technical_row.get("dominant_current_buy")
@@ -185,11 +199,12 @@ def evaluate_trade_permission(
     elif event_state is EventEntryState.CAUTION:
         cautions.append("近期存在非硬阻断利空事件，若其他门通过也必须保留事件谨慎标签")
 
-    # This is the DAILY authority invalidation evidence. The 5m execution stop used for
-    # initial TEST sizing is resolved separately in STEP5B; the two must not be conflated.
-    if not structural_stop_defined:
+    if not authority_stop_ok:
         blockers.append(TradePermissionBlocker.STRUCTURAL_STOP_UNDEFINED)
         reasons.append("日线授权信号缺少真实结构失效位；禁止用固定百分比、成本价或ATR替代核心结构止损")
+    if not execution_stop_ok:
+        blockers.append(TradePermissionBlocker.EXECUTION_STOP_UNDEFINED)
+        reasons.append("当前日线结构内没有可验证的5分钟正式BUY执行止损，首笔试仓无法计算真实单位风险")
 
     if not account_context_known:
         blockers.append(TradePermissionBlocker.ACCOUNT_CONTEXT_UNAVAILABLE)
@@ -224,7 +239,7 @@ def evaluate_trade_permission(
         TradePermissionState.ELIGIBLE_WITH_CAUTION,
     }
     if allowed:
-        reasons.append("日线二买授权、低周期执行链、质量、事件、核心结构止损、账户权限与组合风险许可均已具备")
+        reasons.append("日线二买授权、低周期执行链、双止损、质量、事件、账户权限与组合风险许可均已具备")
 
     return TradePermission(
         state=state,
