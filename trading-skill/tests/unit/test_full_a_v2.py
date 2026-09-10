@@ -36,14 +36,15 @@ def fake_signal(kind):
     return SimpleNamespace(structural_price_ticks=1000, standard_types=(kind,))
 
 
-def test_recent_second_buy_can_remain_prepare_with_small_extension():
+def test_second_buy_price_distance_is_only_a_chase_guard():
     signal = fake_signal(ChanSignalType.SECOND_BUY)
     assert execution_maturity_v2(signal, 10.30) == "TRIGGERED"
     assert execution_maturity_v2(signal, 10.70) == "PREPARE"
     assert execution_maturity_v2(signal, 10.90) == "WATCH"
 
 
-def test_first_buy_window_is_tighter_than_second_buy():
+def test_daily_first_buy_is_never_promoted_by_price_distance():
     signal = fake_signal(ChanSignalType.FIRST_BUY)
-    assert execution_maturity_v2(signal, 10.50) == "PREPARE"
-    assert execution_maturity_v2(signal, 10.70) == "WATCH"
+    assert execution_maturity_v2(signal, 10.00) == "WATCH"
+    assert execution_maturity_v2(signal, 10.30) == "WATCH"
+    assert execution_maturity_v2(signal, 10.50) == "WATCH"
