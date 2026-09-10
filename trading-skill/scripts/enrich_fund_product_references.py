@@ -52,6 +52,14 @@ def main() -> int:
     coverage_counts = Counter(row["assessment"]["evidence_coverage"] for row in assessed)
     size_covered = sum(1 for row in assessed if (row.get("product_reference") or {}).get("fund_size_cny") is not None)
     size_coverage_pct = round(size_covered / len(assessed) * 100.0, 2) if assessed else 100.0
+    source_counts = Counter(
+        str((row.get("product_reference") or {}).get("fund_size_source") or "MISSING")
+        for row in assessed
+    )
+    basis_counts = Counter(
+        str((row.get("product_reference") or {}).get("fund_size_basis") or "MISSING")
+        for row in assessed
+    )
     fund_deep_eligible = sum(1 for row in assessed if row["assessment"].get("deep_analysis_eligible"))
     stock_deep_eligible = sum(
         1 for row in quality_payload.get("stock_assessments", [])
@@ -65,6 +73,8 @@ def main() -> int:
         "fund_size_reference_covered": size_covered,
         "fund_size_reference_coverage_pct": size_coverage_pct,
         "fund_reference_errors": len(reference_errors),
+        "fund_size_reference_sources": dict(source_counts),
+        "fund_size_reference_bases": dict(basis_counts),
         "fund_deep_analysis_eligible": fund_deep_eligible,
         "total_deep_analysis_eligible": stock_deep_eligible + fund_deep_eligible,
     })
@@ -72,13 +82,14 @@ def main() -> int:
     quality_payload["mode"] = "STEP3_SECURITY_QUALITY_WITH_FUND_REFERENCE"
     quality_payload["fund_reference_enrichment"] = {
         "generated_at": datetime.now(CN_TZ).isoformat(),
-        "source": "新浪基金规模批量接口",
+        "source": "新浪基金规模批量接口（主）+东方财富场内基金份额/市值批量接口（备用）",
         "requested": len(fund_candidates),
         "covered": size_covered,
         "coverage_pct": size_coverage_pct,
-        "batch_request_count": 5,
+        "source_counts": dict(source_counts),
+        "basis_counts": dict(basis_counts),
         "errors": reference_errors,
-        "design": "基金规模属于慢变量证据；批量采集，不对每只基金逐一请求F10。缺失保持缺失，不使用初始募集规模伪造当前规模。",
+        "design": "基金规模属于慢变量证据；优先使用新浪净值×最近份额。主源超时或缺失时，仅对仍缺失的场内基金使用东方财富批量最新份额×IOPV/市价或总市值作估算证据。缺失保持缺失，不使用初始募集规模伪造当前规模。",
     }
     quality_payload["summary"] = summary
     quality_payload["fund_product_assessments"] = assessed
@@ -88,6 +99,7 @@ def main() -> int:
     atomic_json(args.quality, quality_payload)
 
     print("STEP3C基金规模参考:", size_covered, "/", len(assessed), f"({size_coverage_pct}%)")
+    print("STEP3C基金规模来源:", dict(source_counts))
     print("STEP3C基金状态:", dict(status_counts))
     if reference_errors:
         print("STEP3C参考源异常:", reference_errors)
