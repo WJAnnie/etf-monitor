@@ -19,7 +19,6 @@ class EntrySizingBlocker(StrEnum):
     SIZING_CONTEXT_INVALID = "SIZING_CONTEXT_INVALID"
     EXISTING_POSITION_REQUIRES_SCALE_IN = "EXISTING_POSITION_REQUIRES_SCALE_IN"
     STRUCTURAL_STOP_UNAVAILABLE = "STRUCTURAL_STOP_UNAVAILABLE"
-    INVALID_ENTRY_PRICE = "INVALID_ENTRY_PRICE"
     INVALID_ENTRY_TICK = "INVALID_ENTRY_TICK"
     INVALID_STOP_DISTANCE = "INVALID_STOP_DISTANCE"
     NO_RISK_CAPACITY = "NO_RISK_CAPACITY"
@@ -42,13 +41,6 @@ _REQUIRED_CONTEXT_KEYS = (
     "industry_value_remaining_cny",
     "theme_value_remaining_cny",
 )
-
-_OPTIONAL_CAP_KEYS = {
-    "industry_risk_remaining_cny",
-    "theme_risk_remaining_cny",
-    "industry_value_remaining_cny",
-    "theme_value_remaining_cny",
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,12 +236,17 @@ def size_new_entry(
     if not allowed:
         return _not_eligible(permission_state, entry_mode)
 
-    if entry_mode not in {"STANDARD", "TEST"}:
+    valid_permission_contract = (
+        entry_mode == "STANDARD" and permission_state in {"ELIGIBLE", "ELIGIBLE_WITH_CAUTION"}
+    ) or (
+        entry_mode == "TEST" and permission_state == "TEST_ENTRY_ELIGIBLE"
+    )
+    if not valid_permission_contract:
         return _context_problem(
             permission_state,
             entry_mode,
             EntrySizingBlocker.SIZING_CONTEXT_INVALID,
-            "STEP5A允许新开仓但entry_mode不是STANDARD/TEST，许可合同不一致",
+            "STEP5A的permission.state、entry_mode与new_entry_allowed互相矛盾，STEP5B拒绝盲信单一boolean",
         )
     if not isinstance(sizing_context, Mapping):
         return _context_problem(
@@ -332,8 +329,9 @@ def size_new_entry(
             planned_entry_price=entry_price,
         )
 
+    permission = permission_row.get("permission")
     stop = permission_row.get("structural_stop")
-    if not isinstance(stop, Mapping) or stop.get("valid_for_new_entry") is not True:
+    if not isinstance(permission, Mapping) or not isinstance(stop, Mapping) or stop.get("valid_for_new_entry") is not True:
         return _blocked(
             permission_state=permission_state,
             entry_mode=entry_mode,
@@ -342,6 +340,26 @@ def size_new_entry(
             lot_size=lot_size,
             planned_entry_price=entry_price,
         )
+
+    selected_signal_id = str(permission.get("signal_id") or "")
+    selected_timeframe = str(permission.get("selected_timeframe") or "")
+    stop_signal_id = str(stop.get("signal_id") or "")
+    stop_timeframe = str(stop.get("timeframe") or "")
+    if (
+        not selected_signal_id
+        or not selected_timeframe
+        or stop_signal_id != selected_signal_id
+        or stop_timeframe != selected_timeframe
+    ):
+        return _blocked(
+            permission_state=permission_state,
+            entry_mode=entry_mode,
+            blocker=EntrySizingBlocker.STRUCTURAL_STOP_UNAVAILABLE,
+            reason="结构止损的signal_id/timeframe与STEP5A实际选中的主买点不一致；禁止拿其他信号的失效位计算仓位",
+            lot_size=lot_size,
+            planned_entry_price=entry_price,
+        )
+
     try:
         stop_ticks = _whole_number(stop.get("price_ticks"), positive=True, label="structural_stop.price_ticks")
         tick_size = _positive_decimal(stop.get("tick_size"), label="structural_stop.tick_size")
@@ -367,16 +385,6 @@ def size_new_entry(
         )
 
     stop_price = Decimal(stop_ticks) * tick_size
-    if entry_price <= 0:
-        return _blocked(
-            permission_state=permission_state,
-            entry_mode=entry_mode,
-            blocker=EntrySizingBlocker.INVALID_ENTRY_PRICE,
-            reason="计划成交价必须大于0",
-            lot_size=lot_size,
-            planned_entry_price=entry_price,
-            structural_stop_price=stop_price,
-        )
     risk_per_unit = entry_price - stop_price
     if risk_per_unit <= 0:
         return _blocked(
@@ -435,11 +443,16 @@ def size_new_entry(
     quantity_before_lot = min(value for _, value in quantity_caps)
     quantity_binding = tuple(name for name, value in quantity_caps if value == quantity_before_lot)
     if quantity_before_lot <= 0:
+        risk_limited = "RISK_BUDGET" in quantity_binding
         return _blocked(
             permission_state=permission_state,
             entry_mode=entry_mode,
-            blocker=EntrySizingBlocker.NO_VALUE_CAPACITY,
-            reason="风险预算虽可能存在，但现金或单证券/行业/主题显式价值额度不足以买入1个单位",
+            blocker=(EntrySizingBlocker.NO_RISK_CAPACITY if risk_limited else EntrySizingBlocker.NO_VALUE_CAPACITY),
+            reason=(
+                "有效风险预算不足以覆盖1个证券单位的结构风险"
+                if risk_limited
+                else "现金或单证券/行业/主题显式价值额度不足以买入1个证券单位"
+            ),
             lot_size=lot_size,
             planned_entry_price=entry_price,
             structural_stop_price=stop_price,
