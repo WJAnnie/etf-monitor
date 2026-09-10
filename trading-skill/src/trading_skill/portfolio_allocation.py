@@ -28,6 +28,26 @@ class PortfolioAllocationBlocker(StrEnum):
 
 
 @dataclass(frozen=True, slots=True)
+class SharedCapacitySnapshot:
+    cash_cny: Decimal
+    portfolio_risk_cny: Decimal
+    industry_risk_cny: tuple[tuple[str, Decimal], ...]
+    theme_risk_cny: tuple[tuple[str, Decimal], ...]
+    industry_value_cny: tuple[tuple[str, Decimal], ...]
+    theme_value_cny: tuple[tuple[str, Decimal], ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "cash_cny": _decimal_text(self.cash_cny),
+            "portfolio_risk_cny": _decimal_text(self.portfolio_risk_cny),
+            "industry_risk_cny": _dimension_dict(self.industry_risk_cny),
+            "theme_risk_cny": _dimension_dict(self.theme_risk_cny),
+            "industry_value_cny": _dimension_dict(self.industry_value_cny),
+            "theme_value_cny": _dimension_dict(self.theme_value_cny),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class CandidateAllocation:
     identity: str
     code: str
@@ -37,6 +57,8 @@ class CandidateAllocation:
     lot_size: int | None
     entry_price: Decimal | None
     risk_per_unit: Decimal | None
+    industry_key: str | None
+    theme_keys: tuple[str, ...]
     allocated_value_cny: Decimal
     allocated_risk_cny: Decimal
     binding_limits: tuple[str, ...]
@@ -45,6 +67,7 @@ class CandidateAllocation:
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["state"] = self.state.value
+        payload["theme_keys"] = list(self.theme_keys)
         payload["binding_limits"] = list(self.binding_limits)
         for key in ("entry_price", "risk_per_unit", "allocated_value_cny", "allocated_risk_cny"):
             value = payload[key]
@@ -57,28 +80,21 @@ class PortfolioAllocationPlan:
     state: PortfolioAllocationState
     snapshot_id: str | None
     allocations: tuple[CandidateAllocation, ...]
-    start_cash_cny: Decimal | None
-    end_cash_cny: Decimal | None
-    start_portfolio_risk_cny: Decimal | None
-    end_portfolio_risk_cny: Decimal | None
+    start_capacity: SharedCapacitySnapshot | None
+    end_capacity: SharedCapacitySnapshot | None
     blockers: tuple[PortfolioAllocationBlocker, ...]
     reasons: tuple[str, ...]
 
     def to_dict(self) -> dict[str, Any]:
-        payload = asdict(self)
-        payload["state"] = self.state.value
-        payload["allocations"] = [item.to_dict() for item in self.allocations]
-        payload["blockers"] = [item.value for item in self.blockers]
-        payload["reasons"] = list(self.reasons)
-        for key in (
-            "start_cash_cny",
-            "end_cash_cny",
-            "start_portfolio_risk_cny",
-            "end_portfolio_risk_cny",
-        ):
-            value = payload[key]
-            payload[key] = _decimal_text(value) if value is not None else None
-        return payload
+        return {
+            "state": self.state.value,
+            "snapshot_id": self.snapshot_id,
+            "allocations": [item.to_dict() for item in self.allocations],
+            "start_capacity": self.start_capacity.to_dict() if self.start_capacity is not None else None,
+            "end_capacity": self.end_capacity.to_dict() if self.end_capacity is not None else None,
+            "blockers": [item.value for item in self.blockers],
+            "reasons": list(self.reasons),
+        }
 
 
 def security_identity(row: Mapping[str, Any]) -> str:
@@ -95,6 +111,33 @@ def _decimal_text(value: Decimal) -> str:
     if "." in text:
         text = text.rstrip("0").rstrip(".")
     return text or "0"
+
+
+def _dimension_items(values: Mapping[str, Decimal]) -> tuple[tuple[str, Decimal], ...]:
+    return tuple(sorted(values.items()))
+
+
+def _dimension_dict(values: tuple[tuple[str, Decimal], ...]) -> dict[str, str]:
+    return {name: _decimal_text(value) for name, value in values}
+
+
+def _snapshot(
+    *,
+    cash: Decimal,
+    portfolio_risk: Decimal,
+    industry_risk: Mapping[str, Decimal],
+    theme_risk: Mapping[str, Decimal],
+    industry_value: Mapping[str, Decimal],
+    theme_value: Mapping[str, Decimal],
+) -> SharedCapacitySnapshot:
+    return SharedCapacitySnapshot(
+        cash_cny=cash,
+        portfolio_risk_cny=portfolio_risk,
+        industry_risk_cny=_dimension_items(industry_risk),
+        theme_risk_cny=_dimension_items(theme_risk),
+        industry_value_cny=_dimension_items(industry_value),
+        theme_value_cny=_dimension_items(theme_value),
+    )
 
 
 def _nonnegative_decimal(value: Any, *, label: str) -> Decimal:
@@ -130,10 +173,8 @@ def _context_required(
         state=PortfolioAllocationState.CONTEXT_REQUIRED,
         snapshot_id=None,
         allocations=(),
-        start_cash_cny=None,
-        end_cash_cny=None,
-        start_portfolio_risk_cny=None,
-        end_portfolio_risk_cny=None,
+        start_capacity=None,
+        end_capacity=None,
         blockers=(blocker,),
         reasons=(reason,),
     )
@@ -156,9 +197,14 @@ def _validate_envelope(row: Mapping[str, Any]) -> tuple[str, int, int, Decimal, 
     risk_per_unit = _positive_decimal(sizing.get("risk_per_unit"), label=f"{identity}.risk_per_unit")
     expected_value = Decimal(quantity) * entry
     expected_risk = Decimal(quantity) * risk_per_unit
-    if Decimal(str(sizing.get("planned_value_cny"))) != expected_value:
+    try:
+        planned_value = Decimal(str(sizing.get("planned_value_cny")))
+        planned_risk = Decimal(str(sizing.get("planned_risk_cny")))
+    except InvalidOperation as exc:
+        raise ValueError(f"{identity}:STEP5B planned_value/planned_risk不是有效数值") from exc
+    if not planned_value.is_finite() or planned_value != expected_value:
         raise ValueError(f"{identity}:STEP5B planned_value与quantity*entry不一致")
-    if Decimal(str(sizing.get("planned_risk_cny"))) != expected_risk:
+    if not planned_risk.is_finite() or planned_risk != expected_risk:
         raise ValueError(f"{identity}:STEP5B planned_risk与quantity*risk_per_unit不一致")
     return identity, quantity, lot_size, entry, risk_per_unit
 
@@ -206,18 +252,16 @@ def allocate_new_entries(
 
     STEP5B envelopes are per-symbol upper bounds. This layer never increases them. Candidate
     selection/ranking is deliberately external: `allocation_order` is explicit and exact-identity
-    based. Within this function, shared cash/risk/industry/theme capacity is deducted immediately
-    after each allocation, so later candidates cannot reuse the same capacity.
+    based. Shared cash/risk/industry/theme capacity is deducted immediately after each allocation,
+    so later candidates cannot reuse the same capacity.
 
-    This is an in-memory reservation *plan*, not a durable broker/account reservation. Cross-process
+    This is an in-memory reservation plan, not a durable broker/account reservation. Cross-process
     atomicity requires a later persistent ledger/CAS boundary before order placement.
     """
     sized = _sized_rows(rows)
     if not sized:
-        return PortfolioAllocationPlan(
-            state=PortfolioAllocationState.NO_ELIGIBLE,
-            snapshot_id=None,
-            allocations=tuple(
+        try:
+            allocations = tuple(
                 CandidateAllocation(
                     identity=security_identity(row),
                     code=str(row.get("code") or ""),
@@ -227,17 +271,23 @@ def allocate_new_entries(
                     lot_size=None,
                     entry_price=None,
                     risk_per_unit=None,
+                    industry_key=None,
+                    theme_keys=(),
                     allocated_value_cny=Decimal("0"),
                     allocated_risk_cny=Decimal("0"),
                     binding_limits=(),
                     reason="STEP5B未产生SIZED envelope；STEP5C不要求无关的组合分配上下文",
                 )
                 for row in rows
-            ),
-            start_cash_cny=None,
-            end_cash_cny=None,
-            start_portfolio_risk_cny=None,
-            end_portfolio_risk_cny=None,
+            )
+        except ValueError as exc:
+            return _context_required(PortfolioAllocationBlocker.ENVELOPE_CONTRACT_INVALID, str(exc))
+        return PortfolioAllocationPlan(
+            state=PortfolioAllocationState.NO_ELIGIBLE,
+            snapshot_id=None,
+            allocations=allocations,
+            start_capacity=None,
+            end_capacity=None,
             blockers=(),
             reasons=("没有可进入共享容量分配的STEP5B仓位包络",),
         )
@@ -276,6 +326,7 @@ def allocate_new_entries(
         order = tuple(str(item).strip() for item in order_raw)
         if any(not item for item in order) or len(set(order)) != len(order):
             raise ValueError("allocation_order不能包含空值或重复身份")
+
         cash_start = _nonnegative_decimal(context.get("cash_remaining_cny"), label="cash_remaining_cny")
         portfolio_risk_start = _nonnegative_decimal(
             context.get("portfolio_risk_remaining_cny"), label="portfolio_risk_remaining_cny"
@@ -297,21 +348,25 @@ def allocate_new_entries(
             raise ValueError("allocation_order包含非SIZED或未知身份:" + ",".join(unknown_order))
 
         dimensions: dict[str, tuple[str | None, tuple[str, ...]]] = {}
-        for identity in envelope_by_identity:
+        for identity in order:
             industry, themes = _symbol_dimensions(context, identity)
-            if industry is not None:
-                if industry not in industry_risk or industry not in industry_value:
-                    raise ValueError(f"{identity}:行业{industry}缺少共享risk/value容量")
+            if industry is not None and (industry not in industry_risk or industry not in industry_value):
+                raise ValueError(f"{identity}:行业{industry}缺少共享risk/value容量")
             for theme in themes:
                 if theme not in theme_risk or theme not in theme_value:
                     raise ValueError(f"{identity}:主题{theme}缺少共享risk/value容量")
             dimensions[identity] = (industry, themes)
     except (ValueError, InvalidOperation) as exc:
-        return _context_required(
-            PortfolioAllocationBlocker.ALLOCATION_CONTEXT_INVALID,
-            str(exc),
-        )
+        return _context_required(PortfolioAllocationBlocker.ALLOCATION_CONTEXT_INVALID, str(exc))
 
+    start_capacity = _snapshot(
+        cash=cash_start,
+        portfolio_risk=portfolio_risk_start,
+        industry_risk=industry_risk,
+        theme_risk=theme_risk,
+        industry_value=industry_value,
+        theme_value=theme_value,
+    )
     cash = cash_start
     portfolio_risk = portfolio_risk_start
     allocations_by_identity: dict[str, CandidateAllocation] = {}
@@ -322,10 +377,7 @@ def allocate_new_entries(
         caps: list[tuple[str, int]] = [
             ("STEP5B_ENVELOPE", envelope_quantity),
             ("CASH", int((cash / entry).to_integral_value(rounding=ROUND_FLOOR))),
-            (
-                "PORTFOLIO_RISK",
-                int((portfolio_risk / risk_per_unit).to_integral_value(rounding=ROUND_FLOOR)),
-            ),
+            ("PORTFOLIO_RISK", int((portfolio_risk / risk_per_unit).to_integral_value(rounding=ROUND_FLOOR))),
         ]
         if industry is not None:
             caps.extend(
@@ -367,9 +419,11 @@ def allocate_new_entries(
                 lot_size=lot_size,
                 entry_price=entry,
                 risk_per_unit=risk_per_unit,
+                industry_key=industry,
+                theme_keys=themes,
                 allocated_value_cny=Decimal("0"),
                 allocated_risk_cny=Decimal("0"),
-                binding_limits=binding + (("LOT_ROUNDING",) if raw_quantity > 0 else ()),
+                binding_limits=tuple(dict.fromkeys(binding + (("LOT_ROUNDING",) if raw_quantity > 0 else ()))),
                 reason="共享容量不足以支持至少1个显式交易单位；不向上取整，也不挪用其他候选额度",
             )
             continue
@@ -402,6 +456,8 @@ def allocate_new_entries(
             lot_size=lot_size,
             entry_price=entry,
             risk_per_unit=risk_per_unit,
+            industry_key=industry,
+            theme_keys=themes,
             allocated_value_cny=value,
             allocated_risk_cny=risk,
             binding_limits=final_binding,
@@ -410,13 +466,19 @@ def allocate_new_entries(
 
     all_allocations: list[CandidateAllocation] = []
     for row in rows:
-        identity = security_identity(row)
+        try:
+            identity = security_identity(row)
+        except ValueError as exc:
+            return _context_required(PortfolioAllocationBlocker.ENVELOPE_CONTRACT_INVALID, str(exc))
         if identity in allocations_by_identity:
             all_allocations.append(allocations_by_identity[identity])
             continue
         sizing_state = str((row.get("sizing") or {}).get("state") or "")
         if sizing_state == "SIZED":
-            _, quantity, lot_size, entry, risk_per_unit = _validate_envelope(row)
+            try:
+                _, quantity, lot_size, entry, risk_per_unit = _validate_envelope(row)
+            except ValueError as exc:
+                return _context_required(PortfolioAllocationBlocker.ENVELOPE_CONTRACT_INVALID, str(exc))
             all_allocations.append(
                 CandidateAllocation(
                     identity=identity,
@@ -427,6 +489,8 @@ def allocate_new_entries(
                     lot_size=lot_size,
                     entry_price=entry,
                     risk_per_unit=risk_per_unit,
+                    industry_key=None,
+                    theme_keys=(),
                     allocated_value_cny=Decimal("0"),
                     allocated_risk_cny=Decimal("0"),
                     binding_limits=(),
@@ -444,6 +508,8 @@ def allocate_new_entries(
                     lot_size=None,
                     entry_price=None,
                     risk_per_unit=None,
+                    industry_key=None,
+                    theme_keys=(),
                     allocated_value_cny=Decimal("0"),
                     allocated_risk_cny=Decimal("0"),
                     binding_limits=(),
@@ -451,25 +517,37 @@ def allocate_new_entries(
                 )
             )
 
-    if cash < 0 or portfolio_risk < 0 or any(value < 0 for value in industry_risk.values()) or any(
-        value < 0 for value in theme_risk.values()
-    ) or any(value < 0 for value in industry_value.values()) or any(value < 0 for value in theme_value.values()):
+    if (
+        cash < 0
+        or portfolio_risk < 0
+        or any(value < 0 for value in industry_risk.values())
+        or any(value < 0 for value in theme_risk.values())
+        or any(value < 0 for value in industry_value.values())
+        or any(value < 0 for value in theme_value.values())
+    ):
         return _context_required(
             PortfolioAllocationBlocker.ENVELOPE_CONTRACT_INVALID,
             "STEP5C分配后出现负容量；拒绝生成可能超配的组合计划",
         )
 
+    end_capacity = _snapshot(
+        cash=cash,
+        portfolio_risk=portfolio_risk,
+        industry_risk=industry_risk,
+        theme_risk=theme_risk,
+        industry_value=industry_value,
+        theme_value=theme_value,
+    )
     return PortfolioAllocationPlan(
         state=PortfolioAllocationState.ALLOCATED,
         snapshot_id=snapshot_id,
         allocations=tuple(all_allocations),
-        start_cash_cny=cash_start,
-        end_cash_cny=cash,
-        start_portfolio_risk_cny=portfolio_risk_start,
-        end_portfolio_risk_cny=portfolio_risk,
+        start_capacity=start_capacity,
+        end_capacity=end_capacity,
         blockers=(),
         reasons=(
             "同一计划内共享现金/风险容量只消费一次；后续候选使用实时剩余额度",
+            "STEP5B envelope只是单候选上限；STEP5C只能缩小或跳过，绝不放大",
             "这是基于snapshot_id的内存分配计划，不等价于持久化账户锁定；下单前仍需持久化/CAS校验快照未变化",
         ),
     )
