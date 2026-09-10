@@ -128,7 +128,10 @@ def test_zero_portfolio_risk_capacity_blocks_even_with_cash_available():
 
 
 def test_quantity_is_never_rounded_up_to_minimum_lot():
-    decision = size_new_entry(_row(), _context(standard_trade_risk_limit_cny="10"))
+    decision = size_new_entry(
+        _row(),
+        _context(standard_trade_risk_limit_cny="10", test_trade_risk_limit_cny="5"),
+    )
     assert decision.state is EntrySizingState.BLOCKED
     assert decision.blockers == (EntrySizingBlocker.NO_EXECUTION_MINIMUM_LOT,)
     assert decision.quantity_before_lot_rounding == 12
