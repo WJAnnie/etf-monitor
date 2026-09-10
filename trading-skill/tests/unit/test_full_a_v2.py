@@ -67,9 +67,12 @@ def _formal(side: str, kind: str, when: datetime, signal_id: str):
 
 
 def _analysis(anchor: datetime, *, m120_time=None, m30_time=None, m5_time=None, m5_support=False, m5_sell_time=None):
-    m120_time = m120_time or anchor + timedelta(minutes=10)
-    m30_time = m30_time or anchor + timedelta(minutes=20)
-    m5_time = m5_time or anchor + timedelta(minutes=30)
+    if m120_time is None:
+        m120_time = anchor + timedelta(minutes=10)
+    if m30_time is None:
+        m30_time = anchor + timedelta(minutes=20)
+    if m5_time is None:
+        m5_time = anchor + timedelta(minutes=30)
     m5_signals = [] if m5_time is False else [_formal("BUY", "SECOND_BUY", m5_time, "m5-buy")]
     if m5_sell_time is not None:
         m5_signals.append(_formal("SELL", "FIRST_SELL", m5_sell_time, "m5-sell"))
