@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   issues: read
 
 concurrency:
@@ -42,13 +42,10 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Relay issue comment
+        id: relay
         if: github.event_name == 'issue_comment'
         continue-on-error: true
         run: python relay_issue_comment.py
-
-      - name: Manual dispatch note
-        if: github.event_name == 'workflow_dispatch'
-        run: echo 'Manual dispatch only verifies workflow loading; post a marked comment to issue #1 to test delivery.'
 
       - name: Write relay status marker
         if: always()
@@ -58,6 +55,17 @@ jobs:
           {
             "workflow": "portfolio-advice-relay",
             "status": "completed",
-            "note": "relay step finished or failed without blocking upstream workflow"
+            "note": "relay is non-blocking; inspect notification result separately"
           }
           EOF
+
+      - name: Upload relay status
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: relay-status
+          path: data/relay_last_run.json
+
+      - name: Manual dispatch note
+        if: github.event_name == 'workflow_dispatch'
+        run: echo 'Manual dispatch only verifies workflow loading.'
