@@ -7,6 +7,7 @@ on:
       - "relay_issue_comment.py"
       - "tests/test_portfolio_pipeline.py"
       - ".github/workflows/portfolio-pipeline-test.yml"
+      - ".github/workflows/portfolio-advice-relay.yml"
   workflow_dispatch:
 
 permissions:
