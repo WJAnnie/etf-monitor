@@ -259,13 +259,33 @@ def _enforce_history_policy(candidate: dict, symbol: dict) -> None:
 
 
 def _enforce_first_buy_permission(candidate: dict) -> None:
+    """FIRST_BUY is descriptive only; it never creates fresh-position permission.
+
+    DAILY FIRST_BUY has one specific strategy meaning: WAIT_2B. Lower-timeframe first
+    buys remain useful structure observations, but because 120m/30m are no longer fresh
+    entry authorities they must never be labelled PREPARE_BUY. Existing hard blockers
+    remain the dominant explanation rather than being overwritten by WAIT_2B.
+    """
     if str(candidate.get("signal") or "") != ChanSignalType.FIRST_BUY.value:
         return
-    candidate["action"] = "WAIT_2B"
+
     candidate["push"] = False
     candidate["buy_amount"] = None
     candidate["buy_quantity"] = None
-    candidate["recent_signal_note"] = "日线一买仅记录反转事实，等待日线标准二买/类二买；低周期信号不得提前开仓"
+    blockers = set(candidate.get("blockers") or [])
+    if blockers & HARD_ENTRY_BLOCKERS:
+        candidate["action"] = "OBSERVE"
+        candidate["recent_signal_note"] = "一买结构存在，但仍有基本面/风险/数据/上级结构/历史等硬阻断，仅保留观察；一买不能绕过任何硬门槛"
+        return
+
+    timeframe = str(candidate.get("timeframe") or "")
+    if timeframe == Timeframe.DAILY.value:
+        candidate["action"] = "WAIT_2B"
+        candidate["recent_signal_note"] = "日线一买仅记录反转事实，等待标准二买/类二买；120分钟、30分钟或5分钟信号不得提前创造新开仓资格"
+        return
+
+    candidate["action"] = "OBSERVE"
+    candidate["recent_signal_note"] = f"{timeframe or '低周期'}一买只作为结构观察/执行背景；该周期不是新开仓授权周期，不能单独准备或建立新仓"
 
 
 def _major_negative_events(events: list[dict] | tuple[dict, ...]) -> list[dict]:
