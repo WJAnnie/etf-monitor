@@ -3,7 +3,12 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from scripts.run_full_a_scan_v3 import _execution_structure_ok, _major_negative_industry_events, choose_primary_v3, parent_valid_v3
+from scripts.run_full_a_scan_v3 import (
+    _execution_structure_ok,
+    _major_negative_industry_events,
+    choose_primary_v3,
+    parent_valid_v3,
+)
 from scripts.send_full_a_report_v3 import _valuation
 from trading_skill.a_share_universe import IndustryCandidate
 from trading_skill.chan.signals import ChanSignal
@@ -20,12 +25,22 @@ from trading_skill.sizing import StopCandidate, StopLevel, StopType, TrancheRole
 from trading_skill.strategy_policy import entry_permission, primary_entry_timeframes, sell_fraction
 
 
-def _signal(kind: ChanSignalType, *, side="BUY", price=1000, when=None):
+def _signal(kind: ChanSignalType, *, side="BUY", price=1000, when=None, timeframe="daily"):
     when = when or datetime(2026, 9, 9, 10, 0, tzinfo=timezone.utc)
     return ChanSignal(
-        id=f"sig-{kind.value}-{when.isoformat()}", symbol="000001", standard_types=(kind,), extended_types=(), side=side,
-        level_rank=1, timeframe="30m", state=SignalState.CONFIRMED, structural_price_ticks=price,
-        structural_timestamp=when, confirmation_timestamp=when, anchor_ids=(), evidence_ids=(),
+        id=f"sig-{kind.value}-{when.isoformat()}",
+        symbol="000001",
+        standard_types=(kind,),
+        extended_types=(),
+        side=side,
+        level_rank=1,
+        timeframe=timeframe,
+        state=SignalState.CONFIRMED,
+        structural_price_ticks=price,
+        structural_timestamp=when,
+        confirmation_timestamp=when,
+        anchor_ids=(),
+        evidence_ids=(),
     )
 
 
@@ -43,20 +58,54 @@ def _result(timeframe: Timeframe, signals=(), *, trend="UPTREND", divergence=Non
     )
 
 
-def test_primary_entries_exclude_weekly_and_5m_and_daily_first_buy_waits():
-    assert Timeframe.WEEKLY not in primary_entry_timeframes()
-    assert Timeframe.M5 not in primary_entry_timeframes()
-    assert set(primary_entry_timeframes()) == {Timeframe.DAILY, Timeframe.M120, Timeframe.M30}
+def _raw_signal(side, kind, when):
+    return {
+        "id": f"{side}-{kind}-{when.isoformat()}",
+        "side": side,
+        "types": [kind],
+        "confirmation_timestamp": when.isoformat(),
+    }
+
+
+def _full_execution_analysis(anchor, *, five_technical="NEUTRAL", five_sell_after=False, omit=None):
+    omit = set(omit or ())
+    timeframes = {}
+    for child, minutes in (("120m", 10), ("30m", 20), ("5m", 30)):
+        signals = [] if child in omit else [_raw_signal("BUY", "SECOND_BUY", anchor + timedelta(minutes=minutes))]
+        if child == "5m" and five_sell_after:
+            signals.append(_raw_signal("SELL", "FIRST_SELL", anchor + timedelta(minutes=40)))
+        timeframes[child] = {
+            "status": "OK",
+            "signals": signals,
+            "technical": {"confirmation": five_technical if child == "5m" else "NEUTRAL"},
+        }
+    return {"timeframes": timeframes}
+
+
+def _daily_candidate(anchor, *, maturity="TRIGGERED"):
+    return {
+        "timeframe": "daily",
+        "signal": "SECOND_BUY",
+        "signal_structural_time": anchor.isoformat(),
+        "signal_confirmation_time": (anchor + timedelta(hours=2)).isoformat(),
+        "execution_maturity": maturity,
+    }
+
+
+def test_primary_entry_authority_is_daily_only_and_other_timeframes_are_nonstandalone():
+    assert primary_entry_timeframes() == (Timeframe.DAILY,)
     assert "等待标准二买" in entry_permission(Timeframe.DAILY, ChanSignalType.FIRST_BUY)
-    assert "执行确认" in entry_permission(Timeframe.M5, ChanSignalType.SECOND_BUY)
-    assert "小试仓" in entry_permission(Timeframe.M120, ChanSignalType.FIRST_BUY)
-    assert "只观察" in entry_permission(Timeframe.M30, ChanSignalType.FIRST_BUY)
+    assert "新开仓结构授权" in entry_permission(Timeframe.DAILY, ChanSignalType.SECOND_BUY)
+    assert "趋势延续" in entry_permission(Timeframe.DAILY, ChanSignalType.THIRD_BUY)
+    assert "不得独立新开" in entry_permission(Timeframe.M120, ChanSignalType.SECOND_BUY)
+    assert "不得独立" in entry_permission(Timeframe.M30, ChanSignalType.SECOND_BUY)
+    assert "不能独立创造" in entry_permission(Timeframe.M5, ChanSignalType.SECOND_BUY)
 
 
-def test_legacy_primary_category_order_does_not_let_30m_second_buy_override_daily_third_buy():
+def test_legacy_scan_cannot_promote_daily_third_or_lower_second_buy_to_fresh_primary():
     when = datetime(2026, 9, 9, 10, 0, tzinfo=timezone.utc)
     daily_third = _signal(ChanSignalType.THIRD_BUY, when=when)
-    m30_second = _signal(ChanSignalType.SECOND_BUY, when=when + timedelta(minutes=30))
+    m30_second = _signal(ChanSignalType.SECOND_BUY, when=when + timedelta(minutes=30), timeframe="30m")
     picked = choose_primary_v3(
         {
             Timeframe.DAILY: _result(Timeframe.DAILY, (daily_third,)),
@@ -64,173 +113,172 @@ def test_legacy_primary_category_order_does_not_let_30m_second_buy_override_dail
         },
         as_of=when + timedelta(hours=1),
     )
-    assert picked is not None and picked[0] is Timeframe.DAILY
+    assert picked is None
+
+
+def test_legacy_scan_can_keep_daily_first_buy_only_as_wait_2b_observation():
+    when = datetime(2026, 9, 9, 10, 0, tzinfo=timezone.utc)
+    daily_first = _signal(ChanSignalType.FIRST_BUY, when=when)
+    picked = choose_primary_v3({Timeframe.DAILY: _result(Timeframe.DAILY, (daily_first,))}, as_of=when + timedelta(hours=1))
+    assert picked is not None
+    assert picked[0] is Timeframe.DAILY
+    assert picked[1].standard_types == (ChanSignalType.FIRST_BUY,)
 
 
 def test_parent_context_uses_latest_formal_signal_not_any_old_sell():
     when = datetime(2026, 9, 9, 9, 0, tzinfo=timezone.utc)
-    old_sell = _signal(ChanSignalType.FIRST_SELL, side="SELL", when=when)
-    new_buy = _signal(ChanSignalType.SECOND_BUY, side="BUY", when=when + timedelta(hours=1))
+    old_sell = _signal(ChanSignalType.FIRST_SELL, side="SELL", when=when, timeframe="weekly")
+    new_buy = _signal(ChanSignalType.SECOND_BUY, side="BUY", when=when + timedelta(hours=1), timeframe="weekly")
     weekly = _result(Timeframe.WEEKLY, (old_sell, new_buy), trend="UPTREND")
     assert parent_valid_v3({Timeframe.WEEKLY: weekly}, Timeframe.DAILY, as_of=when + timedelta(hours=2)) is True
-    newer_sell = _signal(ChanSignalType.SECOND_SELL, side="SELL", when=when + timedelta(hours=1, minutes=30))
+    newer_sell = _signal(ChanSignalType.SECOND_SELL, side="SELL", when=when + timedelta(hours=1, minutes=30), timeframe="weekly")
     weekly2 = _result(Timeframe.WEEKLY, (old_sell, new_buy, newer_sell), trend="UPTREND")
     assert parent_valid_v3({Timeframe.WEEKLY: weekly2}, Timeframe.DAILY, as_of=when + timedelta(hours=2)) is False
 
 
 def test_execution_structure_conflict_is_a_real_blocker():
     blockers = blockers_for(
-        signal=_signal(ChanSignalType.SECOND_BUY), fundamental_eligible=True, stop_defined=True,
-        risk=RiskState.L0, technical=None, parent_valid=True, data_complete=True,
-        portfolio_permission=True, execution_structure_ok=False, allow_daily_first_buy=True,
+        signal=_signal(ChanSignalType.SECOND_BUY),
+        fundamental_eligible=True,
+        stop_defined=True,
+        risk=RiskState.L0,
+        technical=None,
+        parent_valid=True,
+        data_complete=True,
+        portfolio_permission=True,
+        execution_structure_ok=False,
+        allow_daily_first_buy=True,
     )
     assert Blocker.EXECUTION_STRUCTURE_CONFLICT in blockers
 
 
 def test_execution_confirmation_pending_has_separate_blocker_taxonomy():
     blockers = blockers_for(
-        signal=_signal(ChanSignalType.SECOND_BUY), fundamental_eligible=True, stop_defined=True,
-        risk=RiskState.L0, technical=None, parent_valid=True, data_complete=True,
-        portfolio_permission=True, execution_structure_ok=True, execution_confirmation_ready=False,
+        signal=_signal(ChanSignalType.SECOND_BUY),
+        fundamental_eligible=True,
+        stop_defined=True,
+        risk=RiskState.L0,
+        technical=None,
+        parent_valid=True,
+        data_complete=True,
+        portfolio_permission=True,
+        execution_structure_ok=True,
+        execution_confirmation_ready=False,
         allow_daily_first_buy=True,
     )
     assert Blocker.EXECUTION_CONFIRMATION_PENDING in blockers
     assert Blocker.EXECUTION_STRUCTURE_CONFLICT not in blockers
 
 
-def test_120m_child_buy_plus_5m_support_confirms_execution_after_older_sell():
-    base_time = datetime(2026, 9, 9, 9, 30, tzinfo=timezone.utc)
-    candidate = {
-        "timeframe": "120m",
-        "signal_confirmation_time": base_time.isoformat(),
-        "execution_maturity": "TRIGGERED",
-    }
-    analysis = {
-        "timeframes": {
-            "30m": {
-                "status": "OK",
-                "signals": [
-                    {"side": "SELL", "types": ["FIRST_SELL"], "confirmation_timestamp": (base_time + timedelta(minutes=30)).isoformat()},
-                    {"side": "BUY", "types": ["SECOND_BUY"], "confirmation_timestamp": (base_time + timedelta(minutes=60)).isoformat()},
-                ],
-            },
-            "5m": {
-                "status": "OK",
-                "signals": [],
-                "technical": {"confirmation": "SUPPORT"},
-            },
-        }
-    }
-    ok, conflicts, states = _execution_structure_ok(analysis, candidate)
+def test_full_formal_120m_30m_5m_chain_confirms_daily_second_buy_execution():
+    anchor = datetime(2026, 9, 9, 9, 30, tzinfo=timezone.utc)
+    ok, conflicts, states = _execution_structure_ok(_full_execution_analysis(anchor), _daily_candidate(anchor))
     assert ok is True
     assert conflicts == []
+    assert states["120m"].startswith("BUY:")
     assert states["30m"].startswith("BUY:")
-    assert states["5m_execution"] == "CONFIRMED:TECH_SUPPORT"
+    assert states["5m"].startswith("BUY:")
+    assert states["5m_execution"] == "CONFIRMED:FORMAL_120M_30M_5M_BUY"
 
 
-def test_no_child_sell_is_not_enough_when_5m_has_no_positive_confirmation():
-    base_time = datetime(2026, 9, 9, 9, 30, tzinfo=timezone.utc)
-    candidate = {
-        "timeframe": "30m",
-        "signal_confirmation_time": base_time.isoformat(),
-        "execution_maturity": "TRIGGERED",
-    }
-    analysis = {
-        "timeframes": {
-            "5m": {
-                "status": "OK",
-                "signals": [],
-                "technical": {"confirmation": "NEUTRAL"},
-            }
-        }
-    }
-    ok, conflicts, states = _execution_structure_ok(analysis, candidate)
+def test_5m_technical_support_cannot_substitute_for_missing_formal_5m_buy():
+    anchor = datetime(2026, 9, 9, 9, 30, tzinfo=timezone.utc)
+    analysis = _full_execution_analysis(anchor, five_technical="SUPPORT", omit={"5m"})
+    ok, conflicts, states = _execution_structure_ok(analysis, _daily_candidate(anchor))
     assert ok is False
-    assert states["5m_execution"] == "WAITING_5M_CONFIRMATION"
-    assert any("未达到SUPPORT" in item for item in conflicts)
+    assert states["5m"] == "WAITING_FORMAL_BUY"
+    assert states["5m_execution"] == "WAITING_FORMAL_CHAIN"
+    assert any("正式BUY" in item for item in conflicts)
 
 
-def test_5m_formal_buy_can_confirm_execution_even_when_technical_is_neutral():
-    base_time = datetime(2026, 9, 9, 9, 30, tzinfo=timezone.utc)
-    candidate = {
-        "timeframe": "30m",
-        "signal_confirmation_time": base_time.isoformat(),
-        "execution_maturity": "PREPARE",
-    }
-    analysis = {
-        "timeframes": {
-            "5m": {
-                "status": "OK",
-                "signals": [
-                    {"side": "BUY", "types": ["SECOND_BUY"], "confirmation_timestamp": (base_time + timedelta(minutes=10)).isoformat()},
-                ],
-                "technical": {"confirmation": "NEUTRAL"},
-            }
-        }
-    }
-    ok, conflicts, states = _execution_structure_ok(analysis, candidate)
-    assert ok is True
-    assert conflicts == []
-    assert states["5m_execution"] == "CONFIRMED:FORMAL_BUY"
+def test_missing_120m_or_30m_formal_buy_also_blocks_even_if_5m_is_positive():
+    anchor = datetime(2026, 9, 9, 9, 30, tzinfo=timezone.utc)
+    for missing in ({"120m"}, {"30m"}):
+        ok, conflicts, states = _execution_structure_ok(
+            _full_execution_analysis(anchor, five_technical="SUPPORT", omit=missing),
+            _daily_candidate(anchor),
+        )
+        assert ok is False
+        assert states[next(iter(missing))] == "WAITING_FORMAL_BUY"
+        assert any("正式BUY" in item for item in conflicts)
 
 
-def test_latest_child_sell_blocks_current_execution_but_not_parent_thesis():
-    base_time = datetime(2026, 9, 9, 9, 30, tzinfo=timezone.utc)
-    candidate = {
-        "timeframe": "30m",
-        "signal_confirmation_time": base_time.isoformat(),
-        "execution_maturity": "TRIGGERED",
-    }
-    analysis = {
-        "timeframes": {
-            "5m": {
-                "status": "OK",
-                "signals": [
-                    {"side": "BUY", "types": ["SECOND_BUY"], "confirmation_timestamp": (base_time + timedelta(minutes=10)).isoformat()},
-                    {"side": "SELL", "types": ["FIRST_SELL"], "confirmation_timestamp": (base_time + timedelta(minutes=20)).isoformat()},
-                ],
-                "technical": {"confirmation": "SUPPORT"},
-            }
-        }
-    }
-    ok, conflicts, states = _execution_structure_ok(analysis, candidate)
+def test_5m_formal_buy_can_confirm_when_indicator_neutral_but_pause_can_block():
+    anchor = datetime(2026, 9, 9, 9, 30, tzinfo=timezone.utc)
+    neutral_ok, _, neutral_states = _execution_structure_ok(
+        _full_execution_analysis(anchor, five_technical="NEUTRAL"),
+        _daily_candidate(anchor),
+    )
+    assert neutral_ok is True
+    assert neutral_states["5m_execution"] == "CONFIRMED:FORMAL_120M_30M_5M_BUY"
+
+    paused, conflicts, states = _execution_structure_ok(
+        _full_execution_analysis(anchor, five_technical="PAUSE"),
+        _daily_candidate(anchor),
+    )
+    assert paused is False
+    assert states["5m_execution"] == "CONFLICT"
+    assert any("PAUSE" in item for item in conflicts)
+
+
+def test_latest_5m_sell_blocks_current_execution_but_not_daily_signal_definition():
+    anchor = datetime(2026, 9, 9, 9, 30, tzinfo=timezone.utc)
+    ok, conflicts, states = _execution_structure_ok(
+        _full_execution_analysis(anchor, five_sell_after=True),
+        _daily_candidate(anchor),
+    )
     assert ok is False
-    assert "5分钟最新正式结构仍为卖点" in conflicts
     assert states["5m"].startswith("SELL:")
     assert states["5m_execution"] == "CONFLICT"
+    assert any("最新正式结构仍为卖点" in item for item in conflicts)
 
 
 def test_execution_waits_when_price_is_outside_trigger_or_prepare_zone():
-    base_time = datetime(2026, 9, 9, 9, 30, tzinfo=timezone.utc)
-    candidate = {
-        "timeframe": "30m",
-        "signal_confirmation_time": base_time.isoformat(),
-        "execution_maturity": "WATCH",
-    }
-    analysis = {
-        "timeframes": {
-            "5m": {
-                "status": "OK",
-                "signals": [
-                    {"side": "BUY", "types": ["SECOND_BUY"], "confirmation_timestamp": (base_time + timedelta(minutes=10)).isoformat()},
-                ],
-                "technical": {"confirmation": "SUPPORT"},
-            }
-        }
-    }
-    ok, conflicts, states = _execution_structure_ok(analysis, candidate)
+    anchor = datetime(2026, 9, 9, 9, 30, tzinfo=timezone.utc)
+    ok, conflicts, states = _execution_structure_ok(
+        _full_execution_analysis(anchor),
+        _daily_candidate(anchor, maturity="WATCH"),
+    )
     assert ok is False
     assert states["5m_execution"] == "WAITING_PRICE"
     assert any("WATCH" in item for item in conflicts)
 
 
+def test_lower_buy_before_daily_confirmation_can_belong_to_current_daily_structure_if_after_structural_anchor():
+    anchor = datetime(2026, 9, 9, 9, 30, tzinfo=timezone.utc)
+    candidate = _daily_candidate(anchor)
+    assert _parse_dt(candidate["signal_confirmation_time"]) > anchor + timedelta(minutes=30)
+    ok, _, _ = _execution_structure_ok(_full_execution_analysis(anchor), candidate)
+    assert ok is True
+
+
+def _parse_dt(value):
+    return datetime.fromisoformat(value)
+
+
 def test_strong_class2_is_only_annotation_on_standard_second_buy():
     when = datetime(2026, 9, 9, 10, 0, tzinfo=timezone.utc)
-    second = _signal(ChanSignalType.SECOND_BUY, when=when)
-    third = _signal(ChanSignalType.THIRD_BUY, when=when)
+    second = _signal(ChanSignalType.SECOND_BUY, when=when, timeframe="30m")
+    third = _signal(ChanSignalType.THIRD_BUY, when=when, timeframe="30m")
     result = ProductionChanResult(
-        "OK", Timeframe.M30, 100, 100, 100, 10, 6, 4, 4, (), None, None, None, None,
-        (second, third), None, 10.0, (),
+        "OK",
+        Timeframe.M30,
+        100,
+        100,
+        100,
+        10,
+        6,
+        4,
+        4,
+        (),
+        None,
+        None,
+        None,
+        None,
+        (second, third),
+        None,
+        10.0,
+        (),
     )
     annotated = annotate_second_buy_variants(result)
     updated_second = next(s for s in annotated.signals if ChanSignalType.SECOND_BUY in s.standard_types)
@@ -241,10 +289,26 @@ def test_strong_class2_is_only_annotation_on_standard_second_buy():
 
 def test_sell_scope_is_hierarchical_and_daily_second_sell_is_not_full_exit():
     trade = create_trade("000001", datetime(2026, 9, 9, tzinfo=timezone.utc))
-    trade = add_tranche(trade, value=10000, entry_price=10, role=TrancheRole.TACTICAL, management_level=StopLevel.L30,
-                        entry_signal_id="a", parent_structure_id=None, stop=_stop(StopLevel.L30))
-    trade = add_tranche(trade, value=20000, entry_price=10, role=TrancheRole.CORE, management_level=StopLevel.LD,
-                        entry_signal_id="b", parent_structure_id=None, stop=_stop(StopLevel.LD))
+    trade = add_tranche(
+        trade,
+        value=10000,
+        entry_price=10,
+        role=TrancheRole.TACTICAL,
+        management_level=StopLevel.L30,
+        entry_signal_id="a",
+        parent_structure_id=None,
+        stop=_stop(StopLevel.L30),
+    )
+    trade = add_tranche(
+        trade,
+        value=20000,
+        entry_price=10,
+        role=TrancheRole.CORE,
+        management_level=StopLevel.LD,
+        entry_signal_id="b",
+        parent_structure_id=None,
+        stop=_stop(StopLevel.LD),
+    )
     five = map_sell_scope(trade, timeframe="5m", sell_class=3)
     assert trade.tranches[1].id not in five.affected_tranche_ids
     daily2 = map_sell_scope(trade, timeframe="daily", sell_class=2)
@@ -257,12 +321,24 @@ def test_sell_scope_is_hierarchical_and_daily_second_sell_is_not_full_exit():
     assert sell_fraction("daily", 2, TrancheRole.CORE) == 0.5
 
 
-def test_weekly_third_sell_can_exit_all():
+def test_weekly_sell_is_staged_and_only_weekly_third_sell_forces_full_exit():
     trade = create_trade("000001", datetime(2026, 9, 9, tzinfo=timezone.utc))
-    trade = add_tranche(trade, value=20000, entry_price=10, role=TrancheRole.CORE, management_level=StopLevel.LW,
-                        entry_signal_id="w", parent_structure_id=None, stop=_stop(StopLevel.LW))
-    scope = map_sell_scope(trade, timeframe="weekly", sell_class=3)
-    assert target_exposure(trade, scope) == 0
+    trade = add_tranche(
+        trade,
+        value=20000,
+        entry_price=10,
+        role=TrancheRole.CORE,
+        management_level=StopLevel.LW,
+        entry_signal_id="w",
+        parent_structure_id=None,
+        stop=_stop(StopLevel.LW),
+    )
+    weekly1 = map_sell_scope(trade, timeframe="weekly", sell_class=1)
+    weekly2 = map_sell_scope(trade, timeframe="weekly", sell_class=2)
+    weekly3 = map_sell_scope(trade, timeframe="weekly", sell_class=3)
+    assert target_exposure(trade, weekly1) == 10000
+    assert target_exposure(trade, weekly2) == 5000
+    assert target_exposure(trade, weekly3) == 0
 
 
 def test_industry_rotation_pauses_high_position_and_profiles_differ():
