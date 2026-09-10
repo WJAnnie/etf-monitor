@@ -101,7 +101,7 @@ def test_allocated_plan_without_durable_context_is_context_required():
     assert plan.blockers == (ReservationBlocker.RESERVATION_CONTEXT_UNAVAILABLE,)
 
 
-def test_snapshot_mismatch_never_reuses_old_allocation():
+def test_snapshot_mismatch_never_reuses_old_allocation_without_receipt():
     context = _reservation_context()
     context["current_snapshot_id"] = "snapshot-002"
     plan = build_execution_reservation_plan(_allocation_payload(), [_sizing_row()], context)
@@ -139,10 +139,13 @@ def test_same_plan_has_same_idempotency_key_but_signal_change_changes_key():
     assert changed_plan.reservation_key != first.reservation_key
 
 
-def test_exact_existing_receipt_is_idempotently_reported_reserved():
+def test_exact_existing_receipt_is_idempotently_reserved_even_after_snapshot_advance():
     ready = build_execution_reservation_plan(_allocation_payload(), [_sizing_row()], _reservation_context())
     assert ready.reservation_key is not None
     context = _reservation_context()
+    # A successful CAS reservation normally advances the durable account snapshot.
+    # The exact same request must still resolve to the existing receipt rather than STALE.
+    context["current_snapshot_id"] = "snapshot-002"
     context["existing_reservations"] = {
         ready.reservation_key: {
             "reservation_id": "reservation-001",
@@ -157,6 +160,7 @@ def test_exact_existing_receipt_is_idempotently_reported_reserved():
     reserved = build_execution_reservation_plan(_allocation_payload(), [_sizing_row()], context)
     assert reserved.state is ReservationPlanState.RESERVED
     assert reserved.reservation_id == "reservation-001"
+    assert reserved.current_snapshot_id == "snapshot-002"
     assert reserved.intents[0].reservation_id == "reservation-001"
     assert reserved.intents[0].state.value == "RESERVED"
 
