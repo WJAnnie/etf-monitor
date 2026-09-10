@@ -24,6 +24,9 @@ SIGNAL_CN = {
     "FIRST_SELL": "一卖",
     "SECOND_SELL": "二卖",
     "THIRD_SELL": "三卖",
+    "STRONG_CLASS2_BUY": "强势类二买",
+    "CENTER_CLASS2_BUY": "中枢类二买",
+    "HIGH_LEVEL_CLASS2_SELL": "高一级别类二卖",
 }
 
 ACTION_CN = {
@@ -68,6 +71,12 @@ RISK_CN = {
     "L2": "暂停加仓",
     "L3": "结构恶化，考虑减仓",
     "L4": "结构失效，退出",
+}
+
+MATURITY_CN = {
+    "WATCH": "观察",
+    "PREPARE": "准备",
+    "TRIGGERED": "已触发",
 }
 
 
@@ -180,6 +189,7 @@ def _replace_embedded(text: str) -> str:
     replacements.update(VOLUME_CN)
     replacements.update(OPPORTUNITY_CN)
     replacements.update(RISK_CN)
+    replacements.update(MATURITY_CN)
     # 长词优先，避免短词替换影响长词。
     for source in sorted(replacements, key=len, reverse=True):
         text = text.replace(source, replacements[source])
@@ -196,6 +206,11 @@ def translate_candidate(candidate: dict) -> dict:
     if signal:
         item["signal"] = SIGNAL_CN.get(signal, signal)
 
+    extended = list(item.get("extended_signals") or [])
+    if extended:
+        item["extended_signals"] = [SIGNAL_CN.get(str(value), str(value)) for value in extended]
+        item["signal_label"] = " / ".join([item.get("signal") or ""] + item["extended_signals"]).strip(" / ")
+
     action = str(item.get("action") or "")
     if action:
         item["action"] = ACTION_CN.get(action, action)
@@ -211,6 +226,11 @@ def translate_candidate(candidate: dict) -> dict:
     risk = str(item.get("risk") or "")
     if risk:
         item["risk"] = RISK_CN.get(risk, risk)
+
+    for key in ("execution_maturity", "structural_execution_maturity", "price_distance_guard"):
+        value = str(item.get(key) or "")
+        if value:
+            item[key] = MATURITY_CN.get(value, value)
 
     volume_price = str(item.get("volume_price") or "")
     if volume_price:
