@@ -8,8 +8,8 @@ from trading_skill.trade_permission import (
 
 def _candidate(**overrides):
     row = {
-        "timeframe": "120m",
-        "signal_id": "sig-1",
+        "timeframe": "daily",
+        "signal_id": "sig-daily-2b",
         "signal_type": "SECOND_BUY",
         "state": "READY",
         "executable_candidate": True,
@@ -23,7 +23,8 @@ def _evaluate(technical, **overrides):
         "quality_status": "PASS",
         "quality_deep_analysis_eligible": True,
         "event_state": EventEntryState.CLEAR,
-        "structural_stop_defined": True,
+        "authority_stop_defined": True,
+        "execution_stop_defined": True,
         "account_context_known": True,
         "account_allows_security": True,
         "portfolio_context_known": True,
@@ -61,11 +62,18 @@ def test_malformed_best_candidate_is_not_trusted_just_because_field_exists():
     assert decision.new_entry_allowed is False
 
 
-def test_prepare_first_buy_must_really_be_120m_first_buy():
+def test_lower_timeframe_candidate_is_not_trusted_even_if_marked_ready():
+    fake_lower = _candidate(timeframe="120m")
+    decision = _evaluate({"best_executable_candidate": fake_lower, "dominant_current_buy": fake_lower})
+    assert decision.state is TradePermissionState.WAIT_TECHNICAL
+    assert decision.new_entry_allowed is False
+
+
+def test_daily_first_buy_waits_and_never_becomes_prepare_entry():
     fake_daily = _candidate(
         timeframe="daily",
         signal_type="FIRST_BUY",
-        state="PREPARE_FIRST_BUY",
+        state="WAIT_STANDARD_SECOND_BUY",
         executable_candidate=False,
     )
     decision = _evaluate({"best_executable_candidate": None, "dominant_current_buy": fake_daily})
