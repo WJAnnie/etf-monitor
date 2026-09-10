@@ -57,21 +57,36 @@ class AddPermission:
 
 
 @dataclass(frozen=True, slots=True)
+class RoleReduction:
+    role: TrancheRole
+    fraction_of_role: float
+
+
+@dataclass(frozen=True, slots=True)
 class SellPolicy:
     timeframe: Timeframe
     sell_class: int
     intent: ExitIntent
-    affected_roles: tuple[TrancheRole, ...]
+    reductions: tuple[RoleReduction, ...]
     unaffected_roles: tuple[TrancheRole, ...]
     reason_codes: tuple[str, ...] = ()
 
+    @property
+    def affected_roles(self) -> tuple[TrancheRole, ...]:
+        return tuple(item.role for item in self.reductions if item.fraction_of_role > 0)
 
-# These are fractions of the *risk-approved final position*, not fractions of account equity.
-# The first tranche reuses the already-frozen opportunity-grade initial fraction. Later
-# tranches are structure-gated; they are never triggered merely because price fell.
+
+# Fractions below are percentages of the *risk-approved final position*, not account equity.
+# The first tranche reuses the frozen grade-dependent initial fraction. Later tranches are
+# structure-gated and may never be created just because price fell.
 _CONFIRMATION_TARGET = 0.25
 _TREND_ADD_TARGET = 0.10
 _CORE_BEFORE_TREND_TARGET = 0.90
+
+# A daily 2S is deliberately not identical to a daily 3S. It removes every non-core
+# tranche and half of the remaining CORE tranche; a daily 3S (or weekly thesis failure)
+# closes the rest. This makes “reduce core” semantically different from “exit all”.
+_DAILY_SECOND_SELL_CORE_REDUCTION = 0.50
 
 
 def staged_position_policy(grade: OpportunityGrade) -> StagedPositionPolicy:
@@ -136,8 +151,8 @@ def add_permission(
 
     gate_ok = False
     if rule.add_gate is AddGate.INITIAL_EXECUTION_CHAIN:
-        # Initial execution-chain eligibility is resolved by run_full_a_scan_v2; this
-        # function only enforces thesis/risk/failure guards for the resulting TEST rule.
+        # Initial hierarchy eligibility is resolved by run_full_a_scan_v2; here we only
+        # keep thesis/risk/failure guards aligned with later additions.
         gate_ok = True
     elif rule.add_gate is AddGate.NEW_M30_STRUCTURE:
         gate_ok = new_m30_structure
@@ -156,12 +171,21 @@ def add_permission(
     return AddPermission(allowed, rule.role, tuple(reasons))
 
 
-def sell_policy(timeframe: Timeframe, sell_class: int) -> SellPolicy:
-    """Map sell structures to tranche scope without letting low-level noise kill core.
+def _full(*roles: TrancheRole) -> tuple[RoleReduction, ...]:
+    return tuple(RoleReduction(role, 1.0) for role in roles)
 
-    This mirrors the existing frozen `position.map_sell_scope` semantics but exposes the
-    role contract directly for planning/reporting. Lower-level sells first remove the
-    most tactical risk. Core thesis exits only on daily-level structural deterioration.
+
+def sell_policy(timeframe: Timeframe, sell_class: int) -> SellPolicy:
+    """Staged exits: low-level sells remove tactical risk before touching the daily core.
+
+    - 5m / 30m: execution risk only.
+    - 120m: confirmation/trend risk, still not the daily CORE thesis.
+    - daily 1S: remove non-core continuation exposure.
+    - daily 2S: remove all non-core exposure + 50% of CORE.
+    - daily 3S / weekly strategic failure: exit everything.
+
+    This policy intentionally supersedes the old all-or-nothing interpretation of
+    `REDUCE_CORE`; otherwise a daily 2S and 3S had effectively the same exposure result.
     """
     all_roles = (
         TrancheRole.TEST,
@@ -171,32 +195,43 @@ def sell_policy(timeframe: Timeframe, sell_class: int) -> SellPolicy:
         TrancheRole.TREND_ADD,
     )
     if timeframe is Timeframe.M5:
-        affected = (TrancheRole.TEST, TrancheRole.TACTICAL)
+        reductions = _full(TrancheRole.TEST, TrancheRole.TACTICAL)
         intent = ExitIntent.REDUCE_EXECUTION
     elif timeframe is Timeframe.M30:
-        affected = (TrancheRole.TEST, TrancheRole.TACTICAL, TrancheRole.TREND_ADD)
+        reductions = _full(TrancheRole.TEST, TrancheRole.TACTICAL, TrancheRole.TREND_ADD)
         intent = ExitIntent.REDUCE_EXECUTION
     elif timeframe is Timeframe.M120:
-        affected = (TrancheRole.TEST, TrancheRole.TACTICAL, TrancheRole.CONFIRMATION, TrancheRole.TREND_ADD)
+        reductions = _full(
+            TrancheRole.TEST,
+            TrancheRole.TACTICAL,
+            TrancheRole.CONFIRMATION,
+            TrancheRole.TREND_ADD,
+        )
         intent = ExitIntent.REDUCE_CONFIRMATION
     elif timeframe is Timeframe.DAILY and sell_class <= 1:
-        affected = (TrancheRole.TEST, TrancheRole.TACTICAL, TrancheRole.TREND_ADD)
+        reductions = _full(TrancheRole.TEST, TrancheRole.TACTICAL, TrancheRole.TREND_ADD)
         intent = ExitIntent.REDUCE_EXECUTION
     elif timeframe is Timeframe.DAILY and sell_class == 2:
-        affected = all_roles
+        reductions = _full(
+            TrancheRole.TEST,
+            TrancheRole.TACTICAL,
+            TrancheRole.CONFIRMATION,
+            TrancheRole.TREND_ADD,
+        ) + (RoleReduction(TrancheRole.CORE, _DAILY_SECOND_SELL_CORE_REDUCTION),)
         intent = ExitIntent.REDUCE_CORE
     elif timeframe is Timeframe.DAILY and sell_class >= 3:
-        affected = all_roles
+        reductions = _full(*all_roles)
         intent = ExitIntent.EXIT_ALL
     elif timeframe is Timeframe.WEEKLY:
-        affected = all_roles
+        reductions = _full(*all_roles)
         intent = ExitIntent.EXIT_ALL
     else:
-        affected = ()
+        reductions = ()
         intent = ExitIntent.NONE
 
+    affected = {item.role for item in reductions if item.fraction_of_role > 0}
     unaffected = tuple(role for role in all_roles if role not in affected)
-    return SellPolicy(timeframe, sell_class, intent, affected, unaffected)
+    return SellPolicy(timeframe, sell_class, intent, reductions, unaffected)
 
 
 def stop_level_for_role(role: TrancheRole) -> StopLevel:
@@ -215,16 +250,16 @@ def protection_can_tighten(
     proposed_stop_ticks: int,
     new_confirmed_structure: bool,
 ) -> bool:
-    # Profit protection is a one-way ratchet: only a newly confirmed structure may
-    # raise protection. A lower proposed stop would loosen risk and is forbidden.
+    # Profit protection is a one-way ratchet. Only a newly confirmed structure may
+    # raise protection; a lower proposed stop loosens risk and is always forbidden.
     return new_confirmed_structure and proposed_stop_ticks >= current_stop_ticks
 
 
 def take_profit_contract() -> tuple[str, ...]:
     return (
         "不以固定盈利百分比作为主止盈",
-        "5分钟/30分钟卖点先处理试仓与战术仓，不能单独击穿日线核心仓",
-        "120分钟卖点处理确认仓与趋势加仓，日线二卖开始处理核心仓",
-        "日线三卖或周线战略结构失效退出剩余仓位",
+        "5分钟/30分钟卖点先处理试仓、战术仓和新近趋势加仓，不能单独击穿日线核心仓",
+        "120分钟卖点处理确认仓和趋势加仓，仍不直接清空日线核心仓",
+        "日线二卖清除非核心仓并减半核心仓，日线三卖或周线战略结构失效退出剩余仓位",
         "盈利保护只随新确认结构上移，保护位不得下移",
     )
