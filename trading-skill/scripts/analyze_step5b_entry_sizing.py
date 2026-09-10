@@ -46,6 +46,13 @@ def _load_context(path: Path | None) -> dict:
     for key, value in symbols.items():
         if not isinstance(value, dict):
             raise ValueError(f"risk_context.symbols[{key}]必须是JSON对象")
+        # STEP5B涉及真实金额与仓位，单证券覆盖必须使用完整市场身份；
+        # 不接受仅code/market:code的模糊覆盖，避免跨市场/证券类型串用额度。
+        parts = str(key).split(":")
+        if len(parts) != 3 or not all(parts):
+            raise ValueError(
+                f"risk_context.symbols[{key}]必须使用market:code:security_type完整身份，例如1:600000:STOCK"
+            )
     return payload
 
 
@@ -56,11 +63,10 @@ def _symbol_override(context: Mapping[str, Any], item: Mapping[str, Any]) -> Map
     code = str(item.get("code") or "")
     market = str(item.get("market") if item.get("market") is not None else "")
     security_type = str(item.get("security_type") or "")
-    for key in (f"{market}:{code}:{security_type}", f"{market}:{code}", code):
-        value = symbols.get(key)
-        if isinstance(value, Mapping):
-            return value
-    return None
+    if not code or not market or not security_type:
+        return None
+    value = symbols.get(f"{market}:{code}:{security_type}")
+    return value if isinstance(value, Mapping) else None
 
 
 def _sizing_context_for_symbol(context: Mapping[str, Any], item: Mapping[str, Any]) -> dict | None:
@@ -71,6 +77,7 @@ def _sizing_context_for_symbol(context: Mapping[str, Any], item: Mapping[str, An
     if override is not None:
         for key in _SIZING_KEYS:
             if key in override:
+                # 显式null也是覆盖值，不能因为是null又回退到全局额度。
                 resolved[key] = override[key]
     return resolved or None
 
@@ -163,6 +170,8 @@ def main() -> int:
             "test_entry_has_explicit_risk_limit_not_percentage_multiplier": True,
             "quantity_rounds_down_never_up": True,
             "decimal_math_is_used_for_price_and_money": True,
+            "symbol_override_requires_exact_market_code_security_type_identity": True,
+            "explicit_null_symbol_override_does_not_fall_back_to_global_value": True,
             "each_result_is_single_candidate_envelope_not_reserved_portfolio_allocation": True,
             "shared_capacity_is_not_summed_across_candidate_envelopes": True,
             "this_stage_does_not_choose_candidates_place_orders_add_positions_or_sell": True,
