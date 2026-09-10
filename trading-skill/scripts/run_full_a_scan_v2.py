@@ -4,7 +4,9 @@ from datetime import datetime, timedelta
 
 import scripts.run_full_a_scan as base
 from trading_skill.chan_policy_v2 import INTRADAY_CONFIRM_TYPES, validate_standard_second_buy
+from trading_skill.decision import OpportunityGrade
 from trading_skill.domain.enums import ChanSignalType, Timeframe
+from trading_skill.position_policy_v2 import staged_position_policy, take_profit_contract
 
 
 # 买点不要求“刚刚这一根K线才出现”。只要结构尚未失效且上涨幅度不大，仍保留为可执行/准备候选。
@@ -157,15 +159,21 @@ def _lower_maturity(left: str, right: str) -> str:
     return min((left, right), key=lambda item: _MATURITY_RANK.get(item, -1))
 
 
-def _raw_class2_annotations(analysis: dict, *, signal_type: str) -> list[str]:
+def _raw_class2_annotations(
+    analysis: dict, *, signal_type: str, signal_price_ticks: int | None = None
+) -> list[str]:
     """Class-2 labels remain extended labels; standard signal stays SECOND_BUY."""
     if signal_type != ChanSignalType.SECOND_BUY.value:
         return []
     daily = (analysis.get("timeframes") or {}).get("daily") or {}
     second_candidates = [s for s in daily.get("signals") or [] if ChanSignalType.SECOND_BUY.value in (s.get("types") or [])]
+    if signal_price_ticks is not None:
+        matched = [s for s in second_candidates if int(s.get("structural_price_ticks") or 0) == signal_price_ticks]
+        if matched:
+            second_candidates = matched
     if not second_candidates:
         return []
-    second = second_candidates[-1]
+    second = max(second_candidates, key=lambda item: _parse_ts(item.get("confirmation_timestamp")) or datetime.min)
     second_evidence = {item for item in second.get("evidence_ids") or [] if item}
     level = int(second.get("level_rank") or 0)
     extended: list[str] = []
@@ -195,6 +203,27 @@ def _raw_class2_annotations(analysis: dict, *, signal_type: str) -> list[str]:
     return list(dict.fromkeys(extended))
 
 
+def _staged_entry_payload(opportunity: object, *, signal_type: str) -> list[dict]:
+    if signal_type != ChanSignalType.SECOND_BUY.value:
+        return []
+    try:
+        grade = OpportunityGrade(str(opportunity))
+    except ValueError:
+        return []
+    policy = staged_position_policy(grade)
+    return [
+        {
+            "role": rule.role.value,
+            "target_fraction": rule.target_fraction,
+            "add_gate": rule.add_gate.value,
+            "management_stop_level": rule.management_stop_level.value,
+            "requires_new_structure": rule.requires_new_structure,
+            "may_average_down": rule.may_average_down,
+        }
+        for rule in policy.rules
+    ]
+
+
 _original_analyze_symbol = base.analyze_symbol
 
 
@@ -203,16 +232,25 @@ def analyze_symbol_v2(symbol, industry_map, *, as_of, equity):
     if not candidate:
         return analysis, candidate
 
+    prefilter = symbol.get("fundamental_prefilter") or {}
     candidate["prospect_theme"] = symbol.get("prospect_theme")
     candidate["industry_selection_reason"] = symbol.get("industry_selection_reason")
     candidate["candidate_route"] = symbol.get("candidate_route")
-    candidate["fundamental_grade"] = (symbol.get("fundamental_prefilter") or {}).get("grade")
+    candidate["fundamental_grade"] = prefilter.get("grade")
+    candidate["industry_metric_policy"] = prefilter.get("industry_policy")
+    candidate["industry_valuation_focus"] = list(prefilter.get("valuation_focus") or [])
+    candidate["industry_metric_focus"] = list(prefilter.get("metric_focus") or [])
+    candidate["industry_report_focus"] = list(prefilter.get("report_focus") or [])
+    candidate["latest_financial_report"] = (prefilter.get("latest") or {}).get("report_date")
+    candidate["industry_event_risk"] = symbol.get("industry_event_risk")
+    candidate["industry_event_score"] = symbol.get("industry_event_score")
 
     signal_price_text = str(candidate.get("buy_point") or "").split("～", 1)[0].replace("元", "")
     try:
         signal_price = float(signal_price_text)
     except ValueError:
         signal_price = 0.0
+    signal_price_ticks = round(signal_price / float(base.TICK_SIZE)) if signal_price > 0 else None
     current_price = float(candidate.get("current_price") or 0)
     candidate["rise_since_signal_pct"] = round((current_price / signal_price - 1) * 100, 2) if signal_price > 0 else None
 
@@ -228,14 +266,31 @@ def analyze_symbol_v2(symbol, industry_map, *, as_of, equity):
     candidate["timeframe_contract"] = {
         "weekly": "战略环境/周线底分型关注，不直接下单",
         "daily": "核心入场授权：二买/类二买；一买只观察",
-        "120m": "日线尾部结构确认，不能独立创造核心买点",
+        "120m": "日线尾部结构确认，不能独立创造核心买点；MACD(6,13,4)重点观察",
         "30m": "执行准备与回踩结构细化",
         "5m": "最终执行触发，不改变日线交易方向",
     }
 
-    extended = _raw_class2_annotations(analysis, signal_type=signal_type)
+    extended = _raw_class2_annotations(
+        analysis,
+        signal_type=signal_type,
+        signal_price_ticks=signal_price_ticks,
+    )
     candidate["extended_signals"] = extended
     candidate["signal_label"] = " / ".join([signal_type] + extended) if signal_type else None
+    candidate["staged_entry_plan"] = _staged_entry_payload(candidate.get("opportunity"), signal_type=signal_type)
+    candidate["take_profit_contract"] = list(take_profit_contract())
+    candidate["stop_contract"] = {
+        "TEST": "5分钟执行结构只管理试仓；不得单独否定日线核心逻辑",
+        "CONFIRMATION": "30分钟保护位管理确认仓，必须来自已确认新结构",
+        "CORE": "日线二买/中枢失效是核心仓保护依据",
+        "TREND_ADD": "120分钟保护位管理趋势加仓；盈利保护只能上移",
+    }
+    candidate["add_plan"] = (
+        "首笔仅在日线二买/类二买 + 120分钟确认 + 30分钟执行准备 + 5分钟触发后执行；"
+        "第二笔必须出现新的30分钟独立确认结构；核心仓必须出现新的120分钟确认结构；"
+        "趋势加仓必须出现日线趋势延续结构。任何结构失效后禁止因下跌机械补仓。"
+    )
 
     blockers = list(candidate.get("blockers") or [])
     for reason in hierarchy_reasons:
@@ -272,6 +327,8 @@ def analyze_symbol_v2(symbol, industry_map, *, as_of, equity):
     tf_raw = (analysis.get("timeframes") or {}).get("daily") or {}
     for signal in reversed(tf_raw.get("signals") or []):
         if signal_type in (signal.get("types") or []):
+            if signal_price_ticks is not None and int(signal.get("structural_price_ticks") or 0) != signal_price_ticks:
+                continue
             candidate["signal_confirmation_time"] = signal.get("confirmation_timestamp")
             break
     return analysis, candidate
