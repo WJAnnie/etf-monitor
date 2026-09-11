@@ -4,6 +4,9 @@ on:
   issue_comment:
     types: [created]
   workflow_dispatch:
+  schedule:
+    # 06:05 UTC = 北京时间 14:05；在 14:01 最终行情刷新后检查是否达到分析标准。
+    - cron: "5 6 * * 1-5"
 
 permissions:
   contents: read
@@ -17,6 +20,7 @@ jobs:
   relay:
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
       (github.event.issue.number == 1 && contains(github.event.comment.body, '<!-- portfolio-advice -->'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
