@@ -85,10 +85,19 @@ def evaluate_summary(summary: dict, *, now: datetime | None = None) -> Readiness
             generated_at=generated_at,
         )
 
-    if summary.get("market_activity_today") is not True:
+    # New snapshots carry an explicit calendar decision. Fall back to the old
+    # field only for backward compatibility with already-published snapshots.
+    expected_trading_day = summary.get("expected_trading_day")
+    if expected_trading_day is None:
+        expected_trading_day = summary.get("market_activity_today") is True
+    else:
+        expected_trading_day = expected_trading_day is True
+
+    if not expected_trading_day:
+        reason = str(summary.get("market_calendar_reason") or "scheduled_exchange_closure")
         return Readiness(
             "HOLIDAY_SKIP",
-            "no same-day market activity; treat as a non-trading day",
+            f"calendar says non-trading day: {reason}",
             generated_at=generated_at,
         )
 
