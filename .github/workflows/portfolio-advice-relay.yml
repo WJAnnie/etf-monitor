@@ -4,9 +4,12 @@ on:
   issue_comment:
     types: [created]
   workflow_dispatch:
+  schedule:
+    # 06:05 UTC = 北京时间 14:05；在 14:01 最终行情刷新后检查是否达到分析标准。
+    - cron: "5 6 * * 1-5"
 
 permissions:
-  contents: write
+  contents: read
   issues: read
 
 concurrency:
@@ -17,16 +20,19 @@ jobs:
   relay:
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
       (github.event.issue.number == 1 && contains(github.event.comment.body, '<!-- portfolio-advice -->'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
-      FEISHU_WEBHOOK: ''
-      FEISHU_SECRET: ''
+      FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+      FEISHU_SECRET: ${{ secrets.FEISHU_SECRET }}
       FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
       FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
       FEISHU_CHAT_ID: oc_9df5fff3a390da378fc2714fdb2ea541
       SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
+      PIPELINE_STATUS_PATH: data/pipeline_status.json
+      MARKET_SUMMARY_PATH: data/latest_market_summary.json
 
     steps:
       - name: Checkout
@@ -39,33 +45,29 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: python -m pip install -r requirements.txt
 
-      - name: Relay issue comment
-        id: relay
-        if: github.event_name == 'issue_comment'
-        continue-on-error: true
+      - name: Gate, notify, and record status
         run: python relay_issue_comment.py
 
-      - name: Write relay status marker
-        if: always()
-        run: |
-          mkdir -p data
-          cat > data/relay_last_run.json <<'EOF'
-          {
-            "workflow": "portfolio-advice-relay",
-            "status": "completed",
-            "note": "relay is non-blocking; inspect notification result separately"
-          }
-          EOF
-
-      - name: Upload relay status
+      - name: Upload pipeline status
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: relay-status
-          path: data/relay_last_run.json
+          name: portfolio-pipeline-status-${{ github.run_id }}
+          path: data/pipeline_status.json
+          if-no-files-found: error
 
-      - name: Manual dispatch note
-        if: github.event_name == 'workflow_dispatch'
-        run: echo 'Manual dispatch only verifies workflow loading.'
+      - name: Publish pipeline summary
+        if: always()
+        run: |
+          if [ -f data/pipeline_status.json ]; then
+            python - <<'PY'
+          import json
+          from pathlib import Path
+          status=json.loads(Path('data/pipeline_status.json').read_text(encoding='utf-8'))
+          print('portfolio pipeline status:')
+          for key in ('market_data','analysis','github_issue','feishu','serverchan','overall'):
+              print(f'{key}={status.get(key)}')
+          PY
+          fi

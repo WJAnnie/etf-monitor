@@ -12,6 +12,7 @@ on:
     branches: [master]
     paths:
       - "portfolio_market_data.py"
+      - "scripts/cn_market_calendar.py"
       - ".github/workflows/portfolio-market-data.yml"
 
 permissions:
@@ -30,7 +31,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: master
+          # Scheduled runs use master; manual runs keep the selected ref so a branch test cannot publish to master.
+          ref: ${{ github.ref }}
           fetch-depth: 0
 
       - name: Set up Python
@@ -78,18 +80,25 @@ jobs:
           today = int(s.get("symbols_with_today_data", 0))
           cover = int(s.get("symbols_covering_1400_bar", 0))
           ready = int(s.get("ready_for_1400_analysis_symbols", 0))
-          activity = bool(s.get("market_activity_today", False))
+          expected_trading_day = (
+              s.get("expected_trading_day", s.get("market_activity_today")) is True
+          )
+          observed_activity = s.get("observed_market_activity_today") is True
           generated = datetime.fromisoformat(s["generated_at"])
 
           print(
-              f"Quality gate: usable={usable}/{total}, fresh={fresh}/{total}, "
-              f"today={today}/{total}, covers_1400={cover}/{total}, ready={ready}/{total}, "
+              f"Quality gate: expected_trading_day={expected_trading_day}, "
+              f"observed_activity={observed_activity}, usable={usable}/{total}, "
+              f"fresh={fresh}/{total}, today={today}/{total}, "
+              f"covers_1400={cover}/{total}, ready={ready}/{total}, "
               f"generated={generated.isoformat()}"
           )
 
-          # 周一到周五也可能是法定休市日。此时把诊断快照视为有效，不制造红色失败。
-          if not activity:
-              print("No same-day market activity detected; likely non-trading day. Accept diagnostic snapshot.")
+          # 只有交易日历明确标记为休市时，才允许以诊断快照正常结束。
+          # 预期交易日但缺少当日数据必须失败，避免把采集故障伪装成假日。
+          if not expected_trading_day:
+              reason = s.get("market_calendar_reason", "scheduled_exchange_closure")
+              print(f"Calendar says non-trading day ({reason}); accept diagnostic snapshot.")
               raise SystemExit(0)
 
           if total < 9:
@@ -129,7 +138,9 @@ jobs:
           echo "All ${MAX_ATTEMPTS} market-data attempts failed. Previous published snapshot remains untouched."
           exit 1
 
+      # 只有 master 的定时/手动运行可以发布；分支手动测试只验证采集和质量门。
       - name: Publish only validated snapshot
+        if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
         shell: bash
         run: |
           set -euo pipefail
