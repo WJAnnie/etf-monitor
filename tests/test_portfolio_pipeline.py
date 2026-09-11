@@ -23,6 +23,7 @@ def ready_summary() -> dict:
     return {
         "generated_at": now,
         "market_activity_today": True,
+        "expected_trading_day": True,
         "all_usable": True,
         "all_fresh": True,
         "all_cover_1400_bar": True,
@@ -90,8 +91,51 @@ class PortfolioPipelineTests(unittest.TestCase):
 
         holiday_payload = ready_summary()
         holiday_payload["market_activity_today"] = False
+        holiday_payload["expected_trading_day"] = False
         holiday = evaluate_summary(holiday_payload)
         self.assertEqual(holiday.status, "HOLIDAY_SKIP")
+
+    def test_scheduled_run_alerts_when_snapshot_is_not_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "data").mkdir()
+            payload = ready_summary()
+            payload["all_fresh"] = False
+            payload["all_ready_for_1400_analysis"] = False
+            (root / "data" / "latest_market_summary.json").write_text(
+                json.dumps(payload),
+                encoding="utf-8",
+            )
+            with patch.dict(
+                os.environ,
+                {
+                    "GITHUB_EVENT_NAME": "schedule",
+                    "GITHUB_EVENT_PATH": "",
+                    "PIPELINE_STATUS_PATH": str(root / "data" / "pipeline_status.json"),
+                },
+                clear=False,
+            ), patch.object(
+                relay_issue_comment,
+                "send_all",
+                return_value={
+                    "feishu": {"status": "success"},
+                    "serverchan": {"status": "success"},
+                },
+            ) as send:
+                old_cwd = Path.cwd()
+                try:
+                    os.chdir(root)
+                    self.assertEqual(relay_issue_comment.main(), 0)
+                finally:
+                    os.chdir(old_cwd)
+
+                title, body = send.call_args.args
+                self.assertEqual(title, "⚠️ 14:00 持仓分析未生成")
+                self.assertIn("all_fresh", body)
+                status = read_status(root / "data" / "pipeline_status.json")
+                self.assertEqual(status["analysis"], "blocked")
+                self.assertEqual(status["market_data"], "not_ready")
+                self.assertEqual(status["overall"], "success")
 
     def test_stale_summary_is_not_ready(self) -> None:
         payload = ready_summary()
