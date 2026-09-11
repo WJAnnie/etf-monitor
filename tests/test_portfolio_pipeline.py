@@ -10,6 +10,7 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import relay_issue_comment
+from portfolio_market_data import build_summary
 from scripts.pipeline_ready_check import evaluate_summary
 from scripts.pipeline_status import read_status
 
@@ -28,7 +29,55 @@ def ready_summary() -> dict:
     }
 
 
+def stale_symbol() -> dict:
+    daily_row = {
+        "time": "2026-09-10",
+        "open": 1.0,
+        "close": 1.0,
+        "high": 1.0,
+        "low": 1.0,
+        "volume": 1,
+        "amount": 1,
+    }
+    m15_row = {
+        "time": "2026-09-10 15:00:00",
+        "open": 1.0,
+        "close": 1.0,
+        "high": 1.0,
+        "low": 1.0,
+        "volume": 1,
+        "amount": 1,
+    }
+    return {
+        "key": "sample",
+        "name": "Sample",
+        "secid": "1.000001",
+        "tx_symbol": "sh000001",
+        "market": "CN",
+        "proxy_for": "Sample",
+        "proxy_note": "",
+        "daily": [daily_row] * 60,
+        "m15": [m15_row] * 80,
+        "sources": {"daily": "sina", "m15": "sina"},
+        "warnings": [],
+        "errors": [],
+        "cache_origin": {},
+    }
+
+
 class PortfolioPipelineTests(unittest.TestCase):
+    def test_normal_weekday_with_stale_bars_is_not_inferred_as_holiday(self) -> None:
+        result = {
+            "generated_at": "2026-09-11T14:01:00+08:00",
+            "symbols": {"sample": stale_symbol()},
+        }
+        summary = build_summary(
+            result,
+            datetime(2026, 9, 11, 14, 1, tzinfo=CN_TZ),
+        )
+        self.assertTrue(summary["market_activity_today"])
+        self.assertFalse(summary["all_fresh"])
+
     def test_ready_and_holiday_are_distinct(self) -> None:
         ready = evaluate_summary(ready_summary())
         self.assertEqual(ready.status, "READY")
@@ -56,7 +105,7 @@ class PortfolioPipelineTests(unittest.TestCase):
                         "issue": {"number": 1},
                         "comment": {
                             "id": 123,
-                            "body": "<!-- portfolio-advice -->\nold report",
+                            "body": "<!-- portfolio-advice -->\\nold report",
                         },
                     }
                 ),
@@ -106,7 +155,7 @@ class PortfolioPipelineTests(unittest.TestCase):
                         "issue": {"number": 1},
                         "comment": {
                             "id": 456,
-                            "body": "<!-- portfolio-advice -->\nready report",
+                            "body": "<!-- portfolio-advice -->\\nready report",
                         },
                     }
                 ),
