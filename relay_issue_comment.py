@@ -119,9 +119,47 @@ def _record_base(event_name: str, issue_number: int | None, comment_id: int | No
     )
 
 
+def _scheduled_blocked_alert_body() -> str:
+    return "行情数据未达到14:00分析标准，今日持仓建议暂不推送；请查看 GitHub Actions 运行日志。"
+
+
 def main() -> int:
     event_name, raw_body, issue_label, issue_number, comment_id = _event_context()
     _record_base(event_name, issue_number, comment_id)
+
+    if event_name == "schedule":
+        gate = evaluate_summary(load_summary(SUMMARY_PATH))
+        update_status(market_data=gate.status.lower(), market_data_reason=gate.reason)
+
+        if gate.status == "HOLIDAY_SKIP":
+            update_status(analysis="holiday_skip", overall="skipped")
+            print(f"[SKIP] {gate.reason}")
+            return 0
+
+        if gate.status != "READY":
+            results = send_all(
+                "⚠️ 14:00 持仓分析未生成",
+                _scheduled_blocked_alert_body(),
+            )
+            update_status(
+                analysis="blocked",
+                feishu=_status_value(results, "feishu"),
+                serverchan=_status_value(results, "serverchan"),
+                notification_errors={
+                    key: value.get("error")
+                    for key, value in results.items()
+                    if value.get("status") == "failed"
+                },
+                overall=_overall(results),
+            )
+            return 0 if "success" in {
+                _status_value(results, "feishu"),
+                _status_value(results, "serverchan"),
+            } else 1
+
+        update_status(analysis="awaiting_report", overall="pending")
+        print("[OK] 14:00 行情已通过质量门，等待持仓分析正文评论。")
+        return 0
 
     if event_name == "workflow_dispatch" and not raw_body:
         update_status(analysis="manual_dry_run", overall="success")
