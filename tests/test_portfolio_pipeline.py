@@ -4,13 +4,14 @@ import json
 import os
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 import relay_issue_comment
 from portfolio_market_data import build_summary
+from scripts.cn_market_calendar import calendar_status
 from scripts.pipeline_ready_check import evaluate_summary
 from scripts.pipeline_status import read_status
 
@@ -66,6 +67,11 @@ def stale_symbol() -> dict:
 
 
 class PortfolioPipelineTests(unittest.TestCase):
+    def test_2026_calendar_does_not_treat_september_11_as_a_closure(self) -> None:
+        self.assertTrue(calendar_status(date(2026, 9, 11))["expected_trading_day"])
+        self.assertFalse(calendar_status(date(2026, 9, 25))["expected_trading_day"])
+        self.assertFalse(calendar_status(date(2026, 9, 26))["expected_trading_day"])
+
     def test_normal_weekday_with_stale_bars_is_not_inferred_as_holiday(self) -> None:
         result = {
             "generated_at": "2026-09-11T14:01:00+08:00",
@@ -105,7 +111,7 @@ class PortfolioPipelineTests(unittest.TestCase):
                         "issue": {"number": 1},
                         "comment": {
                             "id": 123,
-                            "body": "<!-- portfolio-advice -->\\nold report",
+                            "body": "<!-- portfolio-advice -->\nold report",
                         },
                     }
                 ),
@@ -155,7 +161,7 @@ class PortfolioPipelineTests(unittest.TestCase):
                         "issue": {"number": 1},
                         "comment": {
                             "id": 456,
-                            "body": "<!-- portfolio-advice -->\\nready report",
+                            "body": "<!-- portfolio-advice -->\nready report",
                         },
                     }
                 ),
