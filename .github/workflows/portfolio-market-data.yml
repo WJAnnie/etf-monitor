@@ -30,7 +30,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Scheduled runs use master; manual runs keep the selected ref so a branch test cannot publish to master.\n          ref: ${{ github.ref }}\n          fetch-depth: 0
+          # Scheduled runs use master; manual runs keep the selected ref so a branch test cannot publish to master.
+          ref: ${{ github.ref }}
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
