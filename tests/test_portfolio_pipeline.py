@@ -131,7 +131,7 @@ class PortfolioPipelineTests(unittest.TestCase):
 
                 title, body = send.call_args.args
                 self.assertEqual(title, "⚠️ 14:00 持仓分析未生成")
-                self.assertIn("all_fresh", body)
+                self.assertIn("行情数据未达到14:00分析标准", body)
                 status = read_status(root / "data" / "pipeline_status.json")
                 self.assertEqual(status["analysis"], "blocked")
                 self.assertEqual(status["market_data"], "not_ready")
