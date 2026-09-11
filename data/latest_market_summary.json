@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-11T16:06:44.662364+08:00",
+  "generated_at": "2026-09-11T18:02:00.891897+08:00",
   "source_file": "data/latest_market_data.json",
   "total_symbols": 9,
   "usable_symbols": 9,
@@ -34,7 +34,7 @@
         "m15": false
       },
       "cache_origin": {},
-      "daily_count": 181,
+      "daily_count": 180,
       "m15_count": 320,
       "latest_daily_time": "2026-09-11",
       "latest_m15_time": "2026-09-11 15:00:00",
@@ -109,7 +109,7 @@
         "m15": false
       },
       "cache_origin": {},
-      "daily_count": 181,
+      "daily_count": 180,
       "m15_count": 320,
       "latest_daily_time": "2026-09-11",
       "latest_m15_time": "2026-09-11 15:00:00",
@@ -144,7 +144,7 @@
         "m15": false
       },
       "cache_origin": {},
-      "daily_count": 181,
+      "daily_count": 180,
       "m15_count": 320,
       "latest_daily_time": "2026-09-11",
       "latest_m15_time": "2026-09-11 15:45",
@@ -248,7 +248,7 @@
         "m15": false
       },
       "cache_origin": {},
-      "daily_count": 181,
+      "daily_count": 180,
       "m15_count": 320,
       "latest_daily_time": "2026-09-11",
       "latest_m15_time": "2026-09-11 15:00:00",
@@ -323,7 +323,7 @@
         "m15": false
       },
       "cache_origin": {},
-      "daily_count": 181,
+      "daily_count": 180,
       "m15_count": 320,
       "latest_daily_time": "2026-09-11",
       "latest_m15_time": "2026-09-11 15:00:00",
