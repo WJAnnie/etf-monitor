@@ -12,6 +12,7 @@ on:
     branches: [master]
     paths:
       - "portfolio_market_data.py"
+      - "scripts/cn_market_calendar.py"
       - ".github/workflows/portfolio-market-data.yml"
 
 permissions:
