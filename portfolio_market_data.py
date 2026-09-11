@@ -11,6 +11,8 @@ from zoneinfo import ZoneInfo
 
 import requests
 
+from scripts.cn_market_calendar import calendar_status
+
 CN_TZ = ZoneInfo("Asia/Shanghai")
 TIMEOUT = 8
 RETRIES = 3
@@ -384,13 +386,17 @@ def build_summary(result: dict, generated_at: datetime) -> dict:
             "warnings":item.get("warnings") or [],"errors":item["errors"],
         }
     usable_count=sum(x["usable_for_analysis"] for x in symbols.values()); fresh_count=sum(x["fresh_for_analysis"] for x in symbols.values()); covers_count=sum(x["covers_1400_bar"] for x in symbols.values()); today_count=sum(x["daily_is_today"] and x["m15_is_today"] for x in symbols.values())
-    market_activity=today_count>=max(3,len(symbols)//2)
+    calendar=calendar_status(generated_at.date())
+    expected_trading_day=bool(calendar["expected_trading_day"])
+    observed_market_activity=today_count>=max(3,len(symbols)//2)
     ready_count=sum(x["fresh_for_analysis"] and x["covers_1400_bar"] for x in symbols.values())
     return {
         "generated_at":result["generated_at"],"source_file":OUT.as_posix(),"total_symbols":len(symbols),
-        "usable_symbols":usable_count,"fresh_symbols":fresh_count,"symbols_with_today_data":today_count,"market_activity_today":market_activity,
+        "usable_symbols":usable_count,"fresh_symbols":fresh_count,"symbols_with_today_data":today_count,
+        "expected_trading_day":expected_trading_day,"market_activity_today":expected_trading_day,
+        "observed_market_activity_today":observed_market_activity,"market_calendar_reason":calendar["reason"],
         "all_usable":usable_count==len(symbols),"all_fresh":fresh_count==len(symbols),"symbols_covering_1400_bar":covers_count,"all_cover_1400_bar":covers_count==len(symbols),"ready_for_1400_analysis_symbols":ready_count,"all_ready_for_1400_analysis":ready_count==len(symbols),
-        "note":"行情源按标的选择；代理Yahoo代码会在proxy_substitution标明。Yahoo 15分钟按区间起点处理并过滤未收完K线；其他源按区间结束时间处理。实时源全失败时才回捞缓存。",
+        "note":"交易日状态由中国A股交易日历判断；行情新鲜度和1400点完整性单独质量门判定，不因缺少当日数据而推断休市。行情源按标的选择；代理Yahoo代码会在proxy_substitution标明。Yahoo 15分钟按区间起点处理并过滤未收完K线；其他源按区间结束时间处理。实时源全失败时才回捞缓存。",
         "symbols":symbols,
     }
 
@@ -409,6 +415,7 @@ def main():
     atomic_write_json(SUMMARY_OUT,summary)
 
     print(f"wrote {OUT}, {SUMMARY_OUT}, and {len(result['symbols'])} symbol shards")
+    print(f"calendar: expected_trading_day={summary['expected_trading_day']} reason={summary['market_calendar_reason']} observed_activity={summary['observed_market_activity_today']}")
     print(f"quality: usable={summary['usable_symbols']}/{summary['total_symbols']} fresh={summary['fresh_symbols']}/{summary['total_symbols']} today={summary['symbols_with_today_data']}/{summary['total_symbols']} covers_1400={summary['symbols_covering_1400_bar']}/{summary['total_symbols']} ready={summary['ready_for_1400_analysis_symbols']}/{summary['total_symbols']}")
     for k,v in summary["symbols"].items():
         print(k,v["sources"],v["daily_count"],v["m15_count"],v["latest_m15_time"],v["latest_completed_m15_end_time"],v["usable_for_analysis"],v["fresh_for_analysis"],v["covers_1400_bar"],v["proxy_substitution"],v["errors"])
