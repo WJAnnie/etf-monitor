@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-15T18:53:10.833455+08:00",
+  "generated_at": "2026-09-15T20:11:04.702223+08:00",
   "total_symbols": 9,
   "history_ok_symbols": 9,
   "fresh_symbols": 9,
@@ -50,7 +50,7 @@
       "warnings": [
         "tencent: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 empty; stock_keys=['qt', 'm5'] | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 empty; stock_keys=['qt', 'm5']",
         "sina: Sina unexpected payload type=NoneType",
-        "eastmoney: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+        "eastmoney: EastMoney m5 returned empty/invalid kline"
       ],
       "errors": []
     },
@@ -101,7 +101,7 @@
       "proxy_for": "北证50",
       "proxy_note": "指数本身；优先东方财富，避免腾讯仅返回单根日K",
       "data_file": "data/market5/bse50.json",
-      "source": "sina",
+      "source": "eastmoney",
       "proxy_substitution": false,
       "m5_count": 600,
       "latest_m5_end_time": "2026-09-15T15:00:00+08:00",
@@ -110,9 +110,7 @@
       "covers_1400_bar": true,
       "covers_1450_bar": true,
       "using_cache": false,
-      "warnings": [
-        "eastmoney: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
-      ],
+      "warnings": [],
       "errors": []
     },
     "china_film": {
