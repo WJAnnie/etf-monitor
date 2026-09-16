@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-16T18:42:22.004268+08:00",
+  "generated_at": "2026-09-16T20:08:38.452520+08:00",
   "total_symbols": 9,
   "history_ok_symbols": 9,
   "fresh_symbols": 9,
@@ -171,7 +171,7 @@
       "warnings": [
         "tencent: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 empty; stock_keys=['qt', 'm5'] | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 empty; stock_keys=['qt', 'm5']",
         "sina: Sina unexpected payload type=NoneType",
-        "eastmoney: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+        "eastmoney: EastMoney m5 returned empty/invalid kline"
       ],
       "errors": []
     },
