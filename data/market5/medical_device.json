@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-24T18:58:19.466256+08:00",
+  "generated_at": "2026-09-24T20:16:18.090116+08:00",
   "symbol": {
     "key": "medical_device",
     "name": "中证全指医疗器械指数",
@@ -3923,7 +3923,7 @@
         "close": 0.6729999780654907,
         "high": 0.6729999780654907,
         "low": 0.671999990940094,
-        "volume": 2863000.0,
+        "volume": 117400.0,
         "amount": 0.0
       },
       {
@@ -3932,7 +3932,7 @@
         "close": 0.671999990940094,
         "high": 0.6740000247955322,
         "low": 0.671999990940094,
-        "volume": 796100.0,
+        "volume": 714600.0,
         "amount": 0.0
       },
       {
@@ -3941,7 +3941,7 @@
         "close": 0.671999990940094,
         "high": 0.6729999780654907,
         "low": 0.671999990940094,
-        "volume": 3432400.0,
+        "volume": 83200.0,
         "amount": 0.0
       }
     ],
@@ -3949,7 +3949,7 @@
     "warnings": [
       "tencent: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 empty; stock_keys=['qt', 'm5'] | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 empty; stock_keys=['qt', 'm5']",
       "sina: Sina unexpected payload type=NoneType",
-      "eastmoney: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+      "eastmoney: HTTPSConnectionPool(host='push2his.eastmoney.com', port=443): Max retries exceeded with url: /api/qt/stock/kline/get?secid=1.931484&fields1=f1%2Cf2%2Cf3%2Cf4%2Cf5%2Cf6&fields2=f51%2Cf52%2Cf53%2Cf54%2Cf55%2Cf56%2Cf57%2Cf58%2Cf59%2Cf60%2Cf61&klt=5&fqt=1&beg=0&end=20500101&lmt=600 (Caused by NewConnectionError(\"HTTPSConnection(host='push2his.eastmoney.com', port=443): Failed to establish a new connection: [Errno 101] Network is unreachable\"))"
     ],
     "errors": [],
     "using_cache": false,
