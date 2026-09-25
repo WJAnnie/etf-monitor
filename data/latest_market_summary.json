@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-25T18:36:00.762172+08:00",
+  "generated_at": "2026-09-25T18:58:43.899112+08:00",
   "source_file": "data/latest_market_data.json",
   "total_symbols": 9,
   "usable_symbols": 9,
@@ -85,7 +85,7 @@
       "warnings": [
         "tencent klt=101: https://web.ifzq.gtimg.cn/appstock/app/fqkline/get: Tencent daily returned empty/invalid kline | https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get: Tencent daily returned empty/invalid kline",
         "sina klt=101: Sina unexpected payload type=NoneType",
-        "eastmoney klt=101: EastMoney returned empty/invalid kline",
+        "eastmoney klt=101: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
         "tencent klt=15: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 empty; stock_keys=['qt', 'm15'] | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 empty; stock_keys=['qt', 'm15']",
         "sina klt=15: Sina unexpected payload type=NoneType",
         "eastmoney klt=15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
