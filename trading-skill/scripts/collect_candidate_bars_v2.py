@@ -234,6 +234,7 @@ def collect_one(item: dict, now: datetime) -> dict:
         "leader_score": item.get("leader_score"),
         "change_60d": item.get("change_60d"),
         "fundamental_prefilter": item.get("fundamental_prefilter"),
+        "event_summary": item.get("event_summary"),
         "sources": {
             "daily": daily_source,
             "5m": m5_source,
@@ -305,6 +306,7 @@ def main() -> int:
             "120m_from_real_30m": True,
             "prefer_adjusted_long_history": True,
             "newer_stocks_can_use_shorter_daily_history": True,
+            "announcement_evidence_carried_into_scan": True,
             "no_15m_to_5m": True,
             "daily_target": DAILY_LIMIT,
             "m5_target": M5_LIMIT,
