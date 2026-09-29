@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-29T19:59:03.378493+08:00",
+  "generated_at": "2026-09-29T21:21:37.399954+08:00",
   "symbol": {
     "key": "medical_device",
     "name": "中证全指医疗器械指数",
@@ -3923,7 +3923,7 @@
         "close": 0.6710000038146973,
         "high": 0.6710000038146973,
         "low": 0.6710000038146973,
-        "volume": 14192800.0,
+        "volume": 0.0,
         "amount": 0.0
       },
       {
@@ -3932,7 +3932,7 @@
         "close": 0.6710000038146973,
         "high": 0.6710000038146973,
         "low": 0.6710000038146973,
-        "volume": 28406200.0,
+        "volume": 14214900.0,
         "amount": 0.0
       },
       {
@@ -3941,7 +3941,7 @@
         "close": 0.6710000038146973,
         "high": 0.6710000038146973,
         "low": 0.6710000038146973,
-        "volume": 14203100.0,
+        "volume": 0.0,
         "amount": 0.0
       }
     ],
@@ -3949,7 +3949,7 @@
     "warnings": [
       "tencent: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 empty; stock_keys=['qt', 'm5'] | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 empty; stock_keys=['qt', 'm5']",
       "sina: Sina unexpected payload type=NoneType",
-      "eastmoney: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+      "eastmoney: EastMoney m5 returned empty/invalid kline"
     ],
     "errors": [],
     "using_cache": false,
