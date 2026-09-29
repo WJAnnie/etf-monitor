@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-28T22:32:07.369018+08:00",
+  "generated_at": "2026-09-29T19:36:35.837040+08:00",
   "total_symbols": 9,
   "history_ok_symbols": 9,
   "fresh_symbols": 9,
@@ -21,7 +21,7 @@
       "source": "sina",
       "proxy_substitution": false,
       "m5_count": 600,
-      "latest_m5_end_time": "2026-09-28T15:00:00+08:00",
+      "latest_m5_end_time": "2026-09-29T15:00:00+08:00",
       "history_ok": true,
       "fresh_for_analysis": true,
       "covers_1400_bar": true,
@@ -41,7 +41,7 @@
       "source": "yahoo",
       "proxy_substitution": true,
       "m5_count": 597,
-      "latest_m5_end_time": "2026-09-28T15:00:00+08:00",
+      "latest_m5_end_time": "2026-09-29T15:00:00+08:00",
       "history_ok": true,
       "fresh_for_analysis": true,
       "covers_1400_bar": true,
@@ -50,7 +50,7 @@
       "warnings": [
         "tencent: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 empty; stock_keys=['qt', 'm5'] | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 empty; stock_keys=['qt', 'm5']",
         "sina: Sina unexpected payload type=NoneType",
-        "eastmoney: EastMoney m5 returned empty/invalid kline"
+        "eastmoney: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
       ],
       "errors": []
     },
@@ -63,7 +63,7 @@
       "source": "sina",
       "proxy_substitution": false,
       "m5_count": 600,
-      "latest_m5_end_time": "2026-09-28T15:00:00+08:00",
+      "latest_m5_end_time": "2026-09-29T15:00:00+08:00",
       "history_ok": true,
       "fresh_for_analysis": true,
       "covers_1400_bar": true,
@@ -83,7 +83,7 @@
       "source": "yahoo",
       "proxy_substitution": false,
       "m5_count": 564,
-      "latest_m5_end_time": "2026-09-28T16:00:00+08:00",
+      "latest_m5_end_time": "2026-09-29T16:00:00+08:00",
       "history_ok": true,
       "fresh_for_analysis": true,
       "covers_1400_bar": true,
@@ -101,16 +101,18 @@
       "proxy_for": "北证50",
       "proxy_note": "指数本身；优先东方财富，避免腾讯仅返回单根日K",
       "data_file": "data/market5/bse50.json",
-      "source": "eastmoney",
+      "source": "sina",
       "proxy_substitution": false,
       "m5_count": 600,
-      "latest_m5_end_time": "2026-09-28T15:00:00+08:00",
+      "latest_m5_end_time": "2026-09-29T15:00:00+08:00",
       "history_ok": true,
       "fresh_for_analysis": true,
       "covers_1400_bar": true,
       "covers_1450_bar": true,
       "using_cache": false,
-      "warnings": [],
+      "warnings": [
+        "eastmoney: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+      ],
       "errors": []
     },
     "china_film": {
@@ -122,7 +124,7 @@
       "source": "sina",
       "proxy_substitution": false,
       "m5_count": 600,
-      "latest_m5_end_time": "2026-09-28T15:00:00+08:00",
+      "latest_m5_end_time": "2026-09-29T15:00:00+08:00",
       "history_ok": true,
       "fresh_for_analysis": true,
       "covers_1400_bar": true,
@@ -142,7 +144,7 @@
       "source": "sina",
       "proxy_substitution": false,
       "m5_count": 600,
-      "latest_m5_end_time": "2026-09-28T15:00:00+08:00",
+      "latest_m5_end_time": "2026-09-29T15:00:00+08:00",
       "history_ok": true,
       "fresh_for_analysis": true,
       "covers_1400_bar": true,
@@ -162,7 +164,7 @@
       "source": "yahoo",
       "proxy_substitution": true,
       "m5_count": 437,
-      "latest_m5_end_time": "2026-09-28T15:00:00+08:00",
+      "latest_m5_end_time": "2026-09-29T15:00:00+08:00",
       "history_ok": true,
       "fresh_for_analysis": true,
       "covers_1400_bar": true,
@@ -171,7 +173,7 @@
       "warnings": [
         "tencent: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 empty; stock_keys=['qt', 'm5'] | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 empty; stock_keys=['qt', 'm5']",
         "sina: Sina unexpected payload type=NoneType",
-        "eastmoney: EastMoney m5 returned empty/invalid kline"
+        "eastmoney: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
       ],
       "errors": []
     },
@@ -184,7 +186,7 @@
       "source": "sina",
       "proxy_substitution": false,
       "m5_count": 600,
-      "latest_m5_end_time": "2026-09-28T15:00:00+08:00",
+      "latest_m5_end_time": "2026-09-29T15:00:00+08:00",
       "history_ok": true,
       "fresh_for_analysis": true,
       "covers_1400_bar": true,
