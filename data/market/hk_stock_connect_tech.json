@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-30T19:47:16.230120+08:00",
+  "generated_at": "2026-10-01T19:51:20.764889+08:00",
   "note": "场外基金采用跟踪指数/ETF代理；15分钟仅保留已收完K线；缠论买卖点不由脚本机械确认。",
   "symbol": {
     "key": "hk_stock_connect_tech",
@@ -1624,12 +1624,12 @@
         "amount": 0.0
       },
       {
-        "time": "2026-09-30",
-        "open": 0.5699999928474426,
-        "close": 0.5740000009536743,
-        "high": 0.574999988079071,
+        "time": "2026-09-29",
+        "open": 0.5759999752044678,
+        "close": 0.5730000138282776,
+        "high": 0.5770000219345093,
         "low": 0.5680000185966492,
-        "volume": 267340600.0,
+        "volume": 271903500.0,
         "amount": 0.0
       }
     ],
@@ -4522,7 +4522,7 @@
     "warnings": [
       "tencent klt=101: https://web.ifzq.gtimg.cn/appstock/app/fqkline/get: Tencent daily returned empty/invalid kline | https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get: Tencent daily returned empty/invalid kline",
       "sina klt=101: Sina unexpected payload type=NoneType",
-      "eastmoney klt=101: EastMoney returned empty/invalid kline",
+      "eastmoney klt=101: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
       "tencent klt=15: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 empty; stock_keys=['qt', 'm15'] | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 empty; stock_keys=['qt', 'm15']",
       "sina klt=15: Sina unexpected payload type=NoneType",
       "eastmoney klt=15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
@@ -4532,20 +4532,20 @@
     "indicators": {
       "daily": {
         "macd": {
-          "diff": -0.007011433126074995,
-          "dea": -0.007175316170736868,
-          "hist": 0.0003277660893237465
+          "diff": -0.007091204178813149,
+          "dea": -0.007191270381284499,
+          "hist": 0.00020013240494270133
         },
         "boll": {
-          "mid": 0.586599999666214,
-          "upper": 0.6073499334475985,
-          "lower": 0.5658500658848296
+          "mid": 0.5865500003099442,
+          "upper": 0.6074255765088553,
+          "lower": 0.5656744241110331
         },
-        "rsi14": 35.294148583690074,
+        "rsi14": 34.78264625367886,
         "kdj": {
-          "k": 35.15976381767837,
-          "d": 42.80707581880237,
-          "j": 19.865139815430368
+          "k": 34.32644166020994,
+          "d": 42.5293017663129,
+          "j": 17.920721448004016
         },
         "recent_high_5": 0.6069999933242798,
         "recent_low_5": 0.5680000185966492
@@ -4572,6 +4572,6 @@
       }
     },
     "usable_for_analysis": true,
-    "fresh_for_analysis": true
+    "fresh_for_analysis": false
   }
 }
