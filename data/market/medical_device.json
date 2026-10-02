@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-01T20:16:31.885382+08:00",
+  "generated_at": "2026-10-02T19:23:19.240963+08:00",
   "note": "场外基金采用跟踪指数/ETF代理；15分钟仅保留已收完K线；缠论买卖点不由脚本机械确认。",
   "symbol": {
     "key": "medical_device",
@@ -12,15 +12,6 @@
     "proxy_for": "017633",
     "proxy_note": "主取931484；Yahoo后备使用目标ETF 159797",
     "daily": [
-      {
-        "time": "2026-01-05",
-        "open": 0.7490000128746033,
-        "close": 0.7940000295639038,
-        "high": 0.7940000295639038,
-        "low": 0.7490000128746033,
-        "volume": 59407600.0,
-        "amount": 0.0
-      },
       {
         "time": "2026-01-06",
         "open": 0.8009999990463257,
@@ -1630,6 +1621,15 @@
         "high": 0.6779999732971191,
         "low": 0.6660000085830688,
         "volume": 14205700.0,
+        "amount": 0.0
+      },
+      {
+        "time": "2026-09-30",
+        "open": 0.6690000295639038,
+        "close": 0.6830000281333923,
+        "high": 0.6840000152587891,
+        "low": 0.6690000295639038,
+        "volume": 12379500.0,
         "amount": 0.0
       }
     ],
@@ -4522,32 +4522,32 @@
     "warnings": [
       "tencent klt=101: https://web.ifzq.gtimg.cn/appstock/app/fqkline/get: Tencent daily returned empty/invalid kline | https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get: Tencent daily returned empty/invalid kline",
       "sina klt=101: Sina unexpected payload type=NoneType",
-      "eastmoney klt=101: EastMoney returned empty/invalid kline",
+      "eastmoney klt=101: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
       "tencent klt=15: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 empty; stock_keys=['qt', 'm15'] | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 empty; stock_keys=['qt', 'm15']",
       "sina klt=15: Sina unexpected payload type=NoneType",
-      "eastmoney klt=15: EastMoney returned empty/invalid kline"
+      "eastmoney klt=15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
     ],
     "errors": [],
     "cache_origin": {},
     "indicators": {
       "daily": {
         "macd": {
-          "diff": -0.0007802405634659282,
-          "dea": -0.0018221925923084645,
-          "hist": 0.0020839040576850726
+          "diff": 0.00037668301276205796,
+          "dea": -0.0013824223666373799,
+          "hist": 0.0035182107587988756
         },
         "boll": {
-          "mid": 0.6686000019311905,
-          "upper": 0.6904302512060545,
-          "lower": 0.6467697526563265
+          "mid": 0.6685000032186508,
+          "upper": 0.6900453027613778,
+          "lower": 0.6469547036759238
         },
-        "rsi14": 42.66663487749248,
+        "rsi14": 58.750000931322774,
         "kdj": {
-          "k": 73.01090707969756,
-          "d": 70.47902151331937,
-          "j": 78.07467821245393
+          "k": 78.403714224269,
+          "d": 73.12058575030257,
+          "j": 88.96997117220187
         },
-        "recent_high_5": 0.6869999766349792,
+        "recent_high_5": 0.6859999895095825,
         "recent_low_5": 0.6650000214576721
       },
       "m15": {
