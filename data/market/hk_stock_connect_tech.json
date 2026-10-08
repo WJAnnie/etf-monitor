@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-08T20:15:56.421382+08:00",
+  "generated_at": "2026-10-08T20:40:05.080864+08:00",
   "note": "场外基金采用跟踪指数/ETF代理；15分钟仅保留已收完K线；缠论买卖点不由脚本机械确认。",
   "symbol": {
     "key": "hk_stock_connect_tech",
@@ -1640,7 +1640,7 @@
         "close": 0.6010000109672546,
         "high": 0.6050000190734863,
         "low": 0.6000000238418579,
-        "volume": 17830100.0,
+        "volume": 48121000.0,
         "amount": 0.0
       },
       {
@@ -1712,7 +1712,7 @@
         "close": 0.5950000286102295,
         "high": 0.597000002861023,
         "low": 0.593999981880188,
-        "volume": 40621600.0,
+        "volume": 218171400.0,
         "amount": 0.0
       },
       {
@@ -2007,7 +2007,7 @@
         "time": "2026-09-07 13:15",
         "open": 0.5979999899864197,
         "close": 0.6000000238418579,
-        "high": 0.6010000109672546,
+        "high": 0.6000000238418579,
         "low": 0.5979999899864197,
         "volume": 25005900.0,
         "amount": 0.0
@@ -2135,7 +2135,7 @@
         "close": 0.5950000286102295,
         "high": 0.5960000157356262,
         "low": 0.593999981880188,
-        "volume": 12505600.0,
+        "volume": 5711500.0,
         "amount": 0.0
       },
       {
@@ -2144,7 +2144,7 @@
         "close": 0.5950000286102295,
         "high": 0.5960000157356262,
         "low": 0.5929999947547913,
-        "volume": 25741600.0,
+        "volume": 216311600.0,
         "amount": 0.0
       },
       {
@@ -2216,7 +2216,7 @@
         "close": 0.593999981880188,
         "high": 0.5950000286102295,
         "low": 0.5910000205039978,
-        "volume": 22678800.0,
+        "volume": 38751900.0,
         "amount": 0.0
       },
       {
@@ -2414,7 +2414,7 @@
         "close": 0.5770000219345093,
         "high": 0.578000009059906,
         "low": 0.5770000219345093,
-        "volume": 3962000.0,
+        "volume": 152237100.0,
         "amount": 0.0
       },
       {
@@ -2504,7 +2504,7 @@
         "close": 0.5659999847412109,
         "high": 0.5699999928474426,
         "low": 0.5659999847412109,
-        "volume": 30734200.0,
+        "volume": 53846200.0,
         "amount": 0.0
       },
       {
@@ -3143,7 +3143,7 @@
         "close": 0.5699999928474426,
         "high": 0.5709999799728394,
         "low": 0.5690000057220459,
-        "volume": 5327900.0,
+        "volume": 2924600.0,
         "amount": 0.0
       },
       {
@@ -3152,7 +3152,7 @@
         "close": 0.5709999799728394,
         "high": 0.5720000267028809,
         "low": 0.5699999928474426,
-        "volume": 26237400.0,
+        "volume": 174459100.0,
         "amount": 0.0
       },
       {
@@ -4232,7 +4232,7 @@
         "close": 0.5709999799728394,
         "high": 0.5720000267028809,
         "low": 0.5680000185966492,
-        "volume": 12666000.0,
+        "volume": 48013900.0,
         "amount": 0.0
       },
       {
@@ -4522,10 +4522,10 @@
     "warnings": [
       "tencent klt=101: https://web.ifzq.gtimg.cn/appstock/app/fqkline/get: Tencent daily returned empty/invalid kline | https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get: Tencent daily returned empty/invalid kline",
       "sina klt=101: Sina unexpected payload type=NoneType",
-      "eastmoney klt=101: EastMoney returned empty/invalid kline",
+      "eastmoney klt=101: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
       "tencent klt=15: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 empty; stock_keys=['qt', 'm15'] | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 empty; stock_keys=['qt', 'm15']",
       "sina klt=15: Sina unexpected payload type=NoneType",
-      "eastmoney klt=15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+      "eastmoney klt=15: EastMoney returned empty/invalid kline"
     ],
     "errors": [],
     "cache_origin": {},

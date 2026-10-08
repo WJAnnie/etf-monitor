@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-08T20:15:56.421382+08:00",
+  "generated_at": "2026-10-08T20:40:05.080864+08:00",
   "note": "场外基金采用跟踪指数/ETF代理；15分钟仅保留已收完K线；缠论买卖点不由脚本机械确认。",
   "symbol": {
     "key": "medical_device",
@@ -2414,7 +2414,7 @@
         "close": 0.6610000133514404,
         "high": 0.6629999876022339,
         "low": 0.6610000133514404,
-        "volume": 2999900.0,
+        "volume": 5981500.0,
         "amount": 0.0
       },
       {
@@ -2504,7 +2504,7 @@
         "close": 0.6499999761581421,
         "high": 0.6620000004768372,
         "low": 0.6489999890327454,
-        "volume": 2195900.0,
+        "volume": 2428200.0,
         "amount": 0.0
       },
       {
@@ -3512,7 +3512,7 @@
         "close": 0.6790000200271606,
         "high": 0.6800000071525574,
         "low": 0.6740000247955322,
-        "volume": 1006800.0,
+        "volume": 1474300.0,
         "amount": 0.0
       },
       {
@@ -4079,7 +4079,7 @@
         "close": 0.6690000295639038,
         "high": 0.6710000038146973,
         "low": 0.6690000295639038,
-        "volume": 103300.0,
+        "volume": 81000.0,
         "amount": 0.0
       },
       {
@@ -4522,7 +4522,7 @@
     "warnings": [
       "tencent klt=101: https://web.ifzq.gtimg.cn/appstock/app/fqkline/get: Tencent daily returned empty/invalid kline | https://proxy.finance.qq.com/ifzqgtimg/appstock/app/fqkline/get: Tencent daily returned empty/invalid kline",
       "sina klt=101: Sina unexpected payload type=NoneType",
-      "eastmoney klt=101: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))",
+      "eastmoney klt=101: EastMoney returned empty/invalid kline",
       "tencent klt=15: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 empty; stock_keys=['qt', 'm15'] | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m15 empty; stock_keys=['qt', 'm15']",
       "sina klt=15: Sina unexpected payload type=NoneType",
       "eastmoney klt=15: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
