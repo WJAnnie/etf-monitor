@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-20T18:27:34.930696+08:00",
+  "generated_at": "2026-10-20T20:15:43.087914+08:00",
   "symbol": {
     "key": "hk_stock_connect_tech",
     "name": "中证港股通科技指数",
@@ -1088,7 +1088,7 @@
         "close": 0.5699999928474426,
         "high": 0.5720000267028809,
         "low": 0.5680000185966492,
-        "volume": 0.0,
+        "volume": 35347900.0,
         "amount": 0.0
       },
       {
@@ -3248,7 +3248,7 @@
         "close": 0.546999990940094,
         "high": 0.550000011920929,
         "low": 0.5450000166893005,
-        "volume": 19033000.0,
+        "volume": 0.0,
         "amount": 0.0
       },
       {
@@ -5165,7 +5165,7 @@
         "close": 0.5400000214576721,
         "high": 0.5400000214576721,
         "low": 0.5389999747276306,
-        "volume": 0.0,
+        "volume": 193400.0,
         "amount": 0.0
       },
       {
@@ -5174,7 +5174,7 @@
         "close": 0.5379999876022339,
         "high": 0.5389999747276306,
         "low": 0.5370000004768372,
-        "volume": 222821500.0,
+        "volume": 6854900.0,
         "amount": 0.0
       },
       {
@@ -5389,7 +5389,7 @@
     "warnings": [
       "tencent: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 empty; stock_keys=['qt', 'm5'] | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 empty; stock_keys=['qt', 'm5']",
       "sina: Sina unexpected payload type=NoneType",
-      "eastmoney: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
+      "eastmoney: EastMoney m5 returned empty/invalid kline"
     ],
     "errors": [],
     "using_cache": false,
