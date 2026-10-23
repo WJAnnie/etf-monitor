@@ -71,6 +71,11 @@ def _heat_state(pct: float, ch60: float, breadth: float) -> str:
     return "温和"
 
 
+def is_overextended_industry(item: IndustryCandidate) -> bool:
+    """A long-term theme can be valid but temporarily too extended for new deep scans."""
+    return item.heat_state == "过热" or item.change_pct >= 7.0 or item.change_60d >= 35.0
+
+
 def prospect_industry_candidates(rows: Iterable[Mapping[str, object]]) -> tuple[IndustryCandidate, ...]:
     out: list[IndustryCandidate] = []
     for row in rows:
@@ -112,6 +117,17 @@ def prospect_industry_candidates(rows: Iterable[Mapping[str, object]]) -> tuple[
     return tuple(out)
 
 
+def parked_prospect_industries(rows: Iterable[Mapping[str, object]]) -> tuple[IndustryCandidate, ...]:
+    """Return overextended long-term themes that are temporarily parked, not deleted.
+
+    Since this is recomputed from the latest market snapshot, a parked theme automatically
+    returns to the active prospect pool after its extension/heat falls below the threshold.
+    """
+    parked = [item for item in prospect_industry_candidates(rows) if is_overextended_industry(item)]
+    parked.sort(key=lambda item: (item.change_60d, item.change_pct), reverse=True)
+    return tuple(parked)
+
+
 def _diversified_prospect_selection(
     candidates: Iterable[IndustryCandidate], *, limit: int, max_per_theme: int = 2
 ) -> list[IndustryCandidate]:
@@ -141,19 +157,40 @@ def _diversified_prospect_selection(
     return chosen
 
 
+def _dynamic_emergence_score(item: IndustryCandidate) -> float:
+    """Prefer newly warming themes over already-extended hot themes."""
+    if item.heat_state == "升温":
+        state_bonus = 14.0
+    elif item.heat_state == "热门" and item.change_60d <= 22:
+        state_bonus = 10.0
+    elif item.heat_state == "温和":
+        state_bonus = 5.0
+    else:
+        state_bonus = 0.0
+    early_trend_bonus = max(0.0, 12.0 - abs(item.change_60d - 10.0) * 0.5)
+    extension_penalty = max(0.0, item.change_60d - 25.0) * 1.2
+    return item.rank_score + state_bonus + early_trend_bonus - extension_penalty
+
+
 def select_industries_v2(
     rows: Iterable[Mapping[str, object]], *, prospect_limit: int = 24, dynamic_supplement: int = 6
 ) -> tuple[IndustryCandidate, ...]:
     material = list(rows)
     all_prospects = prospect_industry_candidates(material)
-    prospects = _diversified_prospect_selection(all_prospects, limit=max(1, prospect_limit), max_per_theme=2)
+
+    # Long-term identity and current entry eligibility are deliberately separate.
+    # Overheated themes go to the parking list for this run and automatically return
+    # after they cool down; they are not removed from PROSPECT_THEMES.
+    active_prospects = [item for item in all_prospects if not is_overextended_industry(item)]
+    prospects = _diversified_prospect_selection(active_prospects, limit=max(1, prospect_limit), max_per_theme=2)
     used = {item.code for item in prospects}
 
     dynamic = []
     if dynamic_supplement > 0:
-        for item in screen_industries(material, limit=max(dynamic_supplement * 4, 24)):
-            if item.code in used:
-                continue
+        market_pool = list(screen_industries(material, limit=max(dynamic_supplement * 8, 48)))
+        market_pool = [item for item in market_pool if item.code not in used and not is_overextended_industry(item)]
+        market_pool.sort(key=_dynamic_emergence_score, reverse=True)
+        for item in market_pool:
             dynamic.append(
                 IndustryCandidate(
                     code=item.code,
@@ -168,7 +205,7 @@ def select_industries_v2(
                     change_ytd=item.change_ytd,
                     main_flow_ratio=item.main_flow_ratio,
                     breadth=item.breadth,
-                    selection_reason="市场结构补充池：用于发现尚未写入长期前景表的新方向",
+                    selection_reason="市场结构补充池：近期升温/新趋势优先，用于发现尚未写入长期前景表的新方向",
                     prospect_theme=None,
                 )
             )
