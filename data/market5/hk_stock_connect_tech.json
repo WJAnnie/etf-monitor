@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-10-26T19:34:50.678739+08:00",
+  "generated_at": "2026-10-26T20:06:54.541721+08:00",
   "symbol": {
     "key": "hk_stock_connect_tech",
     "name": "中证港股通科技指数",
@@ -1511,7 +1511,7 @@
         "close": 0.546999990940094,
         "high": 0.550000011920929,
         "low": 0.5450000166893005,
-        "volume": 19033000.0,
+        "volume": 0.0,
         "amount": 0.0
       },
       {
@@ -3428,7 +3428,7 @@
         "close": 0.5400000214576721,
         "high": 0.5400000214576721,
         "low": 0.5389999747276306,
-        "volume": 0.0,
+        "volume": 193400.0,
         "amount": 0.0
       },
       {
@@ -3437,7 +3437,7 @@
         "close": 0.5379999876022339,
         "high": 0.5389999747276306,
         "low": 0.5370000004768372,
-        "volume": 222821500.0,
+        "volume": 6854900.0,
         "amount": 0.0
       },
       {
@@ -3757,7 +3757,7 @@
       },
       {
         "time": "2026-10-21 10:35:00",
-        "open": 0.5379999876022339,
+        "open": 0.5389999747276306,
         "close": 0.5370000004768372,
         "high": 0.5389999747276306,
         "low": 0.5370000004768372,
@@ -3860,7 +3860,7 @@
         "close": 0.5360000133514404,
         "high": 0.5360000133514404,
         "low": 0.5339999794960022,
-        "volume": 4473800.0,
+        "volume": 0.0,
         "amount": 0.0
       },
       {
@@ -3869,7 +3869,7 @@
         "close": 0.5329999923706055,
         "high": 0.5350000262260437,
         "low": 0.5320000052452087,
-        "volume": 20806800.0,
+        "volume": 207526300.0,
         "amount": 0.0
       },
       {
@@ -4517,7 +4517,7 @@
         "close": 0.5019999742507935,
         "high": 0.5019999742507935,
         "low": 0.49900001287460327,
-        "volume": 26541600.0,
+        "volume": 0.0,
         "amount": 0.0
       },
       {
@@ -5380,7 +5380,7 @@
     "warnings": [
       "tencent: http://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 empty; stock_keys=['qt', 'm5'] | https://ifzq.gtimg.cn/appstock/app/kline/mkline: Tencent m5 empty; stock_keys=['qt', 'm5']",
       "sina: Sina unexpected payload type=NoneType",
-      "eastmoney: EastMoney m5 returned empty/invalid kline"
+      "eastmoney: ('Connection aborted.', RemoteDisconnected('Remote end closed connection without response'))"
     ],
     "errors": [],
     "using_cache": false,
